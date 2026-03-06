@@ -1,176 +1,128 @@
 # voidm
 
-**Local-first persistent memory for LLM agents.**
+Local-first persistent memory for LLM agents.
 
-`voidm` is a single-binary CLI tool that gives AI agents a semantic memory store: add memories, search them with hybrid vector+BM25+fuzzy retrieval, link them in a knowledge graph, and query the graph with Cypher — all offline, no API keys required.
-
-```
-voidm add "Always run migrations before deploying" --type procedural
-voidm search "deployment checklist"
-voidm graph cypher "MATCH (a:Memory)-[r]->(b:Memory) RETURN a.memory_id AS from, r.rel_type AS rel, b.memory_id AS to LIMIT 10"
-```
+`voidm` is a single-binary CLI that gives AI agents a durable memory store: add typed memories, search them with hybrid vector+BM25+fuzzy retrieval, connect them in a knowledge graph, and query with Cypher — all offline, no API keys required.
 
 ---
 
 ## Features
 
-- **Hybrid search** — vector (ANN), BM25 (full-text), fuzzy, keyword, or combined
-- **Knowledge graph** — link memories with typed edges (SUPPORTS, DERIVED_FROM, PART_OF, …)
-- **Cypher queries** — read-only graph traversal with a hand-rolled parser
-- **Local embeddings** — `fastembed` + ONNX, default model `all-MiniLM-L6-v2` (384 dims), no API key
-- **Auto-init** — DB created on first write, no `init` step needed
-- **Short IDs** — use any 4+ char prefix instead of full UUIDs
-- **JSON output** — every command supports `--json` for machine consumption
+- **Hybrid search** — vector (ANN), BM25, fuzzy, keyword, or combined with RRF scoring
+- **Knowledge graph** — link memories with typed directed edges (SUPPORTS, DERIVED_FROM, PART_OF, …)
+- **Cypher queries** — read-only graph traversal with a minimal recursive-descent parser
+- **Local embeddings** — [fastembed](https://github.com/Anush008/fastembed-rs) + ONNX, `all-MiniLM-L6-v2` by default, no network after first download
+- **Auto-init** — DB created on first write, no setup step
+- **Short IDs** — use any 4+ char UUID prefix instead of full IDs
+- **JSON output** — every command supports `--json` for agent consumption
 
 ---
 
 ## Installation
 
-### From source
-
 ```bash
-cargo install --path crates/voidm-cli
-```
-
-Or build manually:
-
-```bash
+git clone https://github.com/autonomous-toaster/voidm
+cd voidm
 cargo build --release
 cp target/release/voidm ~/.local/bin/
 ```
 
-> **Requirements:** Rust 1.70+, no system dependencies (SQLite is bundled).
+> Requires Rust 1.70+. SQLite is bundled — no system dependencies.
 
 ---
 
-## Quick Start
+## Usage
+
+### Add memories
 
 ```bash
-# Add memories
 voidm add "Postgres chosen for ACID guarantees" --type conceptual --scope work/acme
-voidm add "DB migration takes ~5 min" --type semantic --scope work/acme
-voidm add "Run: rake db:migrate then restart puma" --type procedural --scope work/acme
-
-# Search
-voidm search "database migration"
-voidm search "database" --scope work/acme --mode semantic --json
-
-# Link memories
-voidm link <id1> SUPPORTS <id2>
-voidm link <id1> RELATES_TO <id2> --note "both affect deploy order"
-
-# Graph
-voidm graph neighbors <id> --depth 2
-voidm graph pagerank --top 10
-voidm graph cypher "MATCH (a:Memory)-[:SUPPORTS]->(b:Memory) RETURN a.memory_id, b.memory_id LIMIT 20"
-
-# Inspect
-voidm info
-voidm stats
+voidm add "DB migration takes ~5 min on production" --type semantic --scope work/acme
+voidm add "Run rake db:migrate then restart puma" --type procedural --scope work/acme
 ```
+
+### Search
+
+```bash
+voidm search "deployment"
+voidm search "database" --scope work/acme --mode semantic
+voidm search "migration" --min-score 0 --limit 20 --json
+```
+
+### Link memories together
+
+Memories can be connected with typed edges to build a knowledge graph:
+
+```bash
+# The procedural runbook was derived from the semantic fact
+voidm link <runbook-id> DERIVED_FROM <migration-fact-id>
+
+# The conceptual decision supports the semantic observation
+voidm link <decision-id> SUPPORTS <fact-id>
+
+# Generic association — note is required
+voidm link <id1> RELATES_TO <id2> --note "both affect deploy order"
+```
+
+When you add a memory, `voidm` returns `suggested_links` (similarity ≥ 0.7) and flags `duplicate_warning` (similarity ≥ 0.95) — so linking can happen naturally as part of the add workflow.
+
+### Explore the graph
+
+```bash
+# Neighbors of a memory, 2 hops out
+voidm graph neighbors <id> --depth 2
+
+# Which memories are most connected?
+voidm graph pagerank --top 10
+
+# Cypher: find all memories that support another
+voidm graph cypher "MATCH (a:Memory)-[:SUPPORTS]->(b:Memory) RETURN a.memory_id AS from, b.memory_id AS to LIMIT 20"
+
+# Cypher: edges with their types
+voidm graph cypher "MATCH (a:Memory)-[r]->(b:Memory) RETURN a.memory_id AS from, r.rel_type AS rel, b.memory_id AS to LIMIT 20"
+
+# Cypher: filter by a specific node
+voidm graph cypher "MATCH (a:Memory)-[r]->(b:Memory) WHERE a.memory_id = '<id>' RETURN r.rel_type AS rel, b.memory_id AS to"
+```
+
+Supported Cypher clauses: `MATCH`, `WHERE`, `RETURN`, `ORDER BY`, `LIMIT`, `WITH`. Write operations are rejected.
+
+### For agents: `voidm instructions`
+
+```bash
+voidm instructions        # full usage guide in markdown
+voidm instructions --json # machine-readable: types, edge hints, workflow
+```
+
+Prints a structured guide covering memory types, edge selection, the insertion workflow, and Cypher examples. Useful for bootstrapping an agent's system prompt or tool description.
 
 ---
 
 ## CLI Reference
 
-### `voidm add`
+| Command | Description |
+|---------|-------------|
+| `voidm add` | Add a memory. Returns `suggested_links` and `duplicate_warning`. |
+| `voidm get <id>` | Retrieve a memory by ID or short prefix. |
+| `voidm delete <id>` | Delete a memory. |
+| `voidm list` | List memories, optionally filtered by scope or type. |
+| `voidm search <query>` | Hybrid search. Modes: `hybrid`, `semantic`, `bm25`, `fuzzy`, `keyword`. |
+| `voidm link <from> <EDGE> <to>` | Create a graph edge. `RELATES_TO` requires `--note`. |
+| `voidm unlink <from> <EDGE> <to>` | Remove a graph edge. |
+| `voidm graph neighbors <id>` | N-hop neighbors. |
+| `voidm graph pagerank` | Rank memories by graph centrality. |
+| `voidm graph cypher "<query>"` | Read-only Cypher query. |
+| `voidm graph path <from> <to>` | Shortest path between two memories. |
+| `voidm graph stats` | Edge counts by type. |
+| `voidm export` | Export memories as JSON. |
+| `voidm models list` | List available embedding models. |
+| `voidm models reembed` | Re-embed all memories with current model. |
+| `voidm config show/set` | Show or update config. |
+| `voidm info` | DB path, config path, model, search defaults. |
+| `voidm stats` | Memory counts, embedding coverage, top tags, DB size. |
+| `voidm instructions` | Print agent usage guide. |
 
-```
-voidm add <content> --type <type> [--scope <scope>] [--tags <tag1,tag2>] [--importance 1-10]
-          [--link <id>:<EDGE>:<note>] [--json]
-```
-
-Returns the new memory ID plus `suggested_links` (similarity ≥ 0.7) and `duplicate_warning` (similarity ≥ 0.95).
-
-**Memory types:** `episodic` | `semantic` | `procedural` | `conceptual` | `contextual`
-
-### `voidm search`
-
-```
-voidm search <query> [--mode hybrid|semantic|bm25|fuzzy|keyword]
-             [--scope <scope>] [--min-score 0-1] [--limit N] [--json]
-```
-
-Default mode `hybrid` filters at `min-score 0.3`. Other modes return unfiltered scores.
-
-### `voidm list`
-
-```
-voidm list [--scope <scope>] [--type <type>] [--limit N] [--json]
-```
-
-### `voidm get`
-
-```
-voidm get <id> [--json]
-```
-
-### `voidm delete`
-
-```
-voidm delete <id> [--yes] [--json]
-```
-
-### `voidm link` / `voidm unlink`
-
-```
-voidm link <from-id> <EDGE_TYPE> <to-id> [--note <reason>]
-voidm unlink <from-id> <EDGE_TYPE> <to-id>
-```
-
-**Edge types:** `SUPPORTS` | `CONTRADICTS` | `DERIVED_FROM` | `PRECEDES` | `PART_OF` | `EXEMPLIFIES` | `INVALIDATES` | `RELATES_TO` (requires `--note`)
-
-### `voidm graph`
-
-```
-voidm graph neighbors <id> [--depth N] [--json]
-voidm graph pagerank [--top N] [--json]
-voidm graph cypher "<query>" [--json]
-voidm graph stats [--json]
-voidm graph path <from-id> <to-id> [--json]
-```
-
-**Cypher** supports: `MATCH`, `WHERE`, `RETURN`, `ORDER BY`, `LIMIT`, `WITH`.  
-Write clauses (`CREATE`, `MERGE`, `SET`, `DELETE`, …) are rejected (exit 2).  
-Node properties: `memory_id`, `type`, `importance`, `created_at`.  
-Edge properties: `rel_type`, `note`.
-
-### `voidm export`
-
-```
-voidm export [--scope <scope>] [--output <file>]
-```
-
-Exports memories as JSON.
-
-### `voidm models`
-
-```
-voidm models list
-voidm models reembed [--model <model-name>]
-```
-
-### `voidm config`
-
-```
-voidm config show
-voidm config set <key> <value>
-```
-
-### `voidm info` / `voidm stats`
-
-```
-voidm info   # DB path, config path, embedding model, search defaults
-voidm stats  # Memory counts by type, embedding coverage, top tags, graph edges, DB size
-```
-
-### `voidm instructions`
-
-```
-voidm instructions [--json]
-```
-
-Prints the full agent usage guide (markdown or JSON). Useful for bootstrapping an agent's system prompt.
+Use `--json` on any command for machine-readable output. Use `--help` for full flag reference.
 
 ---
 
@@ -180,16 +132,15 @@ Prints the full agent usage guide (markdown or JSON). Useful for bootstrapping a
 voidm/
 ├── crates/
 │   ├── voidm-core/    # DB, embeddings, CRUD, hybrid search, config
-│   ├── voidm-graph/   # EAV graph schema, Cypher parser/translator
+│   ├── voidm-graph/   # EAV graph schema, Cypher parser + translator
 │   └── voidm-cli/     # Clap CLI, JSON/table output
-└── migrations/        # SQLite schema migrations (sqlx)
+└── migrations/        # SQLite schema (sqlx)
 ```
 
-**Storage:** Single SQLite file at `~/.local/share/voidm/memories.db`  
-**Config:** `~/.config/voidm/config.toml`  
-**Embeddings:** [fastembed](https://github.com/Anush008/fastembed-rs) + ONNX Runtime (local, no network after first model download)  
-**Graph:** Pure SQLx EAV schema — no external graph DB, fully transactional  
-**Search pipeline:** Vector ANN (sqlite-vec) → BM25 (FTS5) → fuzzy (strsim) → RRF merge  
+- **Storage:** `~/.local/share/voidm/memories.db` (single SQLite file)
+- **Config:** `~/.config/voidm/config.toml`
+- **Search pipeline:** Vector ANN (sqlite-vec) + BM25 (FTS5) + fuzzy (strsim) → RRF merge
+- **Graph:** Pure SQLx EAV schema — no external graph DB, fully transactional
 
 ---
 
@@ -197,9 +148,17 @@ voidm/
 
 | Code | Meaning |
 |------|---------|
-| 0 | Success |
-| 1 | Not found |
-| 2 | Error (bad args, write Cypher rejected, missing required field) |
+| `0` | Success |
+| `1` | Not found |
+| `2` | Error (bad args, write Cypher rejected, missing required field) |
+
+---
+
+## Acknowledgements
+
+Inspired by [byteowlz/mmry](https://github.com/byteowlz/mmry) and [colliery-io/graphqlite](https://github.com/colliery-io/graphqlite).
+
+Built with ❤️ and [pi-coding-agent](https://github.com/badlogic/pi-mono).
 
 ---
 

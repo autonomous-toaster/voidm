@@ -975,3 +975,146 @@ async fn node_kind_str(pool: &SqlitePool, id: &str) -> Result<String> {
         Ok("memory".into())
     }
 }
+
+// ─── Concept search ───────────────────────────────────────────────────────────
+
+/// A concept search result with a relevance score.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConceptSearchResult {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scope: Option<String>,
+    /// BM25 relevance score from FTS5
+    pub score: f32,
+}
+
+/// Search concepts by name/description using FTS5.
+/// Returns up to `limit` results ordered by relevance.
+pub async fn search_concepts(
+    pool: &SqlitePool,
+    query: &str,
+    scope_filter: Option<&str>,
+    limit: usize,
+) -> Result<Vec<ConceptSearchResult>> {
+    // FTS5 MATCH — escape special chars to avoid parse errors
+    let fts_query = query.replace('"', "\"\"");
+
+    let rows: Vec<(String, String, Option<String>, Option<String>, f64)> = if let Some(scope) = scope_filter {
+        let prefix = format!("{}%", scope);
+        sqlx::query_as(
+            "SELECT c.id, c.name, c.description, c.scope, bm25(ontology_concept_fts) AS score
+             FROM ontology_concept_fts f
+             JOIN ontology_concepts c ON c.id = f.id
+             WHERE ontology_concept_fts MATCH ?
+               AND c.scope LIKE ?
+             ORDER BY score LIMIT ?"
+        )
+        .bind(&fts_query)
+        .bind(&prefix)
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT c.id, c.name, c.description, c.scope, bm25(ontology_concept_fts) AS score
+             FROM ontology_concept_fts f
+             JOIN ontology_concepts c ON c.id = f.id
+             WHERE ontology_concept_fts MATCH ?
+             ORDER BY score LIMIT ?"
+        )
+        .bind(&fts_query)
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?
+    };
+
+    Ok(rows.into_iter().map(|(id, name, description, scope, score)| ConceptSearchResult {
+        id, name, description, scope, score: score.abs() as f32,
+    }).collect())
+}
+
+// ─── Concept with instances ───────────────────────────────────────────────────
+
+/// A concept enriched with its direct INSTANCE_OF memories.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConceptWithInstances {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scope: Option<String>,
+    pub created_at: String,
+    /// Direct INSTANCE_OF edges from memories to this concept
+    pub instances: Vec<InstanceRef>,
+    /// Subclasses (IS_A children)
+    pub subclasses: Vec<ConceptRef>,
+    /// Superclasses (IS_A parents)  
+    pub superclasses: Vec<ConceptRef>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InstanceRef {
+    pub memory_id: String,
+    /// First 120 chars of content
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConceptRef {
+    pub id: String,
+    pub name: String,
+}
+
+pub async fn get_concept_with_instances(pool: &SqlitePool, id: &str) -> Result<ConceptWithInstances> {
+    let concept = get_concept(pool, id).await?;
+
+    // Direct INSTANCE_OF edges (memory → this concept)
+    let instance_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT e.from_id, m.content
+         FROM ontology_edges e
+         JOIN memories m ON m.id = e.from_id
+         WHERE e.to_id = ? AND e.rel_type = 'INSTANCE_OF' AND e.from_type = 'memory'
+         ORDER BY m.created_at DESC"
+    )
+    .bind(&concept.id)
+    .fetch_all(pool)
+    .await?;
+
+    let instances = instance_rows.into_iter().map(|(memory_id, content)| InstanceRef {
+        memory_id,
+        preview: preview(&content),
+    }).collect();
+
+    // Subclasses (IS_A where this concept is the parent/to_id)
+    let sub_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.id, c.name FROM ontology_edges e
+         JOIN ontology_concepts c ON c.id = e.from_id
+         WHERE e.to_id = ? AND e.rel_type = 'IS_A'"
+    )
+    .bind(&concept.id)
+    .fetch_all(pool)
+    .await?;
+    let subclasses = sub_rows.into_iter().map(|(id, name)| ConceptRef { id, name }).collect();
+
+    // Superclasses (IS_A where this concept is the child/from_id)
+    let super_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.id, c.name FROM ontology_edges e
+         JOIN ontology_concepts c ON c.id = e.to_id
+         WHERE e.from_id = ? AND e.rel_type = 'IS_A'"
+    )
+    .bind(&concept.id)
+    .fetch_all(pool)
+    .await?;
+    let superclasses = super_rows.into_iter().map(|(id, name)| ConceptRef { id, name }).collect();
+
+    Ok(ConceptWithInstances {
+        id: concept.id,
+        name: concept.name,
+        description: concept.description,
+        scope: concept.scope,
+        created_at: concept.created_at,
+        instances,
+        subclasses,
+        superclasses,
+    })
+}

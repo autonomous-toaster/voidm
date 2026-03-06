@@ -231,7 +231,7 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
             }
         }
         ConceptCommands::Get(args) => {
-            let concept = ontology::get_concept(pool, &args.id).await?;
+            let concept = ontology::get_concept_with_instances(pool, &args.id).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&concept)?);
             } else {
@@ -239,6 +239,20 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
                 if let Some(ref d) = concept.description { println!("  {}", d); }
                 if let Some(ref s) = concept.scope { println!("  scope: {}", s); }
                 println!("  created: {}", concept.created_at);
+                if !concept.superclasses.is_empty() {
+                    println!("  IS_A: {}", concept.superclasses.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", "));
+                }
+                if !concept.subclasses.is_empty() {
+                    println!("  Subclasses: {}", concept.subclasses.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", "));
+                }
+                if concept.instances.is_empty() {
+                    println!("  Instances: none");
+                } else {
+                    println!("  Instances ({}):", concept.instances.len());
+                    for inst in &concept.instances {
+                        println!("    [{}] {}", &inst.memory_id[..8], inst.preview);
+                    }
+                }
             }
         }
         ConceptCommands::List(args) => {

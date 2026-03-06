@@ -4,6 +4,7 @@ use sqlx::SqlitePool;
 use voidm_core::ontology::{
     self, HierarchyDirection, NodeKind, OntologyRelType,
 };
+use voidm_core::Config;
 
 // ─── Top-level subcommand tree ────────────────────────────────────────────────
 
@@ -22,6 +23,10 @@ pub enum OntologyCommands {
     Hierarchy(HierarchyArgs),
     /// List all instances of a concept, including subclasses
     Instances(InstancesArgs),
+    /// Enrich all unenriched concepts with NLI relation suggestions (downloads model on first use)
+    Enrich(EnrichArgs),
+    /// Benchmark NLI inference latency
+    Benchmark,
 }
 
 // ─── Concept subcommands ──────────────────────────────────────────────────────
@@ -48,6 +53,16 @@ pub struct ConceptAddArgs {
     /// Optional scope (e.g. project/domain)
     #[arg(long, short)]
     pub scope: Option<String>,
+    /// Run NLI enrichment: suggest relations to existing concepts (downloads model ~180MB on first use)
+    #[arg(long)]
+    pub enrich: bool,
+}
+
+#[derive(Args)]
+pub struct EnrichArgs {
+    /// Max candidates per concept to score (default: 10)
+    #[arg(long, default_value = "10")]
+    pub top_k: usize,
 }
 
 #[derive(Args)]
@@ -119,20 +134,22 @@ pub struct InstancesArgs {
 
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
-pub async fn run(cmd: OntologyCommands, pool: &SqlitePool, json: bool) -> Result<()> {
+pub async fn run(cmd: OntologyCommands, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
     match cmd {
-        OntologyCommands::Concept(sub) => run_concept(sub, pool, json).await,
+        OntologyCommands::Concept(sub) => run_concept(sub, pool, config, json).await,
         OntologyCommands::Link(args) => run_link(args, pool, json).await,
         OntologyCommands::Unlink(args) => run_unlink(args, pool, json).await,
         OntologyCommands::Edges(args) => run_edges(args, pool, json).await,
         OntologyCommands::Hierarchy(args) => run_hierarchy(args, pool, json).await,
         OntologyCommands::Instances(args) => run_instances(args, pool, json).await,
+        OntologyCommands::Enrich(args) => run_enrich(args, pool, config, json).await,
+        OntologyCommands::Benchmark => run_benchmark(json).await,
     }
 }
 
 // ─── Concept handlers ─────────────────────────────────────────────────────────
 
-async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, json: bool) -> Result<()> {
+async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
     match cmd {
         ConceptCommands::Add(args) => {
             let concept = ontology::add_concept(
@@ -142,15 +159,31 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, json: bool) -> Res
                 args.scope.as_deref(),
             )
             .await?;
+
+            // NLI enrichment if requested
+            let suggestions = if args.enrich {
+                run_enrichment_for_concept(&concept.id, &concept_text(&concept), pool, config, 10).await
+            } else {
+                vec![]
+            };
+
             if json {
-                println!("{}", serde_json::to_string_pretty(&concept)?);
+                let mut resp = serde_json::to_value(&concept)?;
+                resp["suggested_relations"] = serde_json::to_value(&suggestions)?;
+                println!("{}", serde_json::to_string_pretty(&resp)?);
             } else {
                 println!("Concept added: {} ({})", concept.name, &concept.id[..8]);
-                if let Some(ref d) = concept.description {
-                    println!("  Description: {}", d);
-                }
-                if let Some(ref s) = concept.scope {
-                    println!("  Scope: {}", s);
+                if let Some(ref d) = concept.description { println!("  Description: {}", d); }
+                if let Some(ref s) = concept.scope { println!("  Scope: {}", s); }
+                if !suggestions.is_empty() {
+                    println!("Suggested relations ({}):", suggestions.len());
+                    for s in &suggestions {
+                        println!("  [{:.2}] {} --[{}]--> {} \"{}\"",
+                            s.confidence, &concept.id[..8], s.suggested_rel,
+                            &s.candidate_id[..8.min(s.candidate_id.len())],
+                            &s.candidate_text[..60.min(s.candidate_text.len())]);
+                    }
+                    println!("Use 'voidm ontology link' to confirm any of the above.");
                 }
             }
         }
@@ -160,12 +193,8 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, json: bool) -> Res
                 println!("{}", serde_json::to_string_pretty(&concept)?);
             } else {
                 println!("[{}] {}", &concept.id[..8], concept.name);
-                if let Some(ref d) = concept.description {
-                    println!("  {}", d);
-                }
-                if let Some(ref s) = concept.scope {
-                    println!("  scope: {}", s);
-                }
+                if let Some(ref d) = concept.description { println!("  {}", d); }
+                if let Some(ref s) = concept.scope { println!("  scope: {}", s); }
                 println!("  created: {}", concept.created_at);
             }
         }
@@ -360,4 +389,148 @@ async fn resolve_node_id(pool: &SqlitePool, id: &str, kind: &NodeKind) -> Result
         NodeKind::Concept => ontology::resolve_concept_id(pool, id).await,
         NodeKind::Memory => voidm_core::resolve_id(pool, id).await,
     }
+}
+
+// ─── NLI enrichment ──────────────────────────────────────────────────────────
+
+/// Build a text representation for NLI scoring from a concept.
+fn concept_text(c: &ontology::Concept) -> String {
+    match &c.description {
+        Some(d) => format!("{}: {}", c.name, d),
+        None => c.name.clone(),
+    }
+}
+
+/// Run NLI enrichment for a single concept against all other concepts.
+/// Returns relation suggestions sorted by confidence.
+async fn run_enrichment_for_concept(
+    concept_id: &str,
+    concept_text: &str,
+    pool: &SqlitePool,
+    config: &Config,
+    top_k: usize,
+) -> Vec<voidm_core::nli::RelationSuggestion> {
+    // Ensure model is loaded
+    if let Err(e) = voidm_core::nli::ensure_nli_model().await {
+        eprintln!("Warning: NLI model load failed: {}. Skipping enrichment.", e);
+        return vec![];
+    }
+
+    // Get all other concepts
+    let candidates = match ontology::list_concepts(pool, None, 500).await {
+        Ok(cs) => cs,
+        Err(e) => {
+            tracing::warn!("Failed to list concepts for enrichment: {}", e);
+            return vec![];
+        }
+    };
+
+    // Build candidate list: (id, text, similarity)
+    // Use embedding similarity if available, else default to 0.5
+    let mut scored_candidates: Vec<(String, String, f32)> = candidates
+        .into_iter()
+        .filter(|c| c.id != concept_id)
+        .map(|c| {
+            let text = concept_text_from(&c);
+            (c.id, text, 0.5_f32) // similarity placeholder — real cosine would require embeddings
+        })
+        .collect();
+
+    // If embeddings available, compute actual cosine similarity
+    if config.embeddings.enabled {
+        if let Ok(query_emb) = voidm_core::embeddings::embed_text(&config.embeddings.model, concept_text) {
+            for (_id, text, sim) in &mut scored_candidates {
+                if let Ok(emb) = voidm_core::embeddings::embed_text(&config.embeddings.model, text) {
+                    *sim = cosine_similarity(&query_emb, &emb);
+                }
+            }
+        }
+    }
+
+    // Sort by similarity, take top_k
+    scored_candidates.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    scored_candidates.truncate(top_k);
+
+    voidm_core::nli::suggest_relations(concept_text, &scored_candidates)
+}
+
+fn concept_text_from(c: &ontology::Concept) -> String {
+    match &c.description {
+        Some(d) => format!("{}: {}", c.name, d),
+        None => c.name.clone(),
+    }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() { return 0.0; }
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 { 0.0 } else { dot / (norm_a * norm_b) }
+}
+
+async fn run_enrich(args: EnrichArgs, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+    let concepts = ontology::list_concepts(pool, None, 1000).await?;
+    if concepts.is_empty() {
+        if json {
+            println!("{}", serde_json::json!({ "enriched": 0, "message": "No concepts to enrich." }));
+        } else {
+            println!("No concepts to enrich.");
+        }
+        return Ok(());
+    }
+
+    println!("Enriching {} concept(s) with NLI relation suggestions …", concepts.len());
+
+    let mut all_suggestions: Vec<serde_json::Value> = vec![];
+    for concept in &concepts {
+        let text = concept_text_from(concept);
+        let suggestions = run_enrichment_for_concept(
+            &concept.id, &text, pool, config, args.top_k,
+        ).await;
+
+        if !suggestions.is_empty() {
+            if json {
+                all_suggestions.push(serde_json::json!({
+                    "concept_id": concept.id,
+                    "concept_name": concept.name,
+                    "suggestions": serde_json::to_value(&suggestions)?
+                }));
+            } else {
+                println!("\n[{}] {}:", &concept.id[..8], concept.name);
+                for s in &suggestions {
+                    println!("  [{:.2}] --[{}]--> {} ({}) \"{}\"",
+                        s.confidence, s.suggested_rel,
+                        &s.candidate_id[..8.min(s.candidate_id.len())],
+                        s.suggested_rel,
+                        &s.candidate_text[..60.min(s.candidate_text.len())]);
+                }
+            }
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&all_suggestions)?);
+    } else {
+        println!("\nDone. Use 'voidm ontology link' to confirm suggested relations.");
+    }
+    Ok(())
+}
+
+async fn run_benchmark(json: bool) -> Result<()> {
+    println!("Loading NLI model …");
+    voidm_core::nli::ensure_nli_model().await?;
+
+    let avg_ms = voidm_core::nli::benchmark_latency(10)?;
+    if json {
+        println!("{}", serde_json::json!({ "avg_ms": avg_ms, "runs": 10 }));
+    } else {
+        println!("NLI inference latency: {:.1}ms avg (10 runs)", avg_ms);
+        if avg_ms < 200.0 {
+            println!("✓ Fast enough for synchronous enrichment on insert.");
+        } else {
+            println!("⚠ Latency > 200ms — recommend using --enrich flag explicitly.");
+        }
+    }
+    Ok(())
 }

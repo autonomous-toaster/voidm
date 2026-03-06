@@ -171,7 +171,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Link(args) => commands::link::run(args, &pool, cli.json).await,
         Commands::Unlink(args) => commands::unlink::run(args, &pool, cli.json).await,
         Commands::Graph(cmd) => commands::graph::run(cmd, &pool, cli.json).await,
-        Commands::Ontology(cmd) => commands::ontology::run(cmd, &pool, cli.json).await,
+        Commands::Ontology(cmd) => commands::ontology::run(cmd, &pool, &config, cli.json).await,
         Commands::Scopes(cmd) => commands::scopes::run(cmd, &pool, cli.json).await,
         Commands::Export(args) => commands::export::run(args, &pool, &config, cli.json).await,
         Commands::Config(_) => unreachable!(),

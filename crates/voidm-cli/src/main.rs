@@ -1,0 +1,179 @@
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use tracing_subscriber::EnvFilter;
+
+mod commands;
+mod output;
+mod instructions;
+
+use voidm_core::{Config, open_pool};
+
+#[derive(Parser)]
+#[command(name = "voidm", about = "Local-first memory tool for LLM agents", version)]
+pub struct Cli {
+    /// Override database path [env: VOIDM_DB]
+    #[arg(long, global = true, env = "VOIDM_DB")]
+    pub db: Option<String>,
+
+    /// Output JSON (machine-readable)
+    #[arg(long, global = true)]
+    pub json: bool,
+
+    /// Suppress decorative output
+    #[arg(short, long, global = true)]
+    pub quiet: bool,
+
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Add a memory
+    Add(commands::add::AddArgs),
+    /// Get a memory by ID
+    Get(commands::get::GetArgs),
+    /// Hybrid search
+    Search(commands::search::SearchArgs),
+    /// List memories (newest first)
+    List(commands::list::ListArgs),
+    /// Delete a memory (cascades graph edges)
+    Delete(commands::delete::DeleteArgs),
+    /// Create a graph edge between two memories
+    Link(commands::link::LinkArgs),
+    /// Remove a graph edge
+    Unlink(commands::unlink::UnlinkArgs),
+    /// Graph operations
+    #[command(subcommand)]
+    Graph(commands::graph::GraphCommands),
+    /// List all known scope strings
+    #[command(subcommand)]
+    Scopes(commands::scopes::ScopesCommands),
+    /// Export memories
+    Export(commands::export::ExportArgs),
+    /// Show or edit config
+    #[command(subcommand)]
+    Config(commands::config::ConfigCommands),
+    /// Model management
+    #[command(subcommand)]
+    Models(commands::models::ModelsCommands),
+    /// Print usage guide for LLM agents
+    Instructions(commands::instructions::InstructionsArgs),
+    /// Show paths, config and runtime settings
+    Info(commands::info::InfoArgs),
+    /// Show memory and graph statistics
+    Stats(commands::stats::StatsArgs),
+}
+
+#[tokio::main]
+async fn main() {
+    // Intercept clap parse errors to inject helpful hints for known args.
+    // We parse manually so we can customise the error before clap exits.
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = e.to_string();
+            // Augment missing --type with the list of valid types
+            let msg = if msg.contains("--type") && msg.contains("required arguments") {
+                format!(
+                    "{msg}\nValid memory types: episodic, semantic, procedural, conceptual, contextual\n\
+                     Example: voidm add \"content\" --type semantic"
+                )
+            } else {
+                msg
+            };
+            // Print to stderr and exit with clap's own code (1 for usage, 2 for error)
+            eprintln!("{msg}");
+            std::process::exit(e.exit_code());
+        }
+    };
+
+    // Logging
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+
+    let json = cli.json;
+    let result = run(cli).await;
+    match result {
+        Ok(()) => {}
+        Err(e) => {
+            emit_error(&e.to_string(), json);
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Emit an error. In JSON mode: `{"error": "..."}` on stdout. Otherwise: `Error: ...` on stderr.
+pub fn emit_error(msg: &str, json: bool) {
+    if json {
+        println!("{}", serde_json::json!({ "error": msg }));
+    } else {
+        eprintln!("Error: {msg}");
+    }
+}
+
+async fn run(cli: Cli) -> Result<()> {
+    // Commands that don't need DB
+    match &cli.command {
+        Commands::Instructions(args) => {
+            return commands::instructions::run(args, cli.json);
+        }
+        Commands::Config(cmd) => {
+            return commands::config::run(cmd, cli.json).await;
+        }
+        Commands::Info(args) => {
+            let config = Config::load();
+            return commands::info::run(args.clone(), &config, cli.db.as_deref(), cli.json);
+        }
+        Commands::Models(cmd) => {
+            if let commands::models::ModelsCommands::List = cmd {
+                return commands::models::run_list(cli.json);
+            }
+        }
+        _ => {}
+    }
+
+    // Load config + open DB
+    let config = Config::load();
+    let db_path = config.db_path(cli.db.as_deref());
+    let pool = open_pool(&db_path).await?;
+
+    // Run migrations
+    voidm_core::migrate::run(&pool).await?;
+
+    // Clean up stale reembed temp table
+    let _ = voidm_core::vector::cleanup_stale_temp_table(&pool).await;
+
+    // Check model mismatch
+    if config.embeddings.enabled {
+        if let Ok(Some((db_model, db_dim))) =
+            voidm_core::crud::check_model_mismatch(&pool, &config.embeddings.model).await
+        {
+            eprintln!(
+                "Warning: configured model '{}' differs from DB model '{}' (dim {}). \
+                 Vector search disabled. Run 'voidm models reembed' to re-embed all memories.",
+                config.embeddings.model, db_model, db_dim
+            );
+        }
+    }
+
+    match cli.command {
+        Commands::Add(args) => commands::add::run(args, &pool, &config, cli.json).await,
+        Commands::Get(args) => commands::get::run(args, &pool, cli.json).await,
+        Commands::Search(args) => commands::search::run(args, &pool, &config, cli.json).await,
+        Commands::List(args) => commands::list::run(args, &pool, &config, cli.json).await,
+        Commands::Delete(args) => commands::delete::run(args, &pool, cli.json).await,
+        Commands::Link(args) => commands::link::run(args, &pool, cli.json).await,
+        Commands::Unlink(args) => commands::unlink::run(args, &pool, cli.json).await,
+        Commands::Graph(cmd) => commands::graph::run(cmd, &pool, cli.json).await,
+        Commands::Scopes(cmd) => commands::scopes::run(cmd, &pool, cli.json).await,
+        Commands::Export(args) => commands::export::run(args, &pool, &config, cli.json).await,
+        Commands::Config(_) => unreachable!(),
+        Commands::Models(cmd) => commands::models::run(cmd, &pool, &config, cli.json).await,
+        Commands::Instructions(_) => unreachable!(),
+        Commands::Info(_) => unreachable!(),
+        Commands::Stats(args) => commands::stats::run(args, &pool, &config, cli.json).await,
+    }
+}

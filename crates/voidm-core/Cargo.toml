@@ -26,7 +26,6 @@ tracing          = { workspace = true }
 once_cell        = { workspace = true }
 strsim           = { workspace = true }
 voidm-graph      = { path = "../voidm-graph" }
-ort              = { version = "2.0.0-rc.9", features = ["load-dynamic"] }
-tokenizers       = { version = "0.21", default-features = false, features = ["onig"] }
-reqwest          = { version = "0.12", features = ["blocking", "json"] }
+ort              = { version = "=2.0.0-rc.9", default-features = false }
 hf-hub           = { version = "0.4", features = ["tokio"] }
+tokenizers       = { version = "0.21", default-features = false, features = ["onig"] }

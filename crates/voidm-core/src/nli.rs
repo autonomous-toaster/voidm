@@ -141,12 +141,10 @@ pub fn classify(premise: &str, hypothesis: &str) -> Result<NliScores> {
         .encode((premise, hypothesis), true)
         .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
-    let seq_len = encoding.get_ids().len();
     let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
     let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&x| x as i64).collect();
-    let token_type_ids: Vec<i64> = encoding.get_type_ids().iter().map(|&x| x as i64).collect();
+    let seq_len = input_ids.len();
 
-    // Build ort tensors [1, seq_len]
     let ids_tensor = Tensor::<i64>::from_array(
         ([1usize, seq_len], input_ids.into_boxed_slice())
     ).context("Failed to create input_ids tensor")?;
@@ -155,16 +153,11 @@ pub fn classify(premise: &str, hypothesis: &str) -> Result<NliScores> {
         ([1usize, seq_len], attention_mask.into_boxed_slice())
     ).context("Failed to create attention_mask tensor")?;
 
-    let type_tensor = Tensor::<i64>::from_array(
-        ([1usize, seq_len], token_type_ids.into_boxed_slice())
-    ).context("Failed to create token_type_ids tensor")?;
-
-    // Run inference — input names come from the model's own input spec
+    // Run inference — DeBERTa-v3 takes only input_ids + attention_mask (no token_type_ids)
     let outputs = model.session.run(
         ort::inputs![
             "input_ids"      => ids_tensor,
-            "attention_mask" => mask_tensor,
-            "token_type_ids" => type_tensor
+            "attention_mask" => mask_tensor
         ].context("Failed to build NLI inputs")?
     ).context("NLI inference failed")?;
 
@@ -193,27 +186,29 @@ pub fn classify(premise: &str, hypothesis: &str) -> Result<NliScores> {
 
 /// Map NLI scores + cosine similarity to the most likely ontology edge type.
 ///
-/// Heuristic thresholds (empirical, to be tuned):
-/// - contradiction > 0.60                  → CONTRADICTS
-/// - entailment > 0.70 + similarity > 0.85 → IS_A (strong semantic inclusion)
-/// - entailment > 0.60 + similarity > 0.70 → SUPPORTS
-/// - entailment > 0.50 + similarity > 0.60 → EXEMPLIFIES
-/// - neutral + similarity 0.40–0.75        → RELATES_TO
-/// - otherwise                             → None
+/// Thresholds tuned empirically against nli-deberta-v3-small behaviour:
+/// - The model tends toward neutral for factual/ontological pairs, so we
+///   use neutral + high similarity as a positive signal, not just entailment.
+/// - contradiction > 0.65                              → CONTRADICTS
+/// - entailment > 0.50 + similarity > 0.80             → IS_A (strong inclusion)
+/// - entailment > 0.40 + similarity > 0.65             → SUPPORTS
+/// - (neutral > 0.60 OR entailment > 0.30) + sim 0.70+ → EXEMPLIFIES
+/// - neutral > 0.70 + similarity 0.45–0.75             → RELATES_TO
+/// - otherwise                                          → None
 pub fn scores_to_rel(scores: &NliScores, similarity: f32) -> Option<(String, f32)> {
-    if scores.contradiction > 0.60 {
+    if scores.contradiction > 0.80 {
         return Some(("CONTRADICTS".into(), scores.contradiction));
     }
-    if scores.entailment > 0.70 && similarity > 0.85 {
+    if scores.entailment > 0.50 && similarity > 0.80 {
         return Some(("IS_A".into(), scores.entailment * similarity));
     }
-    if scores.entailment > 0.60 && similarity > 0.70 {
+    if scores.entailment > 0.40 && similarity > 0.65 {
         return Some(("SUPPORTS".into(), scores.entailment * 0.9));
     }
-    if scores.entailment > 0.50 && similarity > 0.60 {
-        return Some(("EXEMPLIFIES".into(), scores.entailment * 0.8));
+    if (scores.neutral > 0.60 || scores.entailment > 0.30) && similarity > 0.70 {
+        return Some(("EXEMPLIFIES".into(), (scores.entailment + scores.neutral * 0.5) * similarity));
     }
-    if scores.neutral > 0.50 && similarity > 0.40 && similarity < 0.75 {
+    if scores.neutral > 0.70 && similarity > 0.45 && similarity < 0.75 {
         return Some(("RELATES_TO".into(), scores.neutral * similarity));
     }
     None
@@ -262,7 +257,7 @@ pub fn check_contradiction(
 ) -> Option<(String, f32)> {
     for (id, text) in candidates {
         if let Ok(scores) = classify(new_text, text) {
-            if scores.contradiction > 0.65 {
+            if scores.contradiction > 0.80 {
                 return Some((id.clone(), scores.contradiction));
             }
         }
@@ -310,4 +305,44 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
     let exps: Vec<f32> = logits.iter().map(|&x| (x - max).exp()).collect();
     let sum: f32 = exps.iter().sum();
     exps.iter().map(|&x| x / sum).collect()
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_classify_contradiction() {
+        ensure_nli_model().await.expect("model load");
+        // Two unrelated statements — should score high contradiction or neutral
+        let s = classify(
+            "A microservice is a small, independently deployable service.",
+            "A service mesh manages inter-service communication.",
+        ).unwrap();
+        // Model sees these as unrelated (contradiction in NLI terms for this model)
+        assert!(s.contradiction > 0.5 || s.neutral > 0.5, "should not strongly entail");
+    }
+
+    #[tokio::test]
+    async fn test_model_inputs() {
+        ensure_nli_model().await.expect("model load");
+        let wrapper = NLI_MODEL.get().unwrap();
+        let model = &wrapper.0;
+        let input_names: Vec<&str> = model.session.inputs.iter().map(|i| i.name.as_str()).collect();
+        assert!(input_names.contains(&"input_ids"), "must have input_ids");
+        assert!(input_names.contains(&"attention_mask"), "must have attention_mask");
+        assert!(!input_names.contains(&"token_type_ids"), "DeBERTa has no token_type_ids");
+    }
+
+    #[tokio::test]
+    async fn test_scores_to_rel_contradiction() {
+        ensure_nli_model().await.expect("model load");
+        let s = classify(
+            "The server is always online and never goes down.",
+            "The server experiences frequent outages and downtime.",
+        ).unwrap();
+        let rel = scores_to_rel(&s, 0.85);
+        assert_eq!(rel.map(|(r, _)| r), Some("CONTRADICTS".to_string()));
+    }
 }

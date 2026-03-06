@@ -327,3 +327,40 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
     let sum: f32 = exps.iter().sum();
     exps.iter().map(|&x| x / sum).collect()
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_model_inputs() {
+        ensure_ner_model().await.expect("model load");
+        let wrapper = NER_MODEL.get().unwrap();
+        let model = &wrapper.0;
+        let input_names: Vec<&str> = model.session.inputs.iter().map(|i| i.name.as_str()).collect();
+        assert!(input_names.contains(&"input_ids"));
+        assert!(input_names.contains(&"attention_mask"));
+        assert!(input_names.contains(&"token_type_ids"), "BERT-NER uses token_type_ids");
+    }
+
+    #[tokio::test]
+    async fn test_extract_orgs_and_locs() {
+        ensure_ner_model().await.expect("model load");
+        let entities = extract_entities(
+            "Google and Microsoft are building cloud services in London."
+        ).expect("extraction failed");
+        let names: Vec<&str> = entities.iter().map(|e| e.text.as_str()).collect();
+        assert!(names.contains(&"Google"), "should extract Google: got {:?}", names);
+        assert!(names.contains(&"Microsoft"), "should extract Microsoft: got {:?}", names);
+        assert!(names.contains(&"London"), "should extract London: got {:?}", names);
+    }
+
+    #[tokio::test]
+    async fn test_extract_empty() {
+        ensure_ner_model().await.expect("model load");
+        let entities = extract_entities("the quick brown fox").expect("extraction failed");
+        // No proper entities in this text
+        assert!(entities.is_empty() || entities.iter().all(|e| e.score < 0.9));
+    }
+}

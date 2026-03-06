@@ -54,6 +54,10 @@ pub enum EdgeType {
     PartOf,
     Exemplifies,
     Invalidates,
+    // Ontology edges (also valid in ontology_edges table)
+    IsA,
+    InstanceOf,
+    HasProperty,
 }
 
 impl EdgeType {
@@ -67,6 +71,9 @@ impl EdgeType {
             EdgeType::PartOf => "PART_OF",
             EdgeType::Exemplifies => "EXEMPLIFIES",
             EdgeType::Invalidates => "INVALIDATES",
+            EdgeType::IsA => "IS_A",
+            EdgeType::InstanceOf => "INSTANCE_OF",
+            EdgeType::HasProperty => "HAS_PROPERTY",
         }
     }
 
@@ -105,8 +112,11 @@ impl std::str::FromStr for EdgeType {
             "PART_OF" => Ok(EdgeType::PartOf),
             "EXEMPLIFIES" => Ok(EdgeType::Exemplifies),
             "INVALIDATES" => Ok(EdgeType::Invalidates),
+            "IS_A" | "ISA" => Ok(EdgeType::IsA),
+            "INSTANCE_OF" => Ok(EdgeType::InstanceOf),
+            "HAS_PROPERTY" => Ok(EdgeType::HasProperty),
             other => Err(anyhow::anyhow!(
-                "Unknown edge type: '{}'. Valid types: RELATES_TO, SUPPORTS, CONTRADICTS, DERIVED_FROM, PRECEDES, PART_OF, EXEMPLIFIES, INVALIDATES",
+                "Unknown edge type: '{}'. Valid types: RELATES_TO, SUPPORTS, CONTRADICTS, DERIVED_FROM, PRECEDES, PART_OF, EXEMPLIFIES, INVALIDATES, IS_A, INSTANCE_OF, HAS_PROPERTY",
                 other
             )),
         }

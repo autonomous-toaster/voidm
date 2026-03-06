@@ -6,6 +6,7 @@ pub mod delete;
 pub mod link;
 pub mod unlink;
 pub mod graph;
+pub mod ontology;
 pub mod scopes;
 pub mod export;
 pub mod config;

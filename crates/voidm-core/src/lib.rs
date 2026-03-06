@@ -3,6 +3,7 @@ pub mod crud;
 pub mod db;
 pub mod migrate;
 pub mod models;
+pub mod ontology;
 pub mod vector;
 pub mod search;
 pub mod embeddings;

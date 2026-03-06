@@ -203,4 +203,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ontology_edges_unique
 CREATE INDEX IF NOT EXISTS idx_ontology_edges_from   ON ontology_edges(from_id, rel_type);
 CREATE INDEX IF NOT EXISTS idx_ontology_edges_to     ON ontology_edges(to_id, rel_type);
 CREATE INDEX IF NOT EXISTS idx_ontology_edges_type   ON ontology_edges(rel_type);
+
+-- NER enrichment tracking: records which memories have been processed
+-- by 'voidm ontology enrich-memories' so re-runs skip them by default.
+CREATE TABLE IF NOT EXISTS ontology_ner_processed (
+    memory_id    TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+    processed_at TEXT NOT NULL,
+    entity_count INTEGER NOT NULL DEFAULT 0,
+    link_count   INTEGER NOT NULL DEFAULT 0
+);
 "#;

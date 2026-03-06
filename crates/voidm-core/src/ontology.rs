@@ -528,3 +528,231 @@ async fn validate_node(pool: &SqlitePool, id: &str, kind: &NodeKind) -> Result<(
     }
     Ok(())
 }
+
+// ─── Batch NER enrichment ─────────────────────────────────────────────────────
+
+/// Result for one memory processed by enrich_memories.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EnrichMemoryResult {
+    pub memory_id: String,
+    /// First ~80 chars of content for display
+    pub preview: String,
+    /// Entities extracted above threshold
+    pub entities_found: usize,
+    /// INSTANCE_OF edges created (concept existed or was created)
+    pub links_created: usize,
+    /// Concept names that were newly created (--add only)
+    pub concepts_created: Vec<String>,
+    /// Concept names that were linked to existing concepts
+    pub concepts_linked: Vec<String>,
+    /// Whether this memory was skipped (already processed, no --force)
+    pub skipped: bool,
+}
+
+/// Options for batch memory enrichment.
+pub struct EnrichMemoriesOpts<'a> {
+    pub scope: Option<&'a str>,
+    pub min_score: f32,
+    /// Create missing concepts automatically (like extract --add)
+    pub add: bool,
+    /// Re-process memories already in ontology_ner_processed
+    pub force: bool,
+    /// Don't write anything — just report what would be done
+    pub dry_run: bool,
+    /// Max memories to process (0 = all)
+    pub limit: usize,
+}
+
+/// Batch-enrich all (or scoped) memories with NER entity extraction.
+/// For each memory:
+///   1. Extract named entities above min_score
+///   2. For each entity: if concept exists → INSTANCE_OF edge
+///                       if not + add=true → create concept + INSTANCE_OF edge
+///   3. Record in ontology_ner_processed (skip on re-run unless force=true)
+///
+/// Progress is reported via the returned Vec (caller prints it).
+pub async fn enrich_memories(
+    pool: &SqlitePool,
+    opts: &EnrichMemoriesOpts<'_>,
+) -> Result<Vec<EnrichMemoryResult>> {
+    use crate::ner;
+
+    // Fetch memories to process
+    let rows: Vec<(String, String)> = if let Some(scope) = opts.scope {
+        let prefix = format!("{}%", scope);
+        sqlx::query_as(
+            "SELECT DISTINCT m.id, m.content
+             FROM memories m
+             JOIN memory_scopes ms ON ms.memory_id = m.id
+             WHERE ms.scope LIKE ?
+             ORDER BY m.created_at DESC"
+        )
+        .bind(&prefix)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id, content FROM memories ORDER BY created_at DESC"
+        )
+        .fetch_all(pool)
+        .await?
+    };
+
+    let limit = if opts.limit == 0 { rows.len() } else { opts.limit.min(rows.len()) };
+    let rows = &rows[..limit];
+
+    let mut results = Vec::with_capacity(rows.len());
+    let now = chrono::Utc::now().to_rfc3339();
+
+    for (memory_id, content) in rows {
+        // Check if already processed
+        if !opts.force {
+            let already: Option<String> = sqlx::query_scalar(
+                "SELECT memory_id FROM ontology_ner_processed WHERE memory_id = ?"
+            )
+            .bind(memory_id)
+            .fetch_optional(pool)
+            .await?;
+            if already.is_some() {
+                results.push(EnrichMemoryResult {
+                    memory_id: memory_id.clone(),
+                    preview: preview(content),
+                    entities_found: 0,
+                    links_created: 0,
+                    concepts_created: vec![],
+                    concepts_linked: vec![],
+                    skipped: true,
+                });
+                continue;
+            }
+        }
+
+        // Run NER
+        let entities = match ner::extract_entities(content) {
+            Ok(e) => e,
+            Err(_) => {
+                // Record as processed with 0 entities to avoid re-running broken content
+                if !opts.dry_run {
+                    record_processed(pool, memory_id, 0, 0, &now).await?;
+                }
+                results.push(EnrichMemoryResult {
+                    memory_id: memory_id.clone(),
+                    preview: preview(content),
+                    entities_found: 0,
+                    links_created: 0,
+                    concepts_created: vec![],
+                    concepts_linked: vec![],
+                    skipped: false,
+                });
+                continue;
+            }
+        };
+
+        let above_threshold: Vec<_> = entities.iter()
+            .filter(|e| e.score >= opts.min_score)
+            .collect();
+
+        let mut links_created = 0usize;
+        let mut concepts_created = Vec::new();
+        let mut concepts_linked = Vec::new();
+
+        for entity in &above_threshold {
+            // Check for existing concept (case-insensitive)
+            let existing: Option<(String, String)> = sqlx::query_as(
+                "SELECT id, name FROM ontology_concepts WHERE lower(name) = lower(?)"
+            )
+            .bind(&entity.text)
+            .fetch_optional(pool)
+            .await?;
+
+            let concept_id = if let Some((id, name)) = existing {
+                concepts_linked.push(name);
+                Some(id)
+            } else if opts.add {
+                // Create new concept from entity
+                if opts.dry_run {
+                    concepts_created.push(entity.text.clone());
+                    None
+                } else {
+                    match add_concept(pool, &entity.text, None, None).await {
+                        Ok(c) => {
+                            concepts_created.push(c.name.clone());
+                            Some(c.id)
+                        }
+                        Err(_) => None, // duplicate race — skip
+                    }
+                }
+            } else {
+                None
+            };
+
+            // Create INSTANCE_OF edge if we have a concept
+            if let Some(cid) = concept_id {
+                if !opts.dry_run {
+                    // Ignore duplicate edge errors (unique index)
+                    let _ = add_ontology_edge(
+                        pool,
+                        memory_id,
+                        NodeKind::Memory,
+                        &OntologyRelType::InstanceOf,
+                        &cid,
+                        NodeKind::Concept,
+                        None,
+                    ).await;
+                }
+                links_created += 1;
+            }
+        }
+
+        // Record as processed
+        if !opts.dry_run {
+            record_processed(pool, memory_id, above_threshold.len(), links_created, &now).await?;
+        }
+
+        results.push(EnrichMemoryResult {
+            memory_id: memory_id.clone(),
+            preview: preview(content),
+            entities_found: above_threshold.len(),
+            links_created,
+            concepts_created,
+            concepts_linked,
+            skipped: false,
+        });
+    }
+
+    Ok(results)
+}
+
+async fn record_processed(
+    pool: &SqlitePool,
+    memory_id: &str,
+    entity_count: usize,
+    link_count: usize,
+    now: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO ontology_ner_processed (memory_id, processed_at, entity_count, link_count)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(memory_id) DO UPDATE SET
+           processed_at = excluded.processed_at,
+           entity_count = excluded.entity_count,
+           link_count   = excluded.link_count"
+    )
+    .bind(memory_id)
+    .bind(now)
+    .bind(entity_count as i64)
+    .bind(link_count as i64)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn preview(content: &str) -> String {
+    let s = content.trim();
+    if s.chars().count() <= 80 {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(77).collect();
+        format!("{}...", cut)
+    }
+}

@@ -29,6 +29,8 @@ pub enum OntologyCommands {
     Benchmark,
     /// Extract named entities from text and propose them as concept candidates
     Extract(ExtractArgs),
+    /// Batch-enrich all memories with NER entity extraction, auto-linking to existing concepts
+    EnrichMemories(EnrichMemoriesArgs),
 }
 
 // ─── Concept subcommands ──────────────────────────────────────────────────────
@@ -80,6 +82,28 @@ pub struct ExtractArgs {
     /// Scope to assign to auto-added concepts
     #[arg(long)]
     pub scope: Option<String>,
+}
+
+#[derive(Args)]
+pub struct EnrichMemoriesArgs {
+    /// Only process memories with this scope prefix
+    #[arg(long, short)]
+    pub scope: Option<String>,
+    /// Minimum NER confidence score (default: 0.7)
+    #[arg(long, default_value = "0.7")]
+    pub min_score: f32,
+    /// Automatically create missing concepts (otherwise only links to existing ones)
+    #[arg(long)]
+    pub add: bool,
+    /// Re-process memories already enriched (default: skip them)
+    #[arg(long)]
+    pub force: bool,
+    /// Show what would be done without writing anything
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Max number of memories to process (default: all)
+    #[arg(long, default_value = "0")]
+    pub limit: usize,
 }
 
 #[derive(Args)]
@@ -162,6 +186,7 @@ pub async fn run(cmd: OntologyCommands, pool: &SqlitePool, config: &Config, json
         OntologyCommands::Enrich(args) => run_enrich(args, pool, config, json).await,
         OntologyCommands::Benchmark => run_benchmark(json).await,
         OntologyCommands::Extract(args) => run_extract(args, pool, json).await,
+        OntologyCommands::EnrichMemories(args) => run_enrich_memories(args, pool, json).await,
     }
 }
 
@@ -627,6 +652,90 @@ async fn run_extract(args: ExtractArgs, pool: &SqlitePool, json: bool) -> Result
     } else if !json {
         println!("\nUse 'voidm ontology extract \"...\" --add' to automatically add new candidates.");
         println!("Or 'voidm ontology concept add \"<name>\"' to add individually.");
+    }
+
+    Ok(())
+}
+
+// ─── enrich-memories ──────────────────────────────────────────────────────────
+
+async fn run_enrich_memories(
+    args: EnrichMemoriesArgs,
+    pool: &SqlitePool,
+    json: bool,
+) -> Result<()> {
+    // Ensure NER model is loaded (downloads ~103MB on first use)
+    if !json {
+        if !voidm_core::ner::ner_model_downloaded() {
+            eprintln!("Downloading NER model (~103MB, first use only) …");
+        }
+    }
+    voidm_core::ner::ensure_ner_model().await?;
+
+    let opts = voidm_core::ontology::EnrichMemoriesOpts {
+        scope: args.scope.as_deref(),
+        min_score: args.min_score,
+        add: args.add,
+        force: args.force,
+        dry_run: args.dry_run,
+        limit: args.limit,
+    };
+
+    let results = voidm_core::ontology::enrich_memories(pool, &opts).await?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&results)?);
+        return Ok(());
+    }
+
+    // Human-readable output
+    let total = results.len();
+    let skipped = results.iter().filter(|r| r.skipped).count();
+    let processed = results.iter().filter(|r| !r.skipped).count();
+    let total_links: usize = results.iter().map(|r| r.links_created).sum();
+    let total_created: usize = results.iter().map(|r| r.concepts_created.len()).sum();
+
+    if args.dry_run {
+        println!("DRY RUN — no changes written.\n");
+    }
+
+    for (i, r) in results.iter().filter(|r| !r.skipped).enumerate() {
+        let status = if r.entities_found == 0 {
+            "no entities".to_string()
+        } else {
+            let mut parts = Vec::new();
+            if !r.concepts_linked.is_empty() {
+                parts.push(format!("linked: {}", r.concepts_linked.join(", ")));
+            }
+            if !r.concepts_created.is_empty() {
+                parts.push(format!("created: {}", r.concepts_created.join(", ")));
+            }
+            if parts.is_empty() {
+                format!("{} entities, 0 links (no matching concepts)", r.entities_found)
+            } else {
+                parts.join(" | ")
+            }
+        };
+        println!(
+            "[{}/{}] {} → {}",
+            i + 1,
+            processed,
+            r.preview,
+            status,
+        );
+    }
+
+    if skipped > 0 {
+        println!("\n{} already processed (use --force to re-run).", skipped);
+    }
+
+    println!(
+        "\nDone: {}/{} memories processed, {} link(s) created, {} concept(s) created.",
+        processed, total, total_links, total_created,
+    );
+
+    if !args.add && total_links < processed {
+        println!("Tip: use --add to automatically create missing concepts.");
     }
 
     Ok(())

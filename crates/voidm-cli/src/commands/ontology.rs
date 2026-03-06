@@ -27,6 +27,8 @@ pub enum OntologyCommands {
     Enrich(EnrichArgs),
     /// Benchmark NLI inference latency
     Benchmark,
+    /// Extract named entities from text and propose them as concept candidates
+    Extract(ExtractArgs),
 }
 
 // ─── Concept subcommands ──────────────────────────────────────────────────────
@@ -63,6 +65,21 @@ pub struct EnrichArgs {
     /// Max candidates per concept to score (default: 10)
     #[arg(long, default_value = "10")]
     pub top_k: usize,
+}
+
+#[derive(Args)]
+pub struct ExtractArgs {
+    /// Text to extract entities from
+    pub text: String,
+    /// Minimum confidence score to include (0.0–1.0, default: 0.7)
+    #[arg(long, default_value = "0.7")]
+    pub min_score: f32,
+    /// Automatically add confirmed candidates as concepts (without this flag, only proposes)
+    #[arg(long)]
+    pub add: bool,
+    /// Scope to assign to auto-added concepts
+    #[arg(long)]
+    pub scope: Option<String>,
 }
 
 #[derive(Args)]
@@ -144,6 +161,7 @@ pub async fn run(cmd: OntologyCommands, pool: &SqlitePool, config: &Config, json
         OntologyCommands::Instances(args) => run_instances(args, pool, json).await,
         OntologyCommands::Enrich(args) => run_enrich(args, pool, config, json).await,
         OntologyCommands::Benchmark => run_benchmark(json).await,
+        OntologyCommands::Extract(args) => run_extract(args, pool, json).await,
     }
 }
 
@@ -532,5 +550,84 @@ async fn run_benchmark(json: bool) -> Result<()> {
             println!("⚠ Latency > 200ms — recommend using --enrich flag explicitly.");
         }
     }
+    Ok(())
+}
+
+async fn run_extract(args: ExtractArgs, pool: &SqlitePool, json: bool) -> Result<()> {
+    // Ensure model is loaded
+    voidm_core::ner::ensure_ner_model().await?;
+
+    // Extract entities
+    let entities = voidm_core::ner::extract_entities(&args.text)?;
+
+    // Filter by min_score
+    let filtered: Vec<_> = entities.iter()
+        .filter(|e| e.score >= args.min_score)
+        .collect();
+
+    if filtered.is_empty() {
+        if json {
+            println!("{}", serde_json::json!({ "candidates": [], "message": "No entities found above threshold." }));
+        } else {
+            println!("No entities found above score threshold {:.2}.", args.min_score);
+            println!("Try lowering --min-score or providing more descriptive text.");
+        }
+        return Ok(());
+    }
+
+    // Check against existing concepts
+    let entities_owned: Vec<voidm_core::ner::NamedEntity> = filtered.iter().map(|e| (*e).clone()).collect();
+    let candidates = voidm_core::ner::entities_to_candidates(&entities_owned, pool).await?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&candidates)?);
+        if !args.add { return Ok(()); }
+    } else {
+        println!("Extracted {} candidate(s):", candidates.len());
+        for c in &candidates {
+            let status = if c.already_exists {
+                format!(" [exists: {}]", c.existing_id.as_deref().unwrap_or("?").get(..8).unwrap_or("?"))
+            } else {
+                String::new()
+            };
+            println!("  [{:.2}] {:5} {}{}", c.score, c.entity_type, c.name, status);
+        }
+    }
+
+    // Auto-add if --add flag given
+    if args.add {
+        let new_candidates: Vec<_> = candidates.iter().filter(|c| !c.already_exists).collect();
+        if new_candidates.is_empty() {
+            if !json { println!("All candidates already exist as concepts."); }
+            return Ok(());
+        }
+
+        if !json { println!("\nAdding {} new concept(s):", new_candidates.len()); }
+
+        let mut added = Vec::new();
+        for c in &new_candidates {
+            match ontology::add_concept(pool, &c.name, None, args.scope.as_deref()).await {
+                Ok(concept) => {
+                    if !json {
+                        println!("  ✓ {} [{}] ({})", concept.name, &concept.id[..8], c.entity_type);
+                    }
+                    added.push(concept);
+                }
+                Err(e) => {
+                    if !json { eprintln!("  ✗ {}: {}", c.name, e); }
+                }
+            }
+        }
+
+        if json {
+            println!("{}", serde_json::to_string_pretty(&added)?);
+        } else {
+            println!("\n{} concept(s) added. Use 'voidm ontology link' to build the hierarchy.", added.len());
+        }
+    } else if !json {
+        println!("\nUse 'voidm ontology extract \"...\" --add' to automatically add new candidates.");
+        println!("Or 'voidm ontology concept add \"<name>\"' to add individually.");
+    }
+
     Ok(())
 }

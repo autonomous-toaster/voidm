@@ -178,45 +178,92 @@ pub async fn shortest_path(
 }
 
 /// Compute PageRank for all graph nodes. Returns (memory_id, score) sorted descending.
+/// Includes ontology concept nodes (prefixed "concept::<id>") in the same graph so
+/// well-connected concepts rank alongside well-connected memories.
 pub async fn pagerank(
     pool: &SqlitePool,
     damping: f64,
     iterations: u32,
 ) -> Result<Vec<(String, f64)>> {
-    // Fetch all edges
-    let edges: Vec<(i64, i64)> = sqlx::query_as(
+    // ── Memory nodes + graph_edges ────────────────────────────────────────────
+    let mem_edges: Vec<(i64, i64)> = sqlx::query_as(
         "SELECT source_id, target_id FROM graph_edges"
-    )
-    .fetch_all(pool)
-    .await?;
+    ).fetch_all(pool).await?;
 
-    let nodes: Vec<(i64, String)> = sqlx::query_as(
+    let mem_nodes: Vec<(i64, String)> = sqlx::query_as(
         "SELECT id, memory_id FROM graph_nodes"
-    )
-    .fetch_all(pool)
-    .await?;
+    ).fetch_all(pool).await?;
 
-    if nodes.is_empty() {
+    // ── Concept nodes + ontology_edges ────────────────────────────────────────
+    let concept_nodes: Vec<(String,)> = sqlx::query_as(
+        "SELECT id FROM ontology_concepts"
+    ).fetch_all(pool).await?;
+
+    let ont_edges: Vec<(String, String)> = sqlx::query_as(
+        "SELECT from_id, to_id FROM ontology_edges"
+    ).fetch_all(pool).await?;
+
+    // ── Build unified node index ───────────────────────────────────────────────
+    // Memory nodes use integer graph_nodes.id as key.
+    // Concept nodes use a string key "c::<concept_id>".
+    let mut labels: Vec<String> = Vec::new();  // index → display label
+    let mut mem_graph_id_to_idx: HashMap<i64, usize> = HashMap::new();
+    let mut concept_id_to_idx: HashMap<String, usize> = HashMap::new();
+
+    for (gid, mid) in &mem_nodes {
+        let idx = labels.len();
+        mem_graph_id_to_idx.insert(*gid, idx);
+        labels.push(mid.clone());
+    }
+    for (cid,) in &concept_nodes {
+        let idx = labels.len();
+        concept_id_to_idx.insert(cid.clone(), idx);
+        labels.push(format!("concept::{}", cid));
+    }
+
+    let n = labels.len();
+    if n == 0 {
         return Ok(vec![]);
     }
 
-    let n = nodes.len();
-    let node_ids: HashMap<i64, usize> = nodes.iter().enumerate().map(|(i, (id, _))| (*id, i)).collect();
-    let memory_ids: Vec<String> = nodes.into_iter().map(|(_, mid)| mid).collect();
-
-    // Build adjacency: out_neighbors[i] = list of nodes i points to
     let mut out_neighbors: Vec<Vec<usize>> = vec![vec![]; n];
     let mut in_neighbors: Vec<Vec<usize>> = vec![vec![]; n];
 
-    for (src, tgt) in &edges {
-        if let (Some(&si), Some(&ti)) = (node_ids.get(src), node_ids.get(tgt)) {
+    // Memory ↔ memory edges
+    for (src, tgt) in &mem_edges {
+        if let (Some(&si), Some(&ti)) = (mem_graph_id_to_idx.get(src), mem_graph_id_to_idx.get(tgt)) {
             out_neighbors[si].push(ti);
             in_neighbors[ti].push(si);
         }
     }
 
-    let mut scores = vec![1.0f64 / n as f64; n];
+    // Ontology edges (concept ↔ concept, concept ↔ memory)
+    for (from_id, to_id) in &ont_edges {
+        // from_id could be a concept id or a memory UUID
+        let from_idx = concept_id_to_idx.get(from_id.as_str())
+            .copied()
+            .or_else(|| {
+                // It's a memory UUID — find its graph_nodes.id
+                mem_nodes.iter()
+                    .find(|(_, mid)| mid == from_id)
+                    .and_then(|(gid, _)| mem_graph_id_to_idx.get(gid).copied())
+            });
+        let to_idx = concept_id_to_idx.get(to_id.as_str())
+            .copied()
+            .or_else(|| {
+                mem_nodes.iter()
+                    .find(|(_, mid)| mid == to_id)
+                    .and_then(|(gid, _)| mem_graph_id_to_idx.get(gid).copied())
+            });
 
+        if let (Some(si), Some(ti)) = (from_idx, to_idx) {
+            out_neighbors[si].push(ti);
+            in_neighbors[ti].push(si);
+        }
+    }
+
+    // ── Power iteration ───────────────────────────────────────────────────────
+    let mut scores = vec![1.0f64 / n as f64; n];
     for _ in 0..iterations {
         let mut new_scores = vec![(1.0 - damping) / n as f64; n];
         for i in 0..n {
@@ -230,7 +277,7 @@ pub async fn pagerank(
         scores = new_scores;
     }
 
-    let mut results: Vec<(String, f64)> = memory_ids.into_iter().zip(scores).collect();
+    let mut results: Vec<(String, f64)> = labels.into_iter().zip(scores).collect();
     results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     Ok(results)
 }

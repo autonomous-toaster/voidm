@@ -46,6 +46,12 @@ pub enum Commands {
     /// Graph operations
     #[command(subcommand)]
     Graph(commands::graph::GraphCommands),
+    /// Ontology operations (concepts, hierarchy, instances)
+    #[command(subcommand)]
+    Ontology(commands::ontology::OntologyCommands),
+    /// Review and resolve ontology conflicts (CONTRADICTS edges)
+    #[command(subcommand)]
+    Conflicts(commands::conflicts::ConflictsCommands),
     /// List all known scope strings
     #[command(subcommand)]
     Scopes(commands::scopes::ScopesCommands),
@@ -168,6 +174,8 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Link(args) => commands::link::run(args, &pool, cli.json).await,
         Commands::Unlink(args) => commands::unlink::run(args, &pool, cli.json).await,
         Commands::Graph(cmd) => commands::graph::run(cmd, &pool, cli.json).await,
+        Commands::Ontology(cmd) => commands::ontology::run(cmd, &pool, &config, cli.json).await,
+        Commands::Conflicts(cmd) => commands::conflicts::run(cmd, &pool, cli.json).await,
         Commands::Scopes(cmd) => commands::scopes::run(cmd, &pool, cli.json).await,
         Commands::Export(args) => commands::export::run(args, &pool, &config, cli.json).await,
         Commands::Config(_) => unreachable!(),

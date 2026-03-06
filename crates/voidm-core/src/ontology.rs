@@ -1,0 +1,1120 @@
+use anyhow::{bail, Context, Result};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+use uuid::Uuid;
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Concept {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scope: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyEdge {
+    pub id: i64,
+    pub from_id: String,
+    pub from_type: NodeKind,
+    pub rel_type: String,
+    pub to_id: String,
+    pub to_type: NodeKind,
+    pub note: Option<String>,
+    pub created_at: String,
+}
+
+/// Discriminates whether an endpoint in an ontology edge is a Concept or a Memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeKind {
+    Concept,
+    Memory,
+}
+
+impl std::fmt::Display for NodeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeKind::Concept => write!(f, "concept"),
+            NodeKind::Memory => write!(f, "memory"),
+        }
+    }
+}
+
+impl std::str::FromStr for NodeKind {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "concept" => Ok(NodeKind::Concept),
+            "memory" => Ok(NodeKind::Memory),
+            other => bail!("Unknown node kind: '{}'", other),
+        }
+    }
+}
+
+/// Ontology-specific edge types (IS_A, INSTANCE_OF, HAS_PROPERTY).
+/// Regular EdgeTypes (SUPPORTS, CONTRADICTS, etc.) are also valid in ontology_edges.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OntologyRelType {
+    IsA,
+    InstanceOf,
+    HasProperty,
+    /// Pass-through for any string rel_type (covers existing EdgeType variants too)
+    Other(String),
+}
+
+impl OntologyRelType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            OntologyRelType::IsA => "IS_A",
+            OntologyRelType::InstanceOf => "INSTANCE_OF",
+            OntologyRelType::HasProperty => "HAS_PROPERTY",
+            OntologyRelType::Other(s) => s.as_str(),
+        }
+    }
+
+    pub fn all_ontology_types() -> &'static [&'static str] {
+        &["IS_A", "INSTANCE_OF", "HAS_PROPERTY"]
+    }
+}
+
+impl std::fmt::Display for OntologyRelType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for OntologyRelType {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_uppercase().replace('-', "_").as_str() {
+            "IS_A" | "ISA" => Ok(OntologyRelType::IsA),
+            "INSTANCE_OF" => Ok(OntologyRelType::InstanceOf),
+            "HAS_PROPERTY" => Ok(OntologyRelType::HasProperty),
+            other => Ok(OntologyRelType::Other(other.to_string())),
+        }
+    }
+}
+
+// ─── Concept CRUD ─────────────────────────────────────────────────────────────
+
+/// Add a new concept. Returns the created Concept.
+pub async fn add_concept(
+    pool: &SqlitePool,
+    name: &str,
+    description: Option<&str>,
+    scope: Option<&str>,
+) -> Result<Concept> {
+    // Check for exact name+scope duplicate
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM ontology_concepts WHERE lower(name) = lower(?) AND (scope IS ? OR (scope IS NULL AND ? IS NULL))"
+    )
+    .bind(name)
+    .bind(scope)
+    .bind(scope)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(id) = existing {
+        bail!("Concept '{}' already exists (id: {}). Use 'voidm ontology concept get {}' to inspect it.", name, &id[..8], &id[..8]);
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO ontology_concepts (id, name, description, scope, created_at)
+         VALUES (?, ?, ?, ?, ?)"
+    )
+    .bind(&id)
+    .bind(name)
+    .bind(description)
+    .bind(scope)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("Failed to insert concept")?;
+
+    // FTS insert
+    sqlx::query("INSERT INTO ontology_concept_fts (id, name, description) VALUES (?, ?, ?)")
+        .bind(&id)
+        .bind(name)
+        .bind(description.unwrap_or(""))
+        .execute(pool)
+        .await?;
+
+    Ok(Concept { id, name: name.to_string(), description: description.map(str::to_string), scope: scope.map(str::to_string), created_at: now })
+}
+
+/// Get a concept by full or short (prefix) ID.
+pub async fn get_concept(pool: &SqlitePool, id: &str) -> Result<Concept> {
+    let full_id = resolve_concept_id(pool, id).await?;
+    let row: (String, String, Option<String>, Option<String>, String) = sqlx::query_as(
+        "SELECT id, name, description, scope, created_at FROM ontology_concepts WHERE id = ?"
+    )
+    .bind(&full_id)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("Concept '{}' not found", id))?;
+
+    Ok(Concept { id: row.0, name: row.1, description: row.2, scope: row.3, created_at: row.4 })
+}
+
+/// List concepts, optionally filtered by scope prefix.
+pub async fn list_concepts(
+    pool: &SqlitePool,
+    scope_filter: Option<&str>,
+    limit: usize,
+) -> Result<Vec<Concept>> {
+    let rows: Vec<(String, String, Option<String>, Option<String>, String)> = if let Some(scope) = scope_filter {
+        let prefix = format!("{}%", scope);
+        sqlx::query_as(
+            "SELECT id, name, description, scope, created_at
+             FROM ontology_concepts WHERE scope LIKE ?
+             ORDER BY name ASC LIMIT ?"
+        )
+        .bind(&prefix)
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id, name, description, scope, created_at
+             FROM ontology_concepts ORDER BY name ASC LIMIT ?"
+        )
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?
+    };
+
+    Ok(rows.into_iter().map(|(id, name, description, scope, created_at)| Concept { id, name, description, scope, created_at }).collect())
+}
+
+/// Delete a concept (and its ontology edges via CASCADE).
+pub async fn delete_concept(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let full_id = resolve_concept_id(pool, id).await?;
+
+    // FTS: manual delete
+    sqlx::query("DELETE FROM ontology_concept_fts WHERE id = ?")
+        .bind(&full_id)
+        .execute(pool)
+        .await?;
+
+    let result = sqlx::query("DELETE FROM ontology_concepts WHERE id = ?")
+        .bind(&full_id)
+        .execute(pool)
+        .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+// ─── Ontology Edge CRUD ───────────────────────────────────────────────────────
+
+/// Add an edge in the ontology graph. Both endpoints can be concepts or memories.
+pub async fn add_ontology_edge(
+    pool: &SqlitePool,
+    from_id: &str,
+    from_kind: NodeKind,
+    rel_type: &OntologyRelType,
+    to_id: &str,
+    to_kind: NodeKind,
+    note: Option<&str>,
+) -> Result<OntologyEdge> {
+    // Validate endpoints exist
+    validate_node(pool, from_id, &from_kind).await?;
+    validate_node(pool, to_id, &to_kind).await?;
+
+    // IS_A and HAS_PROPERTY only make sense between concepts
+    match rel_type {
+        OntologyRelType::IsA | OntologyRelType::HasProperty => {
+            if from_kind != NodeKind::Concept || to_kind != NodeKind::Concept {
+                bail!("{} edges must connect two concepts", rel_type.as_str());
+            }
+        }
+        OntologyRelType::InstanceOf => {
+            if to_kind != NodeKind::Concept {
+                bail!("INSTANCE_OF target must be a concept");
+            }
+        }
+        _ => {}
+    }
+
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT OR IGNORE INTO ontology_edges
+         (from_id, from_type, rel_type, to_id, to_type, note, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(from_id)
+    .bind(from_kind.to_string())
+    .bind(rel_type.as_str())
+    .bind(to_id)
+    .bind(to_kind.to_string())
+    .bind(note)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("Failed to insert ontology edge")?;
+
+    let id: i64 = sqlx::query_scalar(
+        "SELECT id FROM ontology_edges WHERE from_id = ? AND to_id = ? AND rel_type = ?"
+    )
+    .bind(from_id)
+    .bind(to_id)
+    .bind(rel_type.as_str())
+    .fetch_one(pool)
+    .await?;
+
+    Ok(OntologyEdge {
+        id,
+        from_id: from_id.to_string(),
+        from_type: from_kind,
+        rel_type: rel_type.as_str().to_string(),
+        to_id: to_id.to_string(),
+        to_type: to_kind,
+        note: note.map(str::to_string),
+        created_at: now,
+    })
+}
+
+/// Remove an ontology edge by id.
+pub async fn delete_ontology_edge(pool: &SqlitePool, edge_id: i64) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM ontology_edges WHERE id = ?")
+        .bind(edge_id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// List ontology edges for a node (concept or memory), both directions.
+pub async fn list_ontology_edges(
+    pool: &SqlitePool,
+    node_id: &str,
+) -> Result<Vec<OntologyEdge>> {
+    let rows: Vec<(i64, String, String, String, String, String, Option<String>, String)> =
+        sqlx::query_as(
+            "SELECT id, from_id, from_type, rel_type, to_id, to_type, note, created_at
+             FROM ontology_edges
+             WHERE from_id = ? OR to_id = ?
+             ORDER BY created_at ASC"
+        )
+        .bind(node_id)
+        .bind(node_id)
+        .fetch_all(pool)
+        .await?;
+
+    rows.into_iter()
+        .map(|(id, from_id, from_type, rel_type, to_id, to_type, note, created_at)| {
+            Ok(OntologyEdge {
+                id,
+                from_id,
+                from_type: from_type.parse()?,
+                rel_type,
+                to_id,
+                to_type: to_type.parse()?,
+                note,
+                created_at,
+            })
+        })
+        .collect()
+}
+
+// ─── Hierarchy & Subsumption ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HierarchyNode {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub depth: i64,
+    pub direction: HierarchyDirection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HierarchyDirection {
+    Ancestor,
+    Descendant,
+}
+
+/// Return all ancestors (IS_A chain upward) and descendants (IS_A chain downward) of a concept.
+pub async fn concept_hierarchy(
+    pool: &SqlitePool,
+    concept_id: &str,
+) -> Result<Vec<HierarchyNode>> {
+    let full_id = resolve_concept_id(pool, concept_id).await?;
+    let mut results = Vec::new();
+
+    // Ancestors: follow IS_A outgoing edges upward (from → to means "from IS_A to", so go to_id)
+    let ancestors: Vec<(String, String, Option<String>, i64)> = sqlx::query_as(
+        "WITH RECURSIVE ancestors(id, depth) AS (
+           SELECT to_id, 1
+           FROM ontology_edges
+           WHERE from_id = ? AND rel_type = 'IS_A' AND from_type = 'concept' AND to_type = 'concept'
+           UNION ALL
+           SELECT e.to_id, a.depth + 1
+           FROM ontology_edges e
+           JOIN ancestors a ON e.from_id = a.id
+           WHERE e.rel_type = 'IS_A' AND e.from_type = 'concept' AND e.to_type = 'concept'
+             AND a.depth < 20
+         )
+         SELECT c.id, c.name, c.description, a.depth
+         FROM ancestors a
+         JOIN ontology_concepts c ON c.id = a.id
+         ORDER BY a.depth ASC"
+    )
+    .bind(&full_id)
+    .fetch_all(pool)
+    .await?;
+
+    for (id, name, description, depth) in ancestors {
+        results.push(HierarchyNode { id, name, description, depth, direction: HierarchyDirection::Ancestor });
+    }
+
+    // Descendants: follow IS_A incoming edges downward (find all x where x IS_A ... root)
+    let descendants: Vec<(String, String, Option<String>, i64)> = sqlx::query_as(
+        "WITH RECURSIVE descendants(id, depth) AS (
+           SELECT from_id, 1
+           FROM ontology_edges
+           WHERE to_id = ? AND rel_type = 'IS_A' AND from_type = 'concept' AND to_type = 'concept'
+           UNION ALL
+           SELECT e.from_id, d.depth + 1
+           FROM ontology_edges e
+           JOIN descendants d ON e.to_id = d.id
+           WHERE e.rel_type = 'IS_A' AND e.from_type = 'concept' AND e.to_type = 'concept'
+             AND d.depth < 20
+         )
+         SELECT c.id, c.name, c.description, d.depth
+         FROM descendants d
+         JOIN ontology_concepts c ON c.id = d.id
+         ORDER BY d.depth ASC"
+    )
+    .bind(&full_id)
+    .fetch_all(pool)
+    .await?;
+
+    for (id, name, description, depth) in descendants {
+        results.push(HierarchyNode { id, name, description, depth, direction: HierarchyDirection::Descendant });
+    }
+
+    Ok(results)
+}
+
+/// Return all instances of a concept, including instances of all subclasses (full subsumption).
+/// Instances are memories or concepts linked via INSTANCE_OF to X or any subclass of X.
+pub async fn concept_instances(
+    pool: &SqlitePool,
+    concept_id: &str,
+) -> Result<Vec<ConceptInstance>> {
+    let full_id = resolve_concept_id(pool, concept_id).await?;
+
+    // First collect all subclass IDs (including self)
+    let subclass_ids: Vec<(String,)> = sqlx::query_as(
+        "WITH RECURSIVE subclasses(id) AS (
+           SELECT ?
+           UNION ALL
+           SELECT e.from_id
+           FROM ontology_edges e
+           JOIN subclasses s ON e.to_id = s.id
+           WHERE e.rel_type = 'IS_A' AND e.from_type = 'concept' AND e.to_type = 'concept'
+         )
+         SELECT id FROM subclasses"
+    )
+    .bind(&full_id)
+    .fetch_all(pool)
+    .await?;
+
+    let ids: Vec<String> = subclass_ids.into_iter().map(|(id,)| id).collect();
+
+    // Collect all INSTANCE_OF edges pointing to any of those concept IDs
+    let mut instances = Vec::new();
+    for cid in &ids {
+        let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+            "SELECT from_id, from_type, to_id, note
+             FROM ontology_edges
+             WHERE to_id = ? AND rel_type = 'INSTANCE_OF'"
+        )
+        .bind(cid)
+        .fetch_all(pool)
+        .await?;
+
+        for (from_id, from_type, to_id, note) in rows {
+            instances.push(ConceptInstance {
+                instance_id: from_id,
+                instance_kind: from_type.parse().unwrap_or(NodeKind::Memory),
+                concept_id: to_id,
+                note,
+            });
+        }
+    }
+
+    Ok(instances)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConceptInstance {
+    pub instance_id: String,
+    pub instance_kind: NodeKind,
+    pub concept_id: String,
+    pub note: Option<String>,
+}
+
+// ─── ID resolution ────────────────────────────────────────────────────────────
+
+/// Resolve full or short (prefix, min 4 chars) concept ID.
+pub async fn resolve_concept_id(pool: &SqlitePool, id: &str) -> Result<String> {
+    let exact: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM ontology_concepts WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    if let Some(full) = exact {
+        return Ok(full);
+    }
+
+    if id.len() < 4 {
+        bail!("Concept ID prefix '{}' is too short (minimum 4 characters)", id);
+    }
+
+    let pattern = format!("{}%", id);
+    let matches: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM ontology_concepts WHERE id LIKE ?"
+    )
+    .bind(&pattern)
+    .fetch_all(pool)
+    .await?;
+
+    match matches.len() {
+        0 => bail!("Concept '{}' not found", id),
+        1 => Ok(matches.into_iter().next().unwrap()),
+        n => bail!(
+            "Ambiguous concept ID '{}' matches {} concepts. Use more characters:\n{}",
+            id, n,
+            matches.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
+        ),
+    }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async fn validate_node(pool: &SqlitePool, id: &str, kind: &NodeKind) -> Result<()> {
+    match kind {
+        NodeKind::Concept => {
+            let exists: Option<String> = sqlx::query_scalar(
+                "SELECT id FROM ontology_concepts WHERE id = ?"
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+            if exists.is_none() {
+                bail!("Concept '{}' not found", id);
+            }
+        }
+        NodeKind::Memory => {
+            let exists: Option<String> = sqlx::query_scalar(
+                "SELECT id FROM memories WHERE id = ?"
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+            if exists.is_none() {
+                bail!("Memory '{}' not found", id);
+            }
+        }
+    }
+    Ok(())
+}
+
+// ─── Batch NER enrichment ─────────────────────────────────────────────────────
+
+/// Result for one memory processed by enrich_memories.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EnrichMemoryResult {
+    pub memory_id: String,
+    /// First ~80 chars of content for display
+    pub preview: String,
+    /// Entities extracted above threshold
+    pub entities_found: usize,
+    /// INSTANCE_OF edges created (concept existed or was created)
+    pub links_created: usize,
+    /// Concept names that were newly created (--add only)
+    pub concepts_created: Vec<String>,
+    /// Concept names that were linked to existing concepts
+    pub concepts_linked: Vec<String>,
+    /// Whether this memory was skipped (already processed, no --force)
+    pub skipped: bool,
+}
+
+/// Options for batch memory enrichment.
+pub struct EnrichMemoriesOpts<'a> {
+    pub scope: Option<&'a str>,
+    pub min_score: f32,
+    /// Create missing concepts automatically (like extract --add)
+    pub add: bool,
+    /// Re-process memories already in ontology_ner_processed
+    pub force: bool,
+    /// Don't write anything — just report what would be done
+    pub dry_run: bool,
+    /// Max memories to process (0 = all)
+    pub limit: usize,
+}
+
+/// Batch-enrich all (or scoped) memories with NER entity extraction.
+/// For each memory:
+///   1. Extract named entities above min_score
+///   2. For each entity: if concept exists → INSTANCE_OF edge
+///                       if not + add=true → create concept + INSTANCE_OF edge
+///   3. Record in ontology_ner_processed (skip on re-run unless force=true)
+///
+/// Progress is reported via the returned Vec (caller prints it).
+pub async fn enrich_memories(
+    pool: &SqlitePool,
+    opts: &EnrichMemoriesOpts<'_>,
+) -> Result<Vec<EnrichMemoryResult>> {
+    use crate::ner;
+
+    // Fetch memories to process
+    let rows: Vec<(String, String)> = if let Some(scope) = opts.scope {
+        let prefix = format!("{}%", scope);
+        sqlx::query_as(
+            "SELECT DISTINCT m.id, m.content
+             FROM memories m
+             JOIN memory_scopes ms ON ms.memory_id = m.id
+             WHERE ms.scope LIKE ?
+             ORDER BY m.created_at DESC"
+        )
+        .bind(&prefix)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id, content FROM memories ORDER BY created_at DESC"
+        )
+        .fetch_all(pool)
+        .await?
+    };
+
+    let limit = if opts.limit == 0 { rows.len() } else { opts.limit.min(rows.len()) };
+    let rows = &rows[..limit];
+
+    let mut results = Vec::with_capacity(rows.len());
+    let now = chrono::Utc::now().to_rfc3339();
+
+    for (memory_id, content) in rows {
+        // Check if already processed
+        if !opts.force {
+            let already: Option<String> = sqlx::query_scalar(
+                "SELECT memory_id FROM ontology_ner_processed WHERE memory_id = ?"
+            )
+            .bind(memory_id)
+            .fetch_optional(pool)
+            .await?;
+            if already.is_some() {
+                results.push(EnrichMemoryResult {
+                    memory_id: memory_id.clone(),
+                    preview: preview(content),
+                    entities_found: 0,
+                    links_created: 0,
+                    concepts_created: vec![],
+                    concepts_linked: vec![],
+                    skipped: true,
+                });
+                continue;
+            }
+        }
+
+        // Run NER
+        let entities = match ner::extract_entities(content) {
+            Ok(e) => e,
+            Err(_) => {
+                // Record as processed with 0 entities to avoid re-running broken content
+                if !opts.dry_run {
+                    record_processed(pool, memory_id, 0, 0, &now).await?;
+                }
+                results.push(EnrichMemoryResult {
+                    memory_id: memory_id.clone(),
+                    preview: preview(content),
+                    entities_found: 0,
+                    links_created: 0,
+                    concepts_created: vec![],
+                    concepts_linked: vec![],
+                    skipped: false,
+                });
+                continue;
+            }
+        };
+
+        let above_threshold: Vec<_> = entities.iter()
+            .filter(|e| e.score >= opts.min_score)
+            .collect();
+
+        let mut links_created = 0usize;
+        let mut concepts_created = Vec::new();
+        let mut concepts_linked = Vec::new();
+
+        for entity in &above_threshold {
+            // Check for existing concept (case-insensitive)
+            let existing: Option<(String, String)> = sqlx::query_as(
+                "SELECT id, name FROM ontology_concepts WHERE lower(name) = lower(?)"
+            )
+            .bind(&entity.text)
+            .fetch_optional(pool)
+            .await?;
+
+            let concept_id = if let Some((id, name)) = existing {
+                concepts_linked.push(name);
+                Some(id)
+            } else if opts.add {
+                // Create new concept from entity
+                if opts.dry_run {
+                    concepts_created.push(entity.text.clone());
+                    None
+                } else {
+                    match add_concept(pool, &entity.text, None, None).await {
+                        Ok(c) => {
+                            concepts_created.push(c.name.clone());
+                            Some(c.id)
+                        }
+                        Err(_) => None, // duplicate race — skip
+                    }
+                }
+            } else {
+                None
+            };
+
+            // Create INSTANCE_OF edge if we have a concept
+            if let Some(cid) = concept_id {
+                if !opts.dry_run {
+                    // Ignore duplicate edge errors (unique index)
+                    let _ = add_ontology_edge(
+                        pool,
+                        memory_id,
+                        NodeKind::Memory,
+                        &OntologyRelType::InstanceOf,
+                        &cid,
+                        NodeKind::Concept,
+                        None,
+                    ).await;
+                }
+                links_created += 1;
+            }
+        }
+
+        // Record as processed
+        if !opts.dry_run {
+            record_processed(pool, memory_id, above_threshold.len(), links_created, &now).await?;
+        }
+
+        results.push(EnrichMemoryResult {
+            memory_id: memory_id.clone(),
+            preview: preview(content),
+            entities_found: above_threshold.len(),
+            links_created,
+            concepts_created,
+            concepts_linked,
+            skipped: false,
+        });
+    }
+
+    Ok(results)
+}
+
+async fn record_processed(
+    pool: &SqlitePool,
+    memory_id: &str,
+    entity_count: usize,
+    link_count: usize,
+    now: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO ontology_ner_processed (memory_id, processed_at, entity_count, link_count)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(memory_id) DO UPDATE SET
+           processed_at = excluded.processed_at,
+           entity_count = excluded.entity_count,
+           link_count   = excluded.link_count"
+    )
+    .bind(memory_id)
+    .bind(now)
+    .bind(entity_count as i64)
+    .bind(link_count as i64)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn preview(content: &str) -> String {
+    let s = content.trim();
+    if s.chars().count() <= 80 {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(77).collect();
+        format!("{}...", cut)
+    }
+}
+
+// ─── Conflict management ──────────────────────────────────────────────────────
+
+/// A CONTRADICTS edge with context about both endpoints.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Conflict {
+    pub edge_id: i64,
+    pub from_id: String,
+    pub from_kind: String,
+    pub from_name: Option<String>,
+    pub from_description: Option<String>,
+    pub to_id: String,
+    pub to_kind: String,
+    pub to_name: Option<String>,
+    pub to_description: Option<String>,
+    pub created_at: String,
+}
+
+/// List all CONTRADICTS edges that have not been resolved (no INVALIDATES edge from either endpoint).
+pub async fn list_conflicts(
+    pool: &SqlitePool,
+    scope: Option<&str>,
+) -> Result<Vec<Conflict>> {
+    // Get all CONTRADICTS edges not yet invalidated
+    // "Resolved" = a subsequent INVALIDATES edge exists from winner→loser or loser→winner
+    let rows: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT e.id, e.from_id, e.from_type, e.to_id, e.to_type, e.created_at
+         FROM ontology_edges e
+         WHERE e.rel_type = 'CONTRADICTS'
+           AND NOT EXISTS (
+             SELECT 1 FROM ontology_edges inv
+             WHERE inv.rel_type = 'INVALIDATES'
+               AND (
+                 (inv.from_id = e.from_id AND inv.to_id = e.to_id)
+                 OR (inv.from_id = e.to_id AND inv.to_id = e.from_id)
+               )
+           )
+         ORDER BY e.created_at DESC"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut conflicts = Vec::new();
+    for (edge_id, from_id, from_type, to_id, to_type, created_at) in rows {
+        // Fetch name/description for concept endpoints
+        let from_info = if from_type == "concept" {
+            fetch_concept_info(pool, &from_id).await?
+        } else {
+            fetch_memory_preview(pool, &from_id).await?
+        };
+        let to_info = if to_type == "concept" {
+            fetch_concept_info(pool, &to_id).await?
+        } else {
+            fetch_memory_preview(pool, &to_id).await?
+        };
+
+        // Optional scope filter
+        if let Some(s) = scope {
+            let from_scope = get_scope(pool, &from_id, &from_type).await?;
+            let to_scope = get_scope(pool, &to_id, &to_type).await?;
+            if !from_scope.as_deref().unwrap_or("").starts_with(s)
+                && !to_scope.as_deref().unwrap_or("").starts_with(s)
+            {
+                continue;
+            }
+        }
+
+        conflicts.push(Conflict {
+            edge_id,
+            from_id,
+            from_kind: from_type,
+            from_name: from_info.0,
+            from_description: from_info.1,
+            to_id,
+            to_kind: to_type,
+            to_name: to_info.0,
+            to_description: to_info.1,
+            created_at,
+        });
+    }
+
+    Ok(conflicts)
+}
+
+/// Get a single CONTRADICTS edge by id.
+pub async fn get_conflict(pool: &SqlitePool, edge_id: i64) -> Result<Conflict> {
+    let row: Option<(i64, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT id, from_id, from_type, to_id, to_type, created_at
+         FROM ontology_edges WHERE id = ? AND rel_type = 'CONTRADICTS'"
+    )
+    .bind(edge_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let (eid, from_id, from_type, to_id, to_type, created_at) = row
+        .ok_or_else(|| anyhow::anyhow!("CONTRADICTS edge #{} not found", edge_id))?;
+
+    let from_info = if from_type == "concept" {
+        fetch_concept_info(pool, &from_id).await?
+    } else {
+        fetch_memory_preview(pool, &from_id).await?
+    };
+    let to_info = if to_type == "concept" {
+        fetch_concept_info(pool, &to_id).await?
+    } else {
+        fetch_memory_preview(pool, &to_id).await?
+    };
+
+    Ok(Conflict {
+        edge_id: eid,
+        from_id,
+        from_kind: from_type,
+        from_name: from_info.0,
+        from_description: from_info.1,
+        to_id,
+        to_kind: to_type,
+        to_name: to_info.0,
+        to_description: to_info.1,
+        created_at,
+    })
+}
+
+/// Resolve a CONTRADICTS conflict:
+///   1. Remove the CONTRADICTS edge
+///   2. Add an INVALIDATES edge from winner → loser
+///   3. Mark the loser concept as superseded (metadata field)
+pub async fn resolve_conflict(
+    pool: &SqlitePool,
+    edge_id: i64,
+    winner_id: &str,
+    loser_id: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // 1. Remove the CONTRADICTS edge
+    sqlx::query("DELETE FROM ontology_edges WHERE id = ?")
+        .bind(edge_id)
+        .execute(pool)
+        .await?;
+
+    // 2. Determine kinds
+    let winner_kind = node_kind_str(pool, winner_id).await?;
+    let loser_kind = node_kind_str(pool, loser_id).await?;
+
+    // 3. Insert INVALIDATES edge winner → loser
+    sqlx::query(
+        "INSERT OR IGNORE INTO ontology_edges
+         (from_id, from_type, rel_type, to_id, to_type, note, created_at)
+         VALUES (?, ?, 'INVALIDATES', ?, ?, 'conflict resolution', ?)"
+    )
+    .bind(winner_id)
+    .bind(&winner_kind)
+    .bind(loser_id)
+    .bind(&loser_kind)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
+    // 4. Mark loser as superseded if it's a concept
+    if loser_kind == "concept" {
+        sqlx::query(
+            "UPDATE ontology_concepts SET description =
+               COALESCE(description, '') || ' [SUPERSEDED]'
+             WHERE id = ? AND (description IS NULL OR description NOT LIKE '%[SUPERSEDED]%')"
+        )
+        .bind(loser_id)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
+// ─── Conflict helpers ─────────────────────────────────────────────────────────
+
+async fn fetch_concept_info(pool: &SqlitePool, id: &str) -> Result<(Option<String>, Option<String>)> {
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT name, description FROM ontology_concepts WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(n, d)| (Some(n), d)).unwrap_or((None, None)))
+}
+
+async fn fetch_memory_preview(pool: &SqlitePool, id: &str) -> Result<(Option<String>, Option<String>)> {
+    let content: Option<String> = sqlx::query_scalar(
+        "SELECT content FROM memories WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok((content.map(|c| preview(&c)), None))
+}
+
+async fn get_scope(pool: &SqlitePool, id: &str, kind: &str) -> Result<Option<String>> {
+    if kind == "concept" {
+        let s: Option<String> = sqlx::query_scalar(
+            "SELECT scope FROM ontology_concepts WHERE id = ?"
+        ).bind(id).fetch_optional(pool).await?;
+        Ok(s)
+    } else {
+        let s: Option<String> = sqlx::query_scalar(
+            "SELECT scope FROM memory_scopes WHERE memory_id = ? LIMIT 1"
+        ).bind(id).fetch_optional(pool).await?;
+        Ok(s)
+    }
+}
+
+async fn node_kind_str(pool: &SqlitePool, id: &str) -> Result<String> {
+    let is_concept: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM ontology_concepts WHERE id = ?"
+    ).bind(id).fetch_optional(pool).await?;
+    if is_concept.is_some() {
+        Ok("concept".into())
+    } else {
+        Ok("memory".into())
+    }
+}
+
+// ─── Concept search ───────────────────────────────────────────────────────────
+
+/// A concept search result with a relevance score.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConceptSearchResult {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scope: Option<String>,
+    /// BM25 relevance score from FTS5
+    pub score: f32,
+}
+
+/// Search concepts by name/description using FTS5.
+/// Returns up to `limit` results ordered by relevance.
+pub async fn search_concepts(
+    pool: &SqlitePool,
+    query: &str,
+    scope_filter: Option<&str>,
+    limit: usize,
+) -> Result<Vec<ConceptSearchResult>> {
+    // FTS5 MATCH — escape special chars to avoid parse errors
+    let fts_query = query.replace('"', "\"\"");
+
+    let rows: Vec<(String, String, Option<String>, Option<String>, f64)> = if let Some(scope) = scope_filter {
+        let prefix = format!("{}%", scope);
+        sqlx::query_as(
+            "SELECT c.id, c.name, c.description, c.scope, bm25(ontology_concept_fts) AS score
+             FROM ontology_concept_fts f
+             JOIN ontology_concepts c ON c.id = f.id
+             WHERE ontology_concept_fts MATCH ?
+               AND c.scope LIKE ?
+             ORDER BY score LIMIT ?"
+        )
+        .bind(&fts_query)
+        .bind(&prefix)
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT c.id, c.name, c.description, c.scope, bm25(ontology_concept_fts) AS score
+             FROM ontology_concept_fts f
+             JOIN ontology_concepts c ON c.id = f.id
+             WHERE ontology_concept_fts MATCH ?
+             ORDER BY score LIMIT ?"
+        )
+        .bind(&fts_query)
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?
+    };
+
+    Ok(rows.into_iter().map(|(id, name, description, scope, score)| ConceptSearchResult {
+        id, name, description, scope, score: score.abs() as f32,
+    }).collect())
+}
+
+// ─── Concept with instances ───────────────────────────────────────────────────
+
+/// A concept enriched with its direct INSTANCE_OF memories.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConceptWithInstances {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scope: Option<String>,
+    pub created_at: String,
+    /// Direct INSTANCE_OF edges from memories to this concept
+    pub instances: Vec<InstanceRef>,
+    /// Subclasses (IS_A children)
+    pub subclasses: Vec<ConceptRef>,
+    /// Superclasses (IS_A parents)  
+    pub superclasses: Vec<ConceptRef>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InstanceRef {
+    pub memory_id: String,
+    /// First 120 chars of content
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConceptRef {
+    pub id: String,
+    pub name: String,
+}
+
+pub async fn get_concept_with_instances(pool: &SqlitePool, id: &str) -> Result<ConceptWithInstances> {
+    let concept = get_concept(pool, id).await?;
+
+    // Direct INSTANCE_OF edges (memory → this concept)
+    let instance_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT e.from_id, m.content
+         FROM ontology_edges e
+         JOIN memories m ON m.id = e.from_id
+         WHERE e.to_id = ? AND e.rel_type = 'INSTANCE_OF' AND e.from_type = 'memory'
+         ORDER BY m.created_at DESC"
+    )
+    .bind(&concept.id)
+    .fetch_all(pool)
+    .await?;
+
+    let instances = instance_rows.into_iter().map(|(memory_id, content)| InstanceRef {
+        memory_id,
+        preview: preview(&content),
+    }).collect();
+
+    // Subclasses (IS_A where this concept is the parent/to_id)
+    let sub_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.id, c.name FROM ontology_edges e
+         JOIN ontology_concepts c ON c.id = e.from_id
+         WHERE e.to_id = ? AND e.rel_type = 'IS_A'"
+    )
+    .bind(&concept.id)
+    .fetch_all(pool)
+    .await?;
+    let subclasses = sub_rows.into_iter().map(|(id, name)| ConceptRef { id, name }).collect();
+
+    // Superclasses (IS_A where this concept is the child/from_id)
+    let super_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.id, c.name FROM ontology_edges e
+         JOIN ontology_concepts c ON c.id = e.to_id
+         WHERE e.from_id = ? AND e.rel_type = 'IS_A'"
+    )
+    .bind(&concept.id)
+    .fetch_all(pool)
+    .await?;
+    let superclasses = super_rows.into_iter().map(|(id, name)| ConceptRef { id, name }).collect();
+
+    Ok(ConceptWithInstances {
+        id: concept.id,
+        name: concept.name,
+        description: concept.description,
+        scope: concept.scope,
+        created_at: concept.created_at,
+        instances,
+        subclasses,
+        superclasses,
+    })
+}

@@ -28,6 +28,30 @@ pub struct SearchArgs {
     /// Use --min-score 0 to disable filtering.
     #[arg(long)]
     pub min_score: Option<f32>,
+
+    /// Expand results with graph neighbors
+    #[arg(long, default_value_t = false)]
+    pub include_neighbors: bool,
+
+    /// Max hops for neighbor expansion (default: config, hard cap: 3)
+    #[arg(long)]
+    pub neighbor_depth: Option<u8>,
+
+    /// Score decay per hop (default: config neighbor_decay)
+    #[arg(long)]
+    pub neighbor_decay: Option<f32>,
+
+    /// Min score for neighbors to be included (default: config neighbor_min_score)
+    #[arg(long)]
+    pub neighbor_min_score: Option<f32>,
+
+    /// Max total neighbors to append (default: same as --limit)
+    #[arg(long)]
+    pub neighbor_limit: Option<usize>,
+
+    /// Comma-separated edge types to traverse (default: PART_OF,SUPPORTS,DERIVED_FROM,EXEMPLIFIES)
+    #[arg(long, value_delimiter = ',')]
+    pub edge_types: Option<Vec<String>>,
 }
 
 pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
@@ -40,6 +64,12 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         scope_filter: args.scope,
         type_filter: args.r#type,
         min_score: args.min_score,
+        include_neighbors: args.include_neighbors,
+        neighbor_depth: args.neighbor_depth,
+        neighbor_decay: args.neighbor_decay,
+        neighbor_min_score: args.neighbor_min_score,
+        neighbor_limit: args.neighbor_limit,
+        edge_types: args.edge_types,
     };
 
     let resp = search(
@@ -48,6 +78,7 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         &config.embeddings.model,
         config.embeddings.enabled,
         config.search.min_score,
+        &config.search,
     ).await?;
 
     if json {
@@ -99,7 +130,16 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         }
 
         for r in &resp.results {
-            println!("[{:.3}] {} ({})", r.score, r.id, r.memory_type);
+            if r.source == "graph" {
+                let rel = r.rel_type.as_deref().unwrap_or("?");
+                let dir = r.direction.as_deref().unwrap_or("?");
+                let depth = r.hop_depth.unwrap_or(0);
+                let parent = r.parent_id.as_deref().unwrap_or("?");
+                println!("  ↳ [{:.3}] {} ({}) [graph: {} {} depth={}  parent={}]",
+                    r.score, r.id, r.memory_type, rel, dir, depth, &parent[..8.min(parent.len())]);
+            } else {
+                println!("[{:.3}] {} ({})", r.score, r.id, r.memory_type);
+            }
             let preview = if r.content.len() > 100 {
                 format!("{}...", voidm_core::search::safe_truncate(&r.content, 100))
             } else {

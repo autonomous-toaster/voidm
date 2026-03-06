@@ -2,6 +2,9 @@ use anyhow::Result;
 use sqlx::SqlitePool;
 use crate::models::{Memory, SuggestedLink, edge_hint};
 
+const NEIGHBOR_MAX_DEPTH: u8 = 3;
+const NEVER_TRAVERSE: &[&str] = &["CONTRADICTS", "INVALIDATES"];
+
 /// Search result with all signals merged.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchResult {
@@ -14,6 +17,20 @@ pub struct SearchResult {
     pub tags: Vec<String>,
     pub importance: i64,
     pub created_at: String,
+    /// "search" for direct hits, "graph" for neighbor-expanded results.
+    pub source: String,
+    /// Only set for source="graph".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rel_type: Option<String>,
+    /// Only set for source="graph": "outgoing" | "incoming" | "undirected".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+    /// Only set for source="graph".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hop_depth: Option<u8>,
+    /// Only set for source="graph": ID of the direct search result this was reached from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +64,18 @@ pub struct SearchOptions {
     pub type_filter: Option<String>,
     /// Only applied in hybrid mode. None = use config default.
     pub min_score: Option<f32>,
+    /// If true, expand results with graph neighbors.
+    pub include_neighbors: bool,
+    /// Max hops for neighbor expansion (hard cap: NEIGHBOR_MAX_DEPTH).
+    pub neighbor_depth: Option<u8>,
+    /// Score decay per hop: neighbor_score = parent_score * decay^depth.
+    pub neighbor_decay: Option<f32>,
+    /// Min score for neighbors to be included.
+    pub neighbor_min_score: Option<f32>,
+    /// Max total neighbors to append (prevents hub explosion). None = same as limit.
+    pub neighbor_limit: Option<usize>,
+    /// Edge types to traverse. None = use config defaults.
+    pub edge_types: Option<Vec<String>>,
 }
 
 /// Result of a search, including threshold metadata for empty-result hints.
@@ -65,6 +94,7 @@ pub async fn search(
     model_name: &str,
     embeddings_enabled: bool,
     config_min_score: f32,
+    config_search: &crate::config::SearchConfig,
 ) -> Result<SearchResponse> {
     use std::collections::HashMap;
 
@@ -179,6 +209,11 @@ pub async fn search(
                 tags: m.tags,
                 importance: m.importance,
                 created_at: m.created_at,
+                source: "search".into(),
+                rel_type: None,
+                direction: None,
+                hop_depth: None,
+                parent_id: None,
             });
         }
     }
@@ -197,10 +232,96 @@ pub async fn search(
             None
         };
 
+        if opts.include_neighbors {
+            expand_neighbors(pool, &mut results, opts, config_search).await?;
+        }
+
         return Ok(SearchResponse { results, threshold_applied, best_score });
     }
 
+    if opts.include_neighbors {
+        expand_neighbors(pool, &mut results, opts, config_search).await?;
+    }
+
     Ok(SearchResponse { results, threshold_applied: None, best_score: None })
+}
+
+/// Expand search results with graph neighbors in-place.
+async fn expand_neighbors(
+    pool: &SqlitePool,
+    results: &mut Vec<SearchResult>,
+    opts: &SearchOptions,
+    config: &crate::config::SearchConfig,
+) -> Result<()> {
+    use voidm_graph::traverse::neighbors as graph_neighbors;
+
+    let depth = opts.neighbor_depth
+        .unwrap_or(config.default_neighbor_depth)
+        .min(NEIGHBOR_MAX_DEPTH);
+    let decay = opts.neighbor_decay.unwrap_or(config.neighbor_decay);
+    let min_score = opts.neighbor_min_score.unwrap_or(config.neighbor_min_score);
+    let limit = opts.neighbor_limit.unwrap_or(opts.limit);
+    let allowed_types: Vec<&str> = opts.edge_types
+        .as_deref()
+        .map(|v| v.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_else(|| config.default_edge_types.iter().map(|s| s.as_str()).collect());
+
+    // Build set of IDs already in results
+    let mut seen: std::collections::HashSet<String> =
+        results.iter().map(|r| r.id.clone()).collect();
+
+    let direct_results: Vec<(String, f32)> = results
+        .iter()
+        .map(|r| (r.id.clone(), r.score))
+        .collect();
+
+    let mut neighbors_to_add: Vec<SearchResult> = Vec::new();
+
+    'outer: for (parent_id, parent_score) in &direct_results {
+        let hops = graph_neighbors(pool, parent_id, depth, None).await?;
+        for hop in hops {
+            // Skip disallowed edge types
+            if NEVER_TRAVERSE.contains(&hop.rel_type.as_str()) {
+                continue;
+            }
+            if !allowed_types.contains(&hop.rel_type.as_str()) {
+                continue;
+            }
+            if seen.contains(&hop.memory_id) {
+                continue;
+            }
+            let nscore = parent_score * decay.powi(hop.depth as i32);
+            if nscore < min_score {
+                continue;
+            }
+            if let Some(m) = fetch_memory_by_id(pool, &hop.memory_id).await? {
+                seen.insert(hop.memory_id.clone());
+                neighbors_to_add.push(SearchResult {
+                    id: hop.memory_id,
+                    score: nscore,
+                    memory_type: m.memory_type,
+                    content: m.content,
+                    scopes: m.scopes,
+                    tags: m.tags,
+                    importance: m.importance,
+                    created_at: m.created_at,
+                    source: "graph".into(),
+                    rel_type: Some(hop.rel_type),
+                    direction: Some(hop.direction),
+                    hop_depth: Some(hop.depth),
+                    parent_id: Some(parent_id.clone()),
+                });
+                if neighbors_to_add.len() >= limit {
+                    break 'outer;
+                }
+            }
+        }
+    }
+
+    // Sort neighbors by score desc, then append
+    neighbors_to_add.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.extend(neighbors_to_add);
+    Ok(())
 }
 
 async fn fetch_memories_newest(pool: &SqlitePool, opts: &SearchOptions) -> Result<Vec<SearchResult>> {    let memories = crate::crud::list_memories(pool, opts.scope_filter.as_deref(), opts.type_filter.as_deref(), opts.limit).await?;
@@ -213,6 +334,11 @@ async fn fetch_memories_newest(pool: &SqlitePool, opts: &SearchOptions) -> Resul
         tags: m.tags,
         importance: m.importance,
         created_at: m.created_at,
+        source: "search".into(),
+        rel_type: None,
+        direction: None,
+        hop_depth: None,
+        parent_id: None,
     }).collect())
 }
 

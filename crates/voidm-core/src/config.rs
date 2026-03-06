@@ -31,6 +31,14 @@ pub struct SearchConfig {
     pub default_limit: usize,
     /// Minimum score threshold for hybrid mode results (0.0–1.0). Default: 0.3.
     pub min_score: f32,
+    /// Score decay per hop for graph-expanded neighbors. neighbor_score = parent_score * decay^depth.
+    pub neighbor_decay: f32,
+    /// Minimum score for graph-expanded neighbors to be included. Default: 0.2.
+    pub neighbor_min_score: f32,
+    /// Default traversal depth for --include-neighbors. Hard cap: 3.
+    pub default_neighbor_depth: u8,
+    /// Edge types to traverse by default for neighbor expansion.
+    pub default_edge_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +69,15 @@ impl Default for SearchConfig {
             mode: "hybrid".into(),
             default_limit: 10,
             min_score: 0.3,
+            neighbor_decay: 0.7,
+            neighbor_min_score: 0.2,
+            default_neighbor_depth: 1,
+            default_edge_types: vec![
+                "PART_OF".into(),
+                "SUPPORTS".into(),
+                "DERIVED_FROM".into(),
+                "EXEMPLIFIES".into(),
+            ],
         }
     }
 }

@@ -214,25 +214,43 @@ pub fn extract_entities(text: &str) -> Result<Vec<NamedEntity>> {
         token_labels.push((label, best_prob));
     }
 
-    // Aggregate tokens into entity spans (BIO scheme)
+    // Aggregate tokens into entity spans using BIO labels + subword continuation.
+    //
+    // The model assigns B/I labels to root tokens but subword fragments (##X)
+    // sometimes get O labels even when they're part of the entity — e.g.
+    // "Rabbit ##M ##Q" → [B-ORG, I-ORG, O] but the full span is still "RabbitMQ".
+    //
+    // Strategy: once a B- span starts, absorb ALL subsequent ## tokens
+    // (wordpiece continuations) regardless of their predicted label, then
+    // continue absorbing I-XXX tokens. This reconstructs compound tokens
+    // like "RabbitMQ", "Docker", "GitHub", "PostgreSQL" correctly.
     let mut entities: Vec<NamedEntity> = Vec::new();
     let mut i = 0usize;
+
+    // We need the raw token strings to detect ## subword continuations
+    let tokens: &[String] = encoding.get_tokens();
 
     while i < token_labels.len() {
         let (label, prob) = token_labels[i];
         if let Some(entity_type) = label_to_type(label) {
-            if is_begin(label) || (i == 0) {
+            if is_begin(label) {
                 // Start of a new entity span
                 let char_start = if i < token_offsets.len() { token_offsets[i].0 } else { 0 };
                 let mut char_end = if i < token_offsets.len() { token_offsets[i].1 } else { 0 };
                 let mut scores = vec![prob];
 
-                // Consume continuation tokens
+                // Consume continuation tokens:
+                // 1. ## subword fragments (always part of this word token)
+                // 2. I-XXX tokens with matching entity type
                 let mut j = i + 1;
                 while j < token_labels.len() {
+                    let is_subword = j < tokens.len() && tokens[j].starts_with("##");
                     let (next_label, next_prob) = token_labels[j];
                     let next_type = label_to_type(next_label);
-                    if next_type == Some(entity_type) && !is_begin(next_label) {
+                    let is_continuation =
+                        next_type == Some(entity_type) && !is_begin(next_label);
+
+                    if is_subword || is_continuation {
                         char_end = if j < token_offsets.len() { token_offsets[j].1 } else { char_end };
                         scores.push(next_prob);
                         j += 1;
@@ -354,6 +372,23 @@ mod tests {
         assert!(names.contains(&"Google"), "should extract Google: got {:?}", names);
         assert!(names.contains(&"Microsoft"), "should extract Microsoft: got {:?}", names);
         assert!(names.contains(&"London"), "should extract London: got {:?}", names);
+    }
+
+    #[tokio::test]
+    async fn test_extract_compound_tokens() {
+        ensure_ner_model().await.expect("model load");
+        // These are the known-problematic compound names that caused truncation
+        // before the ## subword-aware span stitching fix.
+        let entities = extract_entities(
+            "Netflix uses RabbitMQ and PostgreSQL. Docker and GitHub are key tools. Stripe processes payments."
+        ).expect("extraction failed");
+        let names: Vec<&str> = entities.iter().map(|e| e.text.as_str()).collect();
+        println!("Extracted: {:?}", names);
+        // Full compound forms — not truncated
+        assert!(names.contains(&"RabbitMQ"), "should reconstruct RabbitMQ (was 'Rabbit'): got {:?}", names);
+        assert!(names.contains(&"Docker"), "should reconstruct Docker (was 'Dock'): got {:?}", names);
+        assert!(names.contains(&"GitHub"), "should reconstruct GitHub: got {:?}", names);
+        assert!(names.contains(&"Netflix"), "should extract Netflix: got {:?}", names);
     }
 
     #[tokio::test]

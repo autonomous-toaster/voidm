@@ -756,3 +756,222 @@ fn preview(content: &str) -> String {
         format!("{}...", cut)
     }
 }
+
+// ─── Conflict management ──────────────────────────────────────────────────────
+
+/// A CONTRADICTS edge with context about both endpoints.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Conflict {
+    pub edge_id: i64,
+    pub from_id: String,
+    pub from_kind: String,
+    pub from_name: Option<String>,
+    pub from_description: Option<String>,
+    pub to_id: String,
+    pub to_kind: String,
+    pub to_name: Option<String>,
+    pub to_description: Option<String>,
+    pub created_at: String,
+}
+
+/// List all CONTRADICTS edges that have not been resolved (no INVALIDATES edge from either endpoint).
+pub async fn list_conflicts(
+    pool: &SqlitePool,
+    scope: Option<&str>,
+) -> Result<Vec<Conflict>> {
+    // Get all CONTRADICTS edges not yet invalidated
+    // "Resolved" = a subsequent INVALIDATES edge exists from winner→loser or loser→winner
+    let rows: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT e.id, e.from_id, e.from_type, e.to_id, e.to_type, e.created_at
+         FROM ontology_edges e
+         WHERE e.rel_type = 'CONTRADICTS'
+           AND NOT EXISTS (
+             SELECT 1 FROM ontology_edges inv
+             WHERE inv.rel_type = 'INVALIDATES'
+               AND (
+                 (inv.from_id = e.from_id AND inv.to_id = e.to_id)
+                 OR (inv.from_id = e.to_id AND inv.to_id = e.from_id)
+               )
+           )
+         ORDER BY e.created_at DESC"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut conflicts = Vec::new();
+    for (edge_id, from_id, from_type, to_id, to_type, created_at) in rows {
+        // Fetch name/description for concept endpoints
+        let from_info = if from_type == "concept" {
+            fetch_concept_info(pool, &from_id).await?
+        } else {
+            fetch_memory_preview(pool, &from_id).await?
+        };
+        let to_info = if to_type == "concept" {
+            fetch_concept_info(pool, &to_id).await?
+        } else {
+            fetch_memory_preview(pool, &to_id).await?
+        };
+
+        // Optional scope filter
+        if let Some(s) = scope {
+            let from_scope = get_scope(pool, &from_id, &from_type).await?;
+            let to_scope = get_scope(pool, &to_id, &to_type).await?;
+            if !from_scope.as_deref().unwrap_or("").starts_with(s)
+                && !to_scope.as_deref().unwrap_or("").starts_with(s)
+            {
+                continue;
+            }
+        }
+
+        conflicts.push(Conflict {
+            edge_id,
+            from_id,
+            from_kind: from_type,
+            from_name: from_info.0,
+            from_description: from_info.1,
+            to_id,
+            to_kind: to_type,
+            to_name: to_info.0,
+            to_description: to_info.1,
+            created_at,
+        });
+    }
+
+    Ok(conflicts)
+}
+
+/// Get a single CONTRADICTS edge by id.
+pub async fn get_conflict(pool: &SqlitePool, edge_id: i64) -> Result<Conflict> {
+    let row: Option<(i64, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT id, from_id, from_type, to_id, to_type, created_at
+         FROM ontology_edges WHERE id = ? AND rel_type = 'CONTRADICTS'"
+    )
+    .bind(edge_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let (eid, from_id, from_type, to_id, to_type, created_at) = row
+        .ok_or_else(|| anyhow::anyhow!("CONTRADICTS edge #{} not found", edge_id))?;
+
+    let from_info = if from_type == "concept" {
+        fetch_concept_info(pool, &from_id).await?
+    } else {
+        fetch_memory_preview(pool, &from_id).await?
+    };
+    let to_info = if to_type == "concept" {
+        fetch_concept_info(pool, &to_id).await?
+    } else {
+        fetch_memory_preview(pool, &to_id).await?
+    };
+
+    Ok(Conflict {
+        edge_id: eid,
+        from_id,
+        from_kind: from_type,
+        from_name: from_info.0,
+        from_description: from_info.1,
+        to_id,
+        to_kind: to_type,
+        to_name: to_info.0,
+        to_description: to_info.1,
+        created_at,
+    })
+}
+
+/// Resolve a CONTRADICTS conflict:
+///   1. Remove the CONTRADICTS edge
+///   2. Add an INVALIDATES edge from winner → loser
+///   3. Mark the loser concept as superseded (metadata field)
+pub async fn resolve_conflict(
+    pool: &SqlitePool,
+    edge_id: i64,
+    winner_id: &str,
+    loser_id: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // 1. Remove the CONTRADICTS edge
+    sqlx::query("DELETE FROM ontology_edges WHERE id = ?")
+        .bind(edge_id)
+        .execute(pool)
+        .await?;
+
+    // 2. Determine kinds
+    let winner_kind = node_kind_str(pool, winner_id).await?;
+    let loser_kind = node_kind_str(pool, loser_id).await?;
+
+    // 3. Insert INVALIDATES edge winner → loser
+    sqlx::query(
+        "INSERT OR IGNORE INTO ontology_edges
+         (from_id, from_type, rel_type, to_id, to_type, note, created_at)
+         VALUES (?, ?, 'INVALIDATES', ?, ?, 'conflict resolution', ?)"
+    )
+    .bind(winner_id)
+    .bind(&winner_kind)
+    .bind(loser_id)
+    .bind(&loser_kind)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
+    // 4. Mark loser as superseded if it's a concept
+    if loser_kind == "concept" {
+        sqlx::query(
+            "UPDATE ontology_concepts SET description =
+               COALESCE(description, '') || ' [SUPERSEDED]'
+             WHERE id = ? AND (description IS NULL OR description NOT LIKE '%[SUPERSEDED]%')"
+        )
+        .bind(loser_id)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
+// ─── Conflict helpers ─────────────────────────────────────────────────────────
+
+async fn fetch_concept_info(pool: &SqlitePool, id: &str) -> Result<(Option<String>, Option<String>)> {
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT name, description FROM ontology_concepts WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(n, d)| (Some(n), d)).unwrap_or((None, None)))
+}
+
+async fn fetch_memory_preview(pool: &SqlitePool, id: &str) -> Result<(Option<String>, Option<String>)> {
+    let content: Option<String> = sqlx::query_scalar(
+        "SELECT content FROM memories WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok((content.map(|c| preview(&c)), None))
+}
+
+async fn get_scope(pool: &SqlitePool, id: &str, kind: &str) -> Result<Option<String>> {
+    if kind == "concept" {
+        let s: Option<String> = sqlx::query_scalar(
+            "SELECT scope FROM ontology_concepts WHERE id = ?"
+        ).bind(id).fetch_optional(pool).await?;
+        Ok(s)
+    } else {
+        let s: Option<String> = sqlx::query_scalar(
+            "SELECT scope FROM memory_scopes WHERE memory_id = ? LIMIT 1"
+        ).bind(id).fetch_optional(pool).await?;
+        Ok(s)
+    }
+}
+
+async fn node_kind_str(pool: &SqlitePool, id: &str) -> Result<String> {
+    let is_concept: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM ontology_concepts WHERE id = ?"
+    ).bind(id).fetch_optional(pool).await?;
+    if is_concept.is_some() {
+        Ok("concept".into())
+    } else {
+        Ok("memory".into())
+    }
+}

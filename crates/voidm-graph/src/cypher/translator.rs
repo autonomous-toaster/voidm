@@ -74,10 +74,15 @@ pub fn translate(ast: &CypherAst) -> Result<(String, Vec<serde_json::Value>)> {
 }
 
 struct TranslateCtx {
-    /// Map from Cypher variable name → SQL table alias for graph_nodes
+    /// Map from Cypher variable name → SQL table alias
     node_aliases: HashMap<String, String>,
-    /// Map from Cypher edge variable name → SQL table alias for graph_edges
+    /// Map from Cypher variable name → node kind ("Memory" | "Concept")
+    node_kinds: HashMap<String, String>,
+    /// Map from Cypher edge variable name → SQL table alias for graph_edges / ontology_edges
     edge_aliases: HashMap<String, String>,
+    /// Map from Cypher edge variable name → edge table kind ("graph" | "ontology") — reserved for future cross-graph edge routing
+    #[allow(dead_code)]
+    edge_table_kinds: HashMap<String, String>,
     /// Constraints to add to WHERE
     constraints: Vec<String>,
     counter: usize,
@@ -87,7 +92,9 @@ impl TranslateCtx {
     fn new() -> Self {
         Self {
             node_aliases: HashMap::new(),
+            node_kinds: HashMap::new(),
             edge_aliases: HashMap::new(),
+            edge_table_kinds: HashMap::new(),
             constraints: Vec::new(),
             counter: 0,
         }
@@ -97,6 +104,10 @@ impl TranslateCtx {
         let n = self.counter;
         self.counter += 1;
         format!("{}_{}", prefix, n)
+    }
+
+    fn is_concept(&self, var: &str) -> bool {
+        self.node_kinds.get(var).map(|k| k == "Concept").unwrap_or(false)
     }
 }
 
@@ -249,44 +260,69 @@ fn register_node(
 ) -> Result<String> {
     let alias = ctx.fresh("n");
 
+    let label = node.label.as_deref().unwrap_or("Memory");
+    let is_concept = label == "Concept";
+
     if let Some(ref var) = node.var {
         ctx.node_aliases.insert(var.clone(), alias.clone());
+        ctx.node_kinds.insert(var.clone(), label.to_string());
     }
 
-    from_parts.push(format!("graph_nodes {}", alias));
+    if is_concept {
+        // Route to ontology_concepts table
+        from_parts.push(format!("ontology_concepts {}", alias));
 
-    // Label constraint — all nodes are memories, :Memory is cosmetic, skip it.
-    // Only add constraint for non-Memory labels if we ever support multiple node types.
-    if let Some(ref label) = node.label {
-        if label != "Memory" {
-            let lbl_alias = ctx.fresh("lbl");
-            join_parts.push(format!(
-                "JOIN graph_node_labels {} ON {}.node_id = {}.id AND {}.label = '{}'",
-                lbl_alias, lbl_alias, alias, lbl_alias, label
-            ));
+        // Property constraints on concept columns
+        for (key, val) in &node.props {
+            let col = match key.as_str() {
+                "id" | "concept_id" => format!("{}.id", alias),
+                "name"              => format!("{}.name", alias),
+                "description"       => format!("{}.description", alias),
+                "scope"             => format!("{}.scope", alias),
+                _ => continue,
+            };
+            match val {
+                PropValue::String(s) => {
+                    ctx.constraints.push(format!("{} = '{}'", col, s.replace('\'', "''")));
+                }
+                _ => {}
+            }
         }
-    }
+    } else {
+        // Memory node → graph_nodes table
+        from_parts.push(format!("graph_nodes {}", alias));
 
-    // Property constraints
-    for (key, val) in &node.props {
-        let pk_alias = ctx.fresh("pk");
-        let pv_alias = ctx.fresh("pv");
-        join_parts.push(format!(
-            "JOIN graph_property_keys {} ON {}.key = '{}'",
-            pk_alias, pk_alias, key
-        ));
-        join_parts.push(format!(
-            "JOIN graph_node_props_text {} ON {}.node_id = {}.id AND {}.key_id = {}.id",
-            pv_alias, pv_alias, alias, pv_alias, pk_alias
-        ));
-        match val {
-            PropValue::String(s) => {
-                ctx.constraints.push(format!("{}.value = '{}'", pv_alias, s.replace('\'', "''")));
+        if let Some(ref label_str) = node.label {
+            if label_str != "Memory" {
+                let lbl_alias = ctx.fresh("lbl");
+                join_parts.push(format!(
+                    "JOIN graph_node_labels {} ON {}.node_id = {}.id AND {}.label = '{}'",
+                    lbl_alias, lbl_alias, alias, lbl_alias, label_str
+                ));
             }
-            PropValue::Integer(n) => {
-                ctx.constraints.push(format!("{}.value = {}", pv_alias, n));
+        }
+
+        // Property constraints on memory node
+        for (key, val) in &node.props {
+            let pk_alias = ctx.fresh("pk");
+            let pv_alias = ctx.fresh("pv");
+            join_parts.push(format!(
+                "JOIN graph_property_keys {} ON {}.key = '{}'",
+                pk_alias, pk_alias, key
+            ));
+            join_parts.push(format!(
+                "JOIN graph_node_props_text {} ON {}.node_id = {}.id AND {}.key_id = {}.id",
+                pv_alias, pv_alias, alias, pv_alias, pk_alias
+            ));
+            match val {
+                PropValue::String(s) => {
+                    ctx.constraints.push(format!("{}.value = '{}'", pv_alias, s.replace('\'', "''")));
+                }
+                PropValue::Integer(n) => {
+                    ctx.constraints.push(format!("{}.value = {}", pv_alias, n));
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -308,32 +344,48 @@ fn translate_return(exprs: &[ReturnExpr], ctx: &TranslateCtx) -> Result<String> 
 fn return_item_to_col_ctx(item: &ReturnItem, ctx: &TranslateCtx) -> String {
     match item {
         ReturnItem::Property(var, prop) => {
-            // Try node alias first
             if let Some(node_alias) = ctx.node_aliases.get(var.as_str()) {
-                if prop == "id" || prop == "memory_id" {
-                    return format!("{}.memory_id", node_alias);
+                if ctx.is_concept(var) {
+                    // Concept node — direct column access
+                    return match prop.as_str() {
+                        "id" | "concept_id" => format!("{}.id", node_alias),
+                        "name"              => format!("{}.name", node_alias),
+                        "description"       => format!("{}.description", node_alias),
+                        "scope"             => format!("{}.scope", node_alias),
+                        "created_at"        => format!("{}.created_at", node_alias),
+                        _ => format!("NULL /* unknown concept prop {} */", prop),
+                    };
+                } else {
+                    // Memory node — id maps to memory_id, others via props tables
+                    if prop == "id" || prop == "memory_id" {
+                        return format!("{}.memory_id", node_alias);
+                    }
+                    return format!(
+                        "(SELECT value FROM graph_node_props_text pt \
+                          JOIN graph_property_keys pk ON pk.id = pt.key_id \
+                          WHERE pt.node_id = {n}.id AND pk.key = '{p}')",
+                        n = node_alias, p = prop
+                    );
                 }
-                return format!(
-                    "(SELECT value FROM graph_node_props_text pt \
-                      JOIN graph_property_keys pk ON pk.id = pt.key_id \
-                      WHERE pt.node_id = {n}.id AND pk.key = '{p}')",
-                    n = node_alias, p = prop
-                );
             }
-            // Try edge alias
+            // Edge alias
             if let Some(edge_alias) = ctx.edge_aliases.get(var.as_str()) {
-                match prop.as_str() {
-                    "rel_type" | "type"  => return format!("{}.rel_type", edge_alias),
-                    "note"               => return format!("{}.note", edge_alias),
-                    "id"                 => return format!("{}.id", edge_alias),
-                    _ => return format!("NULL /* unknown edge prop {} */", prop),
-                }
+                return match prop.as_str() {
+                    "rel_type" | "type" => format!("{}.rel_type", edge_alias),
+                    "note"              => format!("{}.note", edge_alias),
+                    "id"                => format!("{}.id", edge_alias),
+                    _ => format!("NULL /* unknown edge prop {} */", prop),
+                };
             }
             format!("NULL /* unknown var {} */", var)
         }
         ReturnItem::Variable(var) => {
             if let Some(node_alias) = ctx.node_aliases.get(var.as_str()) {
-                format!("{}.memory_id", node_alias)
+                if ctx.is_concept(var) {
+                    format!("{}.id", node_alias)
+                } else {
+                    format!("{}.memory_id", node_alias)
+                }
             } else if let Some(edge_alias) = ctx.edge_aliases.get(var.as_str()) {
                 format!("{}.rel_type", edge_alias)
             } else {
@@ -357,7 +409,15 @@ fn translate_where(expr: &WhereExpr, ctx: &TranslateCtx) -> Result<(String, Vec<
     match expr {
         WhereExpr::Comparison(cmp) => {
             let col = if let Some(node_alias) = ctx.node_aliases.get(&cmp.var) {
-                if cmp.prop == "id" || cmp.prop == "memory_id" {
+                if ctx.is_concept(&cmp.var) {
+                    match cmp.prop.as_str() {
+                        "id" | "concept_id" => format!("{}.id", node_alias),
+                        "name"              => format!("{}.name", node_alias),
+                        "description"       => format!("{}.description", node_alias),
+                        "scope"             => format!("{}.scope", node_alias),
+                        _ => bail!("Unknown concept property '{}' in WHERE", cmp.prop),
+                    }
+                } else if cmp.prop == "id" || cmp.prop == "memory_id" {
                     format!("{}.memory_id", node_alias)
                 } else {
                     format!(

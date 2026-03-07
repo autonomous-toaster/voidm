@@ -266,8 +266,9 @@ async fn export_dot(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
 
     // Add concept nodes
     for (id, name) in &concepts {
-        println!("  \"c:{}\" [label=\"{}\" (concept), fillcolor=\"lavender\", style=\"rounded,filled\"];", 
-                 &id[..8], name);
+        let label = name.replace("\"", "\\\"");
+        println!("  \"c:{}\" [label=\"{} (concept)\", fillcolor=\"lavender\", style=\"rounded,filled\"];", 
+                 &id[..8], label);
     }
 
     // Add edges

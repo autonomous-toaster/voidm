@@ -1542,9 +1542,14 @@ pub async fn execute_merge_batch(
         .unwrap_or((0,));
 
         let (source, target) = if source_count.0 < target_count.0 {
+            // Source is smaller - merge it into target (use as-is)
             (&pair.source[..], &pair.target[..])
-        } else {
+        } else if target_count.0 < source_count.0 {
+            // Target is smaller - merge it into source (swap)
             (&pair.target[..], &pair.source[..])
+        } else {
+            // Equal edges - respect user input order
+            (&pair.source[..], &pair.target[..])
         };
 
         // Check for conflicts
@@ -1593,7 +1598,17 @@ pub async fn execute_merge_batch(
         let edges_count = source_count.0 as usize;
         edges_retargeted += edges_count;
 
-        // Log merge operation
+        // Delete source concept FIRST (before logging)
+        if let Err(_) = sqlx::query("DELETE FROM ontology_concepts WHERE id = ?")
+            .bind(source)
+            .execute(&mut *tx)
+            .await {
+            failed += 1;
+            errors.push((source.to_string(), target.to_string(), "Failed to delete source concept".to_string()));
+            continue;
+        }
+
+        // Log merge operation AFTER successful deletion
         let _ = sqlx::query(
             "INSERT INTO ontology_merge_log (id, batch_id, source_id, target_id, edges_retargeted, conflicts_kept, status, created_at, completed_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -1609,16 +1624,6 @@ pub async fn execute_merge_batch(
         .bind(&now)
         .execute(&mut *tx)
         .await;
-
-        // Delete source concept
-        if let Err(_) = sqlx::query("DELETE FROM ontology_concepts WHERE id = ?")
-            .bind(source)
-            .execute(&mut *tx)
-            .await {
-            failed += 1;
-            errors.push((source.to_string(), target.to_string(), "Failed to delete source concept".to_string()));
-            continue;
-        }
 
         succeeded += 1;
     }

@@ -244,8 +244,8 @@ CREATE TABLE IF NOT EXISTS ontology_ner_processed (
 CREATE TABLE IF NOT EXISTS ontology_merge_log (
     id                TEXT PRIMARY KEY,
     batch_id          TEXT NOT NULL,
-    source_id         TEXT NOT NULL REFERENCES ontology_concepts(id) ON DELETE RESTRICT,
-    target_id         TEXT NOT NULL REFERENCES ontology_concepts(id) ON DELETE RESTRICT,
+    source_id         TEXT NOT NULL,
+    target_id         TEXT NOT NULL,
     edges_retargeted  INTEGER DEFAULT 0,
     conflicts_kept    INTEGER DEFAULT 0,
     status            TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'rolled_back', 'failed')),

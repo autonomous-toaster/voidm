@@ -49,7 +49,8 @@ pub enum ConceptCommands {
     /// Merge source concept into target (retargets edges, deletes source)
     Merge(ConceptMergeArgs),
     /// Find merge candidates (similar concepts for deduplication)
-    FindDuplicates(FindDuplicatesArgs),
+    #[command(alias = "find-duplicates")]
+    FindMergeCandidates(FindMergeCandidatesArgs),
     /// Preview batch merge plan (dry-run)
     MergeBatch(MergeBatchArgs),
     /// Execute previously previewed batch merge
@@ -150,10 +151,13 @@ pub struct ConceptMergeArgs {
 }
 
 #[derive(Args)]
-pub struct FindDuplicatesArgs {
+pub struct FindMergeCandidatesArgs {
     /// Similarity threshold (0.0-1.0, default 0.8 for high similarity)
     #[arg(long, default_value = "0.8")]
     pub threshold: f32,
+    /// Output file path for JSON results (default: stdout)
+    #[arg(long, short)]
+    pub output: Option<String>,
 }
 
 #[derive(Args)]
@@ -373,10 +377,20 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
             }
         }
 
-        ConceptCommands::FindDuplicates(args) => {
+        ConceptCommands::FindMergeCandidates(args) => {
             let candidates = ontology::find_merge_candidates(pool, args.threshold).await?;
-            if json {
-                println!("{}", serde_json::to_string(&candidates)?);
+            
+            // Prepare JSON output
+            let json_output = serde_json::to_string_pretty(&candidates)?;
+            
+            // Write to file if --output specified
+            if let Some(output_path) = &args.output {
+                std::fs::write(output_path, &json_output)?;
+                if !json {
+                    println!("✓ Wrote {} merge candidates to {}", candidates.len(), output_path);
+                }
+            } else if json {
+                println!("{}", json_output);
             } else {
                 if candidates.is_empty() {
                     println!("No merge candidates found at similarity >= {}", args.threshold);

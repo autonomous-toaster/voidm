@@ -5,6 +5,7 @@ use voidm_core::ontology::{
     self, HierarchyDirection, NodeKind, OntologyRelType,
 };
 use voidm_core::Config;
+use uuid::Uuid;
 
 // ─── Top-level subcommand tree ────────────────────────────────────────────────
 
@@ -49,6 +50,14 @@ pub enum ConceptCommands {
     Merge(ConceptMergeArgs),
     /// Find merge candidates (similar concepts for deduplication)
     FindDuplicates(FindDuplicatesArgs),
+    /// Preview batch merge plan (dry-run)
+    MergeBatch(MergeBatchArgs),
+    /// Execute previously previewed batch merge
+    MergeBatchApply(MergeBatchApplyArgs),
+    /// Rollback single merge operation
+    RollbackMerge(RollbackMergeArgs),
+    /// List merge operation history
+    MergeHistory(MergeHistoryArgs),
 }
 
 #[derive(Args)]
@@ -145,6 +154,38 @@ pub struct FindDuplicatesArgs {
     /// Similarity threshold (0.0-1.0, default 0.8 for high similarity)
     #[arg(long, default_value = "0.8")]
     pub threshold: f32,
+}
+
+#[derive(Args)]
+pub struct MergeBatchArgs {
+    /// Path to merge plan JSON file
+    #[arg(long, short)]
+    pub from: String,
+    /// Execute the merge plan (default is dry-run preview only)
+    #[arg(long)]
+    pub execute: bool,
+}
+
+#[derive(Args)]
+pub struct MergeBatchApplyArgs {
+    /// Batch ID from merge-batch preview
+    pub batch_id: String,
+}
+
+#[derive(Args)]
+pub struct RollbackMergeArgs {
+    /// Merge operation ID to rollback
+    pub merge_id: String,
+}
+
+#[derive(Args)]
+pub struct MergeHistoryArgs {
+    /// Filter by batch ID
+    #[arg(long)]
+    pub batch: Option<String>,
+    /// Filter by status (pending, completed, rolled_back, failed)
+    #[arg(long)]
+    pub status: Option<String>,
 }
 
 // ─── Edge subcommands ─────────────────────────────────────────────────────────
@@ -357,6 +398,18 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
                     }
                 }
             }
+        }
+        ConceptCommands::MergeBatch(args) => {
+            handle_merge_batch(&args.from, args.execute, pool, json).await?;
+        }
+        ConceptCommands::MergeBatchApply(args) => {
+            handle_merge_batch_apply(&args.batch_id, pool, json).await?;
+        }
+        ConceptCommands::RollbackMerge(args) => {
+            handle_rollback_merge(&args.merge_id, pool, json).await?;
+        }
+        ConceptCommands::MergeHistory(args) => {
+            handle_merge_history(args.batch.as_deref(), args.status.as_deref(), pool, json).await?;
         }
     }
     Ok(())
@@ -823,6 +876,136 @@ async fn run_enrich_memories(
 
     if !args.add && total_links < processed {
         println!("Tip: use --add to automatically create missing concepts.");
+    }
+
+    Ok(())
+}
+
+// ─── Batch merge handlers ─────────────────────────────────────────────────────
+
+async fn handle_merge_batch(path: &str, execute: bool, pool: &SqlitePool, json: bool) -> Result<()> {
+    use std::fs;
+    use voidm_core::models::MergePlan;
+
+    // Load and parse merge plan JSON
+    let plan_str = fs::read_to_string(path)?;
+    let plan: MergePlan = serde_json::from_str(&plan_str)?;
+
+    if execute {
+        // Execute the merge batch in a transaction
+        let batch_id = Uuid::new_v4().to_string();
+        let result = ontology::execute_merge_batch(pool, &batch_id, &plan).await?;
+
+        if json {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            println!("Batch Merge Execution Complete:");
+            println!("────────────────────────────────");
+            println!("Batch ID: {}", result.batch_id);
+            println!("Total merges: {}", result.total);
+            println!("✓ Succeeded: {}", result.succeeded);
+            if result.failed > 0 {
+                println!("✗ Failed: {}", result.failed);
+                for (source, target, reason) in &result.errors {
+                    println!("  - {} → {}: {}", &source[..8], &target[..8], reason);
+                }
+            }
+            if result.conflicts > 0 {
+                println!("⚠ Conflicts kept: {}", result.conflicts);
+            }
+            println!("Edges retargeted: {}", result.edges_retargeted);
+        }
+    } else {
+        // Dry-run preview only
+        let result = ontology::analyze_merge_plan(pool, &plan).await?;
+
+        if json {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            println!("Merge Plan Preview (Dry-run):");
+            println!("────────────────────────────────");
+            println!("Batch ID: {}", result.batch_id);
+            println!("Total merges: {}", result.total);
+            println!("✓ Will succeed: {}", result.succeeded);
+            if result.failed > 0 {
+                println!("✗ Will fail: {}", result.failed);
+                for (source, target, reason) in &result.errors {
+                    println!("  - {} → {}: {}", &source[..8], &target[..8], reason);
+                }
+            }
+            if result.conflicts > 0 {
+                println!("⚠ Conflicts detected: {} (both have CONTRADICTS)", result.conflicts);
+                println!("  → Will keep both CONTRADICTS edges on target");
+            }
+            println!("Edges to retarget: {}", result.edges_retargeted);
+            println!("\nStatus: This is a dry-run preview. To execute, use --execute flag:");
+            println!("voidm ontology concept merge-batch --from {} --execute", path);
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_merge_batch_apply(_batch_id: &str, _pool: &SqlitePool, _json: bool) -> Result<()> {
+    // Load the batch ID from cache (in real implementation, would load from DB or file)
+    // For now, we'll create a minimal plan structure
+
+    // This is a placeholder - in production, batch_id would be tied to a saved plan
+    eprintln!("Error: merge-batch-apply requires a saved batch context");
+    eprintln!("In current implementation, please run merge-batch --from plan.json again");
+    eprintln!("(Full batch execution workflow coming in Phase 5.2)");
+
+    Ok(())
+}
+
+async fn handle_rollback_merge(merge_id: &str, pool: &SqlitePool, json: bool) -> Result<()> {
+    ontology::rollback_merge(pool, merge_id).await?;
+
+    if json {
+        println!("{{\"status\": \"rolled_back\", \"merge_id\": \"{}\"}}", merge_id);
+    } else {
+        println!("✓ Rolled back merge: {}", merge_id);
+    }
+
+    Ok(())
+}
+
+async fn handle_merge_history(
+    batch_id: Option<&str>,
+    status: Option<&str>,
+    pool: &SqlitePool,
+    json: bool,
+) -> Result<()> {
+    let entries = ontology::list_merge_history(pool, batch_id, status).await?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+    } else {
+        if entries.is_empty() {
+            println!("No merge history found");
+            return Ok(());
+        }
+
+        println!("Merge History:");
+        println!("──────────────────────────────────────────────────────────────");
+        for entry in entries {
+            println!(
+                "[{}] {} {}/{} | {} edges | status: {}",
+                &entry.id[..8],
+                &entry.batch_id[..8],
+                &entry.source_id[..8],
+                &entry.target_id[..8],
+                entry.edges_retargeted,
+                entry.status
+            );
+            if entry.conflicts_kept > 0 {
+                println!("      ⚠ {} CONTRADICTS edges kept", entry.conflicts_kept);
+            }
+            if let Some(reason) = entry.reason {
+                println!("      Reason: {}", reason);
+            }
+            println!("      At: {}", entry.created_at);
+        }
     }
 
     Ok(())

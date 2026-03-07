@@ -59,7 +59,7 @@ pub struct PagerankArgs {
 
 #[derive(Args)]
 pub struct ExportArgs {
-    /// Export format: dot (Graphviz), json, csv
+    /// Export format: dot (Graphviz), json, csv, html (interactive viewer)
     #[arg(long, default_value = "dot")]
     pub format: String,
     /// Filter: include only memories (m), concepts (c), or both (mc)
@@ -218,7 +218,8 @@ async fn run_export(args: ExportArgs, pool: &SqlitePool, _json: bool) -> Result<
         "dot" => export_dot(args, pool).await,
         "json" => export_json(args, pool).await,
         "csv" => export_csv(args, pool).await,
-        fmt => anyhow::bail!("Unknown format: {}. Supported: dot, json, csv", fmt),
+        "html" => export_html(args, pool).await,
+        fmt => anyhow::bail!("Unknown format: {}. Supported: dot, json, csv, html", fmt),
     }
 }
 
@@ -332,5 +333,359 @@ async fn export_csv(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
     for (from, to, rel) in edges {
         println!("{},{},{}", from, to, rel);
     }
+    Ok(())
+}
+
+async fn export_html(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
+    use serde_json::json;
+    
+    // Get all memories
+    let memories: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, type, SUBSTR(content, 1, 100) as preview FROM memories LIMIT 1000"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // Get all concepts
+    let concepts: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, name FROM ontology_concepts LIMIT 500"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // Get all edges
+    let edges: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // Build vis.js nodes array
+    let mut nodes_json = Vec::new();
+    for (id, mem_type, preview) in &memories {
+        let color = match mem_type.as_str() {
+            "semantic" => "#ADD8E6",      // light blue
+            "episodic" => "#90EE90",      // light green
+            "procedural" => "#FFFFE0",    // light yellow
+            "conceptual" => "#E0FFFF",    // light cyan
+            "contextual" => "#D3D3D3",    // light gray
+            _ => "#FFFFFF",
+        };
+        nodes_json.push(json!({
+            "id": &id[..8],
+            "label": preview.replace("\"", ""),
+            "title": id,
+            "color": color,
+            "shape": "box",
+            "type": "memory"
+        }));
+    }
+
+    for (id, name) in &concepts {
+        nodes_json.push(json!({
+            "id": &id[..8],
+            "label": name,
+            "title": id,
+            "color": "#E6D5FA",  // lavender
+            "shape": "dot",
+            "type": "concept"
+        }));
+    }
+
+    // Build vis.js edges array
+    let mut edges_json = Vec::new();
+    for (from, to, rel) in &edges {
+        let from_id = if from.len() > 8 { &from[..8] } else { from };
+        let to_id = if to.len() > 8 { &to[..8] } else { to };
+        edges_json.push(json!({
+            "from": from_id,
+            "to": to_id,
+            "label": rel,
+            "arrows": "to",
+            "smooth": {"type": "continuous"}
+        }));
+    }
+
+    let nodes_str = serde_json::to_string(&nodes_json)?;
+    let edges_str = serde_json::to_string(&edges_json)?;
+
+    // Generate HTML with vis.js
+    let html = format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>voidm Graph Viewer</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style type="text/css">
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            background: #f5f5f5;
+        }}
+        #network {{
+            width: 100%;
+            height: 100vh;
+            border: 1px solid #ddd;
+            background: white;
+        }}
+        #controls {{
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            max-width: 300px;
+        }}
+        .control-group {{
+            margin-bottom: 12px;
+        }}
+        label {{
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            font-size: 12px;
+            color: #333;
+        }}
+        input[type="text"], select {{
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 12px;
+        }}
+        button {{
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            width: 100%;
+        }}
+        button:hover {{
+            background: #0056b3;
+        }}
+        #stats {{
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            font-size: 12px;
+            color: #555;
+        }}
+        #info {{
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            max-width: 300px;
+            max-height: 400px;
+            overflow-y: auto;
+        }}
+        .node-info {{
+            font-size: 12px;
+            color: #333;
+        }}
+        .node-info strong {{
+            display: block;
+            margin-top: 5px;
+        }}
+        .memory-type {{
+            display: inline-block;
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            color: #666;
+        }}
+    </style>
+</head>
+<body>
+    <div id="network"></div>
+    
+    <div id="controls">
+        <div class="control-group">
+            <label>Search Node</label>
+            <input type="text" id="searchInput" placeholder="Memory or Concept ID...">
+        </div>
+        
+        <div class="control-group">
+            <label>Filter Type</label>
+            <select id="filterType">
+                <option value="">All Nodes</option>
+                <option value="memory">Memories Only</option>
+                <option value="concept">Concepts Only</option>
+            </select>
+        </div>
+        
+        <button onclick="resetView()">Reset View</button>
+        <button onclick="focusSelected()">Focus Selected</button>
+        <button onclick="downloadPNG()">Download PNG</button>
+    </div>
+    
+    <div id="stats">
+        <strong>Nodes:</strong> <span id="nodeCount">0</span><br>
+        <strong>Edges:</strong> <span id="edgeCount">0</span><br>
+        <strong>Selected:</strong> <span id="selectedCount">0</span>
+    </div>
+    
+    <div id="info">
+        <strong>Node Information</strong>
+        <div class="node-info" id="nodeInfo">Click a node to see details</div>
+    </div>
+
+    <script type="text/javascript">
+        // Data
+        const rawNodes = {nodes_str};
+        const rawEdges = {edges_str};
+        
+        let allNodes = new vis.DataSet(rawNodes);
+        let allEdges = new vis.DataSet(rawEdges);
+        let filteredNodes = new vis.DataSet(rawNodes);
+        let filteredEdges = new vis.DataSet(rawEdges);
+
+        // Container
+        const container = document.getElementById('network');
+        const data = {{
+            nodes: filteredNodes,
+            edges: filteredEdges
+        }};
+
+        const options = {{
+            physics: {{
+                enabled: true,
+                stabilization: {{
+                    iterations: 200,
+                    fit: true
+                }},
+                barnesHut: {{
+                    gravitationalConstant: -26000,
+                    centralGravity: 0.3,
+                    springLength: 200,
+                    springConstant: 0.04
+                }}
+            }},
+            interaction: {{
+                navigationButtons: true,
+                keyboard: true,
+                hover: true
+            }},
+            layout: {{
+                randomSeed: 42
+            }}
+        }};
+
+        const network = new vis.Network(container, data, options);
+
+        // Update stats
+        document.getElementById('nodeCount').textContent = rawNodes.length;
+        document.getElementById('edgeCount').textContent = rawEdges.length;
+
+        // Search functionality
+        document.getElementById('searchInput').addEventListener('keyup', function() {{
+            const query = this.value.toLowerCase();
+            const selectedNode = rawNodes.find(n => 
+                n.id.toLowerCase().includes(query) || 
+                n.label.toLowerCase().includes(query)
+            );
+            if (selectedNode) {{
+                network.selectNodes([selectedNode.id]);
+                network.focus(selectedNode.id, {{ scale: 2, animation: {{ duration: 500, easingFunction: 'easeInOutQuad' }} }});
+                showNodeInfo(selectedNode);
+            }}
+        }});
+
+        // Filter functionality
+        document.getElementById('filterType').addEventListener('change', function() {{
+            const filterType = this.value;
+            const filtered = rawNodes.filter(n => !filterType || n.type === filterType);
+            const nodeIds = new Set(filtered.map(n => n.id));
+            
+            filteredNodes.clear();
+            filtered.forEach(n => filteredNodes.add(n));
+            
+            const filteredEdgesList = rawEdges.filter(e => 
+                nodeIds.has(e.from) && nodeIds.has(e.to)
+            );
+            filteredEdges.clear();
+            filteredEdgesList.forEach(e => filteredEdges.add(e));
+            
+            document.getElementById('nodeCount').textContent = filtered.length;
+            document.getElementById('edgeCount').textContent = filteredEdgesList.length;
+        }});
+
+        // Node selection
+        network.on('selectNode', function(params) {{
+            if (params.nodes.length > 0) {{
+                const nodeId = params.nodes[0];
+                const node = rawNodes.find(n => n.id === nodeId);
+                showNodeInfo(node);
+            }}
+        }});
+
+        function showNodeInfo(node) {{
+            const info = document.getElementById('nodeInfo');
+            if (node) {{
+                const type = node.type === 'memory' ? `<span class="memory-type">${{node.type}}</span>` : 'concept';
+                info.innerHTML = `
+                    <strong>${{node.label}}</strong><br>
+                    Type: ${{type}}<br>
+                    ID: <code>${{node.title}}</code><br>
+                    <small style="color: #999;">Click nodes to highlight</small>
+                `;
+            }}
+        }}
+
+        function resetView() {{
+            network.fit({{ animation: {{ duration: 500, easingFunction: 'easeInOutQuad' }} }});
+        }}
+
+        function focusSelected() {{
+            const selected = network.getSelectedNodes();
+            if (selected.length > 0) {{
+                network.focus(selected[0], {{ scale: 2, animation: {{ duration: 500, easingFunction: 'easeInOutQuad' }} }});
+            }}
+        }}
+
+        function downloadPNG() {{
+            const canvas = network.canvas.canvas;
+            canvas.toBlob(function(blob) {{
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'voidm-graph.png';
+                a.click();
+                URL.revokeObjectURL(url);
+            }});
+        }}
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(e) {{
+            if (e.key === 'Escape') resetView();
+        }});
+    </script>
+</body>
+</html>"#, nodes_str = nodes_str, edges_str = edges_str);
+
+    println!("{}", html);
     Ok(())
 }

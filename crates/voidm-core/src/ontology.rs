@@ -1381,3 +1381,370 @@ pub struct MergeResult {
     pub target_name: String,
     pub memory_edges_merged: i64,
 }
+
+// ── Batch merge operations (Phase 5) ────────────────────────────────────────
+
+use crate::models::{MergePlan, MergeLogEntry};
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchMergeResult {
+    pub batch_id: String,
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub conflicts: usize,
+    pub edges_retargeted: usize,
+    pub errors: Vec<(String, String, String)>,  // (source, target, reason)
+}
+
+/// Analyze merge plan and return preview with impact stats (dry-run)
+pub async fn analyze_merge_plan(
+    pool: &SqlitePool,
+    plan: &MergePlan,
+) -> Result<BatchMergeResult> {
+    let batch_id = uuid::Uuid::new_v4().to_string();
+    let mut succeeded = 0;
+    let mut failed = 0;
+    let mut conflicts = 0;
+    let mut edges_retargeted = 0;
+    let mut errors = Vec::new();
+
+    for pair in &plan.merges {
+        // Verify both concepts exist
+        let source_exists: (i64,) = match sqlx::query_as(
+            "SELECT COUNT(*) FROM ontology_concepts WHERE id = ?"
+        )
+        .bind(&pair.source)
+        .fetch_one(pool)
+        .await {
+            Ok(r) => r,
+            Err(_) => {
+                failed += 1;
+                errors.push((pair.source.clone(), pair.target.clone(), "Source not found".to_string()));
+                continue;
+            }
+        };
+
+        if source_exists.0 == 0 {
+            failed += 1;
+            errors.push((pair.source.clone(), pair.target.clone(), "Source not found".to_string()));
+            continue;
+        }
+
+        let target_exists: (i64,) = match sqlx::query_as(
+            "SELECT COUNT(*) FROM ontology_concepts WHERE id = ?"
+        )
+        .bind(&pair.target)
+        .fetch_one(pool)
+        .await {
+            Ok(r) => r,
+            Err(_) => {
+                failed += 1;
+                errors.push((pair.source.clone(), pair.target.clone(), "Target not found".to_string()));
+                continue;
+            }
+        };
+
+        if target_exists.0 == 0 {
+            failed += 1;
+            errors.push((pair.source.clone(), pair.target.clone(), "Target not found".to_string()));
+            continue;
+        }
+
+        // Count edges for both concepts
+        let source_edge_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?"
+        )
+        .bind(&pair.source)
+        .bind(&pair.source)
+        .fetch_one(pool)
+        .await?;
+
+        let _target_edge_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?"
+        )
+        .bind(&pair.target)
+        .bind(&pair.target)
+        .fetch_one(pool)
+        .await?;
+
+        edges_retargeted += source_edge_count.0 as usize;
+
+        // Check for conflicts (both have CONTRADICTS edges)
+        let source_contradicts: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM ontology_edges WHERE (from_id = ? OR to_id = ?) AND rel_type = 'CONTRADICTS'"
+        )
+        .bind(&pair.source)
+        .bind(&pair.source)
+        .fetch_one(pool)
+        .await?;
+
+        let target_contradicts: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM ontology_edges WHERE (from_id = ? OR to_id = ?) AND rel_type = 'CONTRADICTS'"
+        )
+        .bind(&pair.target)
+        .bind(&pair.target)
+        .fetch_one(pool)
+        .await?;
+
+        if source_contradicts.0 > 0 && target_contradicts.0 > 0 {
+            conflicts += 1;
+        }
+
+        succeeded += 1;
+    }
+
+    Ok(BatchMergeResult {
+        batch_id,
+        total: plan.merges.len(),
+        succeeded,
+        failed,
+        conflicts,
+        edges_retargeted,
+        errors,
+    })
+}
+
+/// Execute merge batch operation with single transaction
+pub async fn execute_merge_batch(
+    pool: &SqlitePool,
+    batch_id: &str,
+    plan: &MergePlan,
+) -> Result<BatchMergeResult> {
+    let mut tx = pool.begin().await?;
+    let now = chrono::Local::now().to_rfc3339();
+    let mut succeeded = 0;
+    let mut failed = 0;
+    let mut conflicts = 0;
+    let mut edges_retargeted: usize = 0;
+    let mut errors = Vec::new();
+
+    for pair in &plan.merges {
+        let merge_id = uuid::Uuid::new_v4().to_string();
+
+        // Determine direction: smaller concept (fewer edges) merges into larger
+        let source_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?"
+        )
+        .bind(&pair.source)
+        .bind(&pair.source)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or((0,));
+
+        let target_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?"
+        )
+        .bind(&pair.target)
+        .bind(&pair.target)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or((0,));
+
+        let (source, target) = if source_count.0 < target_count.0 {
+            (&pair.source[..], &pair.target[..])
+        } else {
+            (&pair.target[..], &pair.source[..])
+        };
+
+        // Check for conflicts
+        let conflict_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM (
+                SELECT from_id FROM ontology_edges WHERE (from_id = ? OR to_id = ?) AND rel_type = 'CONTRADICTS'
+                INTERSECT
+                SELECT from_id FROM ontology_edges WHERE (from_id = ? OR to_id = ?) AND rel_type = 'CONTRADICTS'
+            )"
+        )
+        .bind(source)
+        .bind(source)
+        .bind(target)
+        .bind(target)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or((0,));
+
+        let conflicts_on_target = conflict_count.0 as i32;
+        if conflict_count.0 > 0 {
+            conflicts += 1;
+        }
+
+        // Retarget edges from source to target
+        if let Err(_) = sqlx::query(
+            "UPDATE ontology_edges SET from_id = ? WHERE from_id = ?"
+        )
+        .bind(target)
+        .bind(source)
+        .execute(&mut *tx)
+        .await {
+            failed += 1;
+            errors.push((source.to_string(), target.to_string(), "Failed to retarget edges".to_string()));
+            continue;
+        }
+
+        // Retarget incoming edges
+        let _ = sqlx::query(
+            "UPDATE ontology_edges SET to_id = ? WHERE to_id = ?"
+        )
+        .bind(target)
+        .bind(source)
+        .execute(&mut *tx)
+        .await;
+
+        let edges_count = source_count.0 as usize;
+        edges_retargeted += edges_count;
+
+        // Log merge operation
+        let _ = sqlx::query(
+            "INSERT INTO ontology_merge_log (id, batch_id, source_id, target_id, edges_retargeted, conflicts_kept, status, created_at, completed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&merge_id)
+        .bind(batch_id)
+        .bind(source)
+        .bind(target)
+        .bind(edges_count as i32)
+        .bind(conflicts_on_target)
+        .bind("completed")
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await;
+
+        // Delete source concept
+        if let Err(_) = sqlx::query("DELETE FROM ontology_concepts WHERE id = ?")
+            .bind(source)
+            .execute(&mut *tx)
+            .await {
+            failed += 1;
+            errors.push((source.to_string(), target.to_string(), "Failed to delete source concept".to_string()));
+            continue;
+        }
+
+        succeeded += 1;
+    }
+
+    // Commit transaction
+    tx.commit().await?;
+
+    // Update batch record
+    let _ = sqlx::query(
+        "INSERT OR REPLACE INTO ontology_merge_batch (id, total_merges, failed_merges, conflicts, created_at, executed_at)
+         VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .bind(batch_id)
+    .bind(plan.merges.len() as i32)
+    .bind(failed as i32)
+    .bind(conflicts as i32)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await;
+
+    Ok(BatchMergeResult {
+        batch_id: batch_id.to_string(),
+        total: plan.merges.len(),
+        succeeded,
+        failed,
+        conflicts,
+        edges_retargeted,
+        errors,
+    })
+}
+
+/// Rollback single merge operation
+pub async fn rollback_merge(
+    pool: &SqlitePool,
+    merge_id: &str,
+) -> Result<()> {
+    // Fetch merge log entry
+    let entry: Option<(String, String, i32)> = sqlx::query_as(
+        "SELECT source_id, target_id, edges_retargeted FROM ontology_merge_log WHERE id = ?"
+    )
+    .bind(merge_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let (source_id, target_id, edge_count) = entry.ok_or_else(|| anyhow::anyhow!("Merge not found: {}", merge_id))?;
+    let now = chrono::Local::now().to_rfc3339();
+
+    let mut tx = pool.begin().await?;
+
+    // Restore source concept (recreate with same ID)
+    sqlx::query(
+        "INSERT INTO ontology_concepts (id, name, created_at) VALUES (?, ?, ?)"
+    )
+    .bind(&source_id)
+    .bind(&source_id)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await?;
+
+    // Retarget edges back from target to source
+    sqlx::query(
+        "UPDATE ontology_edges SET from_id = ? WHERE from_id = ? LIMIT ?"
+    )
+    .bind(&source_id)
+    .bind(&target_id)
+    .bind(edge_count)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "UPDATE ontology_edges SET to_id = ? WHERE to_id = ? LIMIT ?"
+    )
+    .bind(&source_id)
+    .bind(&target_id)
+    .bind(edge_count)
+    .execute(&mut *tx)
+    .await?;
+
+    // Update merge log status
+    sqlx::query(
+        "UPDATE ontology_merge_log SET status = ?, completed_at = ? WHERE id = ?"
+    )
+    .bind("rolled_back")
+    .bind(&now)
+    .bind(merge_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// List merge history
+pub async fn list_merge_history(
+    pool: &SqlitePool,
+    batch_id: Option<&str>,
+    status: Option<&str>,
+) -> Result<Vec<MergeLogEntry>> {
+    let mut query = "SELECT id, batch_id, source_id, target_id, edges_retargeted, conflicts_kept, status, reason, created_at, completed_at FROM ontology_merge_log WHERE 1=1".to_string();
+
+    if let Some(bid) = batch_id {
+        query.push_str(&format!(" AND batch_id = '{}'", bid));
+    }
+    if let Some(s) = status {
+        query.push_str(&format!(" AND status = '{}'", s));
+    }
+    query.push_str(" ORDER BY created_at DESC LIMIT 1000");
+
+    let rows = sqlx::query_as::<_, (String, String, String, String, i32, i32, String, Option<String>, String, Option<String>)>(&query)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows.into_iter().map(|(id, batch_id, source_id, target_id, edges_retargeted, conflicts_kept, status, reason, created_at, completed_at)| {
+        MergeLogEntry {
+            id,
+            batch_id,
+            source_id,
+            target_id,
+            edges_retargeted,
+            conflicts_kept,
+            status,
+            reason,
+            created_at,
+            completed_at,
+        }
+    }).collect())
+}

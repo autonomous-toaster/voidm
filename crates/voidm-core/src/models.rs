@@ -237,3 +237,33 @@ pub fn edge_hint(new_type: &str, existing_type: &str) -> &'static str {
         _ => "RELATES_TO (with note required)",
     }
 }
+
+
+// ── Batch merge operations ─────────────────────────────────────────────────
+
+/// Machine-readable merge plan: list of (source_id, target_id) pairs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergePlan {
+    pub merges: Vec<MergePair>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergePair {
+    pub source: String,
+    pub target: String,
+}
+
+/// Merge log entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeLogEntry {
+    pub id: String,
+    pub batch_id: String,
+    pub source_id: String,
+    pub target_id: String,
+    pub edges_retargeted: i32,
+    pub conflicts_kept: i32,
+    pub status: String,
+    pub reason: Option<String>,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+}

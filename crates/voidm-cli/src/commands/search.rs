@@ -29,6 +29,11 @@ pub struct SearchArgs {
     #[arg(long)]
     pub min_score: Option<f32>,
 
+    /// Minimum quality score (0.0-1.0) for results. Filters by quality_score.
+    /// Use --min-quality 0.7 to exclude low-quality memories.
+    #[arg(long)]
+    pub min_quality: Option<f32>,
+
     /// Expand results with graph neighbors
     #[arg(long, default_value_t = false)]
     pub include_neighbors: bool,
@@ -64,6 +69,7 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         scope_filter: args.scope,
         type_filter: args.r#type,
         min_score: args.min_score,
+        min_quality: args.min_quality,
         include_neighbors: args.include_neighbors,
         neighbor_depth: args.neighbor_depth,
         neighbor_decay: args.neighbor_decay,
@@ -146,6 +152,9 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
                 r.content.clone()
             };
             println!("  {}", preview);
+            if let Some(qs) = r.quality_score {
+                println!("  Quality: {:.2}", qs);
+            }
             if !r.scopes.is_empty() {
                 println!("  Scopes: {}", r.scopes.join(", "));
             }

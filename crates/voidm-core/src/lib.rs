@@ -6,6 +6,7 @@ pub mod models;
 pub mod ner;
 pub mod nli;
 pub mod ontology;
+pub mod quality;
 pub mod vector;
 pub mod search;
 pub mod embeddings;

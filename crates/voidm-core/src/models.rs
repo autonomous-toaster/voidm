@@ -136,6 +136,8 @@ pub struct Memory {
     pub scopes: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality_score: Option<f32>,
 }
 
 /// Request to add a memory.
@@ -169,6 +171,7 @@ pub struct AddMemoryResponse {
     pub tags: Vec<String>,
     pub importance: i64,
     pub created_at: String,
+    pub quality_score: Option<f32>,
     pub suggested_links: Vec<SuggestedLink>,
     pub duplicate_warning: Option<DuplicateWarning>,
 }

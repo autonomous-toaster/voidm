@@ -555,6 +555,9 @@ pub struct EnrichMemoryResult {
     pub concepts_created: Vec<String>,
     /// Concept names that were linked to existing concepts
     pub concepts_linked: Vec<String>,
+    /// Similar concepts for newly created ones (potential merge candidates)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub similar_concepts: Vec<(String, SimilarConcept)>,
     /// Whether this memory was skipped (already processed, no --force)
     pub skipped: bool,
 }
@@ -631,6 +634,7 @@ pub async fn enrich_memories(
                     links_created: 0,
                     concepts_created: vec![],
                     concepts_linked: vec![],
+                    similar_concepts: vec![],
                     skipped: true,
                 });
                 continue;
@@ -652,6 +656,7 @@ pub async fn enrich_memories(
                     links_created: 0,
                     concepts_created: vec![],
                     concepts_linked: vec![],
+                    similar_concepts: vec![],
                     skipped: false,
                 });
                 continue;
@@ -665,6 +670,7 @@ pub async fn enrich_memories(
         let mut links_created = 0usize;
         let mut concepts_created = Vec::new();
         let mut concepts_linked = Vec::new();
+        let mut similar_concepts = Vec::new();
 
         for entity in &above_threshold {
             // Check for existing concept (case-insensitive)
@@ -687,6 +693,12 @@ pub async fn enrich_memories(
                     match add_concept(pool, &entity.text, None, None).await {
                         Ok(c) => {
                             concepts_created.push(c.name.clone());
+                            // Check for similar concepts (dedup detection)
+                            if let Ok(similars) = find_similar_concepts(pool, &entity.text, 0.85).await {
+                                for sim in similars {
+                                    similar_concepts.push((entity.text.clone(), sim));
+                                }
+                            }
                             Some(c.id)
                         }
                         Err(_) => None, // duplicate race — skip
@@ -726,6 +738,7 @@ pub async fn enrich_memories(
             links_created,
             concepts_created,
             concepts_linked,
+            similar_concepts,
             skipped: false,
         });
     }

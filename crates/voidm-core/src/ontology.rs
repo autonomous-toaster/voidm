@@ -1364,7 +1364,7 @@ pub struct ConceptWithSimilarityWarning {
     pub similar_concepts: Vec<SimilarConcept>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MergeCandidate {
     pub source_id: String,
     pub source_name: String,

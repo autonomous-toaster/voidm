@@ -903,7 +903,23 @@ async fn handle_merge_batch(path: &str, execute: bool, pool: &SqlitePool, json: 
 
     // Load and parse merge plan JSON
     let plan_str = fs::read_to_string(path)?;
-    let plan: MergePlan = serde_json::from_str(&plan_str)?;
+    
+    // Try to parse as MergePlan first; if that fails, try MergeCandidate array and convert
+    let plan: MergePlan = match serde_json::from_str(&plan_str) {
+        Ok(p) => p,
+        Err(_) => {
+            // Try parsing as array of MergeCandidate (from find-merge-candidates output)
+            let candidates: Vec<voidm_core::ontology::MergeCandidate> = serde_json::from_str(&plan_str)?;
+            
+            // Convert to MergePlan
+            let merges = candidates.into_iter().map(|c| voidm_core::models::MergePair {
+                source: c.source_id,
+                target: c.target_id,
+            }).collect();
+            
+            MergePlan { merges }
+        }
+    };
 
     if execute {
         // Execute the merge batch in a transaction

@@ -237,4 +237,39 @@ CREATE TABLE IF NOT EXISTS ontology_ner_processed (
     entity_count INTEGER NOT NULL DEFAULT 0,
     link_count   INTEGER NOT NULL DEFAULT 0
 );
+
+-- ── Batch merge operations (Phase 5) ───────────────────────────────────────
+
+-- Tracks individual merge operations within a batch
+CREATE TABLE IF NOT EXISTS ontology_merge_log (
+    id                TEXT PRIMARY KEY,
+    batch_id          TEXT NOT NULL,
+    source_id         TEXT NOT NULL,
+    target_id         TEXT NOT NULL,
+    edges_retargeted  INTEGER DEFAULT 0,
+    conflicts_kept    INTEGER DEFAULT 0,
+    status            TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'rolled_back', 'failed')),
+    reason            TEXT,
+    created_at        TEXT NOT NULL,
+    completed_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_merge_log_batch ON ontology_merge_log(batch_id);
+CREATE INDEX IF NOT EXISTS idx_merge_log_status ON ontology_merge_log(status);
+CREATE INDEX IF NOT EXISTS idx_merge_log_source ON ontology_merge_log(source_id);
+CREATE INDEX IF NOT EXISTS idx_merge_log_target ON ontology_merge_log(target_id);
+
+-- Tracks batch merge operations
+CREATE TABLE IF NOT EXISTS ontology_merge_batch (
+    id               TEXT PRIMARY KEY,
+    total_merges     INTEGER NOT NULL,
+    failed_merges    INTEGER DEFAULT 0,
+    conflicts        INTEGER DEFAULT 0,
+    transaction_id   TEXT,
+    created_at       TEXT NOT NULL,
+    executed_at      TEXT,
+    rolled_back_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_merge_batch_created ON ontology_merge_batch(created_at DESC);
 "#;

@@ -1686,20 +1686,18 @@ pub async fn rollback_merge(
 
     // Retarget edges back from target to source
     sqlx::query(
-        "UPDATE ontology_edges SET from_id = ? WHERE from_id = ? LIMIT ?"
+        "UPDATE ontology_edges SET from_id = ? WHERE from_id = ?"
     )
     .bind(&source_id)
     .bind(&target_id)
-    .bind(edge_count)
     .execute(&mut *tx)
     .await?;
 
     sqlx::query(
-        "UPDATE ontology_edges SET to_id = ? WHERE to_id = ? LIMIT ?"
+        "UPDATE ontology_edges SET to_id = ? WHERE to_id = ?"
     )
     .bind(&source_id)
     .bind(&target_id)
-    .bind(edge_count)
     .execute(&mut *tx)
     .await?;
 

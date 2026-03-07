@@ -31,6 +31,9 @@ pub struct SearchResult {
     /// Only set for source="graph": ID of the direct search result this was reached from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
+    /// Quality score (0.0-1.0) based on content genericity, abstraction, etc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality_score: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +67,8 @@ pub struct SearchOptions {
     pub type_filter: Option<String>,
     /// Only applied in hybrid mode. None = use config default.
     pub min_score: Option<f32>,
+    /// Minimum quality score (0.0-1.0) for results. None = no filter.
+    pub min_quality: Option<f32>,
     /// If true, expand results with graph neighbors.
     pub include_neighbors: bool,
     /// Max hops for neighbor expansion (hard cap: NEIGHBOR_MAX_DEPTH).
@@ -200,6 +205,10 @@ pub async fn search(
             }
             // Boost by importance
             let importance_boost = (m.importance as f32 - 5.0) * 0.02;
+            
+            // Use persisted quality_score from DB (already fetched via get_memory)
+            let quality_score = m.quality_score;
+            
             results.push(SearchResult {
                 id,
                 score: score + importance_boost,
@@ -214,10 +223,16 @@ pub async fn search(
                 direction: None,
                 hop_depth: None,
                 parent_id: None,
+                quality_score,
             });
         }
     }
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Apply quality filter if specified
+    if let Some(min_quality) = opts.min_quality {
+        results.retain(|r| r.quality_score.unwrap_or(0.0) >= min_quality);
+    }
 
     // Apply threshold — only in hybrid mode
     if opts.mode == SearchMode::Hybrid {
@@ -296,6 +311,10 @@ async fn expand_neighbors(
             }
             if let Some(m) = fetch_memory_by_id(pool, &hop.memory_id).await? {
                 seen.insert(hop.memory_id.clone());
+                
+                // Use persisted quality_score from DB (already fetched via get_memory)
+                let quality_score = m.quality_score;
+                
                 neighbors_to_add.push(SearchResult {
                     id: hop.memory_id,
                     score: nscore,
@@ -310,6 +329,7 @@ async fn expand_neighbors(
                     direction: Some(hop.direction),
                     hop_depth: Some(hop.depth),
                     parent_id: Some(parent_id.clone()),
+                    quality_score,
                 });
                 if neighbors_to_add.len() >= limit {
                     break 'outer;
@@ -339,6 +359,7 @@ async fn fetch_memories_newest(pool: &SqlitePool, opts: &SearchOptions) -> Resul
         direction: None,
         hop_depth: None,
         parent_id: None,
+        quality_score: m.quality_score,
     }).collect())
 }
 

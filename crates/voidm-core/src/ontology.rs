@@ -107,7 +107,7 @@ pub async fn add_concept(
     name: &str,
     description: Option<&str>,
     scope: Option<&str>,
-) -> Result<Concept> {
+) -> Result<ConceptWithSimilarityWarning> {
     // Check for exact name+scope duplicate
     let existing: Option<String> = sqlx::query_scalar(
         "SELECT id FROM ontology_concepts WHERE lower(name) = lower(?) AND (scope IS ? OR (scope IS NULL AND ? IS NULL))"
@@ -121,6 +121,9 @@ pub async fn add_concept(
     if let Some(id) = existing {
         bail!("Concept '{}' already exists (id: {}). Use 'voidm ontology concept get {}' to inspect it.", name, &id[..8], &id[..8]);
     }
+
+    // Check for similar concepts (similarity >= 0.8)
+    let similar = find_similar_concepts(pool, name, 0.8).await?;
 
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -146,7 +149,14 @@ pub async fn add_concept(
         .execute(pool)
         .await?;
 
-    Ok(Concept { id, name: name.to_string(), description: description.map(str::to_string), scope: scope.map(str::to_string), created_at: now })
+    Ok(ConceptWithSimilarityWarning {
+        id,
+        name: name.to_string(),
+        description: description.map(str::to_string),
+        scope: scope.map(str::to_string),
+        created_at: now,
+        similar_concepts: similar,
+    })
 }
 
 /// Get a concept by full or short (prefix) ID.
@@ -1117,4 +1127,244 @@ pub async fn get_concept_with_instances(pool: &SqlitePool, id: &str) -> Result<C
         subclasses,
         superclasses,
     })
+}
+
+/// Find similar concepts by name (returns matching concepts with similarity >= threshold)
+async fn find_similar_concepts(
+    pool: &SqlitePool,
+    name: &str,
+    threshold: f32,
+) -> Result<Vec<SimilarConcept>> {
+    let all_concepts: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, name FROM ontology_concepts ORDER BY name"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut similar = Vec::new();
+    let name_lower = name.to_lowercase();
+
+    for (id, concept_name) in all_concepts {
+        let similarity = strsim::jaro_winkler(&name_lower, &concept_name.to_lowercase()) as f32;
+        if similarity >= threshold && similarity < 1.0 {
+            // Get edge count
+            let edge_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ?"
+            )
+            .bind(&id)
+            .fetch_one(pool)
+            .await?;
+
+            similar.push(SimilarConcept {
+                id,
+                name: concept_name,
+                similarity,
+                edge_count,
+            });
+        }
+    }
+
+    similar.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(similar)
+}
+
+/// Find similar concepts that are candidates for merging (Jaro-Winkler similarity >= threshold).
+pub async fn find_merge_candidates(
+    pool: &SqlitePool,
+    similarity_threshold: f32,
+) -> Result<Vec<MergeCandidate>> {
+    let all_concepts: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, name FROM ontology_concepts ORDER BY name"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut candidates = Vec::new();
+    let mut seen_pairs = std::collections::HashSet::new();
+
+    for i in 0..all_concepts.len() {
+        for j in (i + 1)..all_concepts.len() {
+            let (id1, name1) = &all_concepts[i];
+            let (id2, name2) = &all_concepts[j];
+
+            // Avoid duplicate pairs (sorted)
+            let pair_key = if id1 < id2 {
+                format!("{}|{}", id1, id2)
+            } else {
+                format!("{}|{}", id2, id1)
+            };
+
+            if seen_pairs.contains(&pair_key) {
+                continue;
+            }
+            seen_pairs.insert(pair_key);
+
+            // Jaro-Winkler similarity
+            let similarity = strsim::jaro_winkler(&name1.to_lowercase(), &name2.to_lowercase()) as f32;
+
+            if similarity >= similarity_threshold as f64 as f32 {
+                // Get edge counts to decide which is "larger" (more connections)
+                let count1: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ? AND to_type = 'concept'"
+                )
+                .bind(id1)
+                .fetch_one(pool)
+                .await?;
+
+                let count2: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ? AND to_type = 'concept'"
+                )
+                .bind(id2)
+                .fetch_one(pool)
+                .await?;
+
+                // Recommend merging smaller into larger (fewer retargets)
+                let (source_id, source_name, target_id, target_name) = if count1 <= count2 {
+                    (id1.clone(), name1.clone(), id2.clone(), name2.clone())
+                } else {
+                    (id2.clone(), name2.clone(), id1.clone(), name1.clone())
+                };
+
+                candidates.push(MergeCandidate {
+                    source_id,
+                    source_name,
+                    target_id,
+                    target_name,
+                    similarity,
+                    source_edges: count1.min(count2),
+                    target_edges: count1.max(count2),
+                });
+            }
+        }
+    }
+
+    // Sort by similarity (highest first)
+    candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+
+    Ok(candidates)
+}
+
+/// Merge source_concept into target_concept: retarget all edges, preserve all memories, delete source.
+/// Transaction: all-or-nothing.
+pub async fn merge_concepts(
+    pool: &SqlitePool,
+    source_id: &str,
+    target_id: &str,
+) -> Result<MergeResult> {
+    let source_id_resolved = resolve_concept_id(pool, source_id).await?;
+    let target_id_resolved = resolve_concept_id(pool, target_id).await?;
+
+    if source_id_resolved == target_id_resolved {
+        anyhow::bail!("Cannot merge concept with itself");
+    }
+
+    let mut tx = pool.begin().await?;
+
+    // Get source concept details for response
+    let source: (String, String) = sqlx::query_as("SELECT id, name FROM ontology_concepts WHERE id = ?")
+        .bind(&source_id_resolved)
+        .fetch_one(&mut *tx)
+        .await?;
+
+    let target: (String, String) = sqlx::query_as("SELECT id, name FROM ontology_concepts WHERE id = ?")
+        .bind(&target_id_resolved)
+        .fetch_one(&mut *tx)
+        .await?;
+
+    // Delete any edges that would become duplicates after merge
+    sqlx::query(
+        "DELETE FROM ontology_edges 
+         WHERE from_id IN (SELECT from_id FROM ontology_edges WHERE to_id = ? AND rel_type = 'INSTANCE_OF')
+         AND to_id = ? AND rel_type = 'INSTANCE_OF'"
+    )
+    .bind(&source_id_resolved)
+    .bind(&target_id_resolved)
+    .execute(&mut *tx)
+    .await?;
+
+    // Retarget all INSTANCE_OF edges (memory → source) to point to target
+    sqlx::query(
+        "UPDATE ontology_edges SET to_id = ? WHERE to_id = ? AND rel_type = 'INSTANCE_OF'"
+    )
+    .bind(&target_id_resolved)
+    .bind(&source_id_resolved)
+    .execute(&mut *tx)
+    .await?;
+
+    // Count for response (all INSTANCE_OF edges now point to target)
+    let memory_edges: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ? AND rel_type = 'INSTANCE_OF'"
+    )
+    .bind(&target_id_resolved)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Retarget IS_A edges where source is child (source IS_A parent) → target IS_A parent
+    sqlx::query(
+        "UPDATE ontology_edges SET from_id = ? WHERE from_id = ? AND rel_type = 'IS_A'"
+    )
+    .bind(&target_id_resolved)
+    .bind(&source_id_resolved)
+    .execute(&mut *tx)
+    .await?;
+
+    // Retarget IS_A edges where source is parent (child IS_A source) → child IS_A target
+    sqlx::query(
+        "UPDATE ontology_edges SET to_id = ? WHERE to_id = ? AND rel_type = 'IS_A'"
+    )
+    .bind(&target_id_resolved)
+    .bind(&source_id_resolved)
+    .execute(&mut *tx)
+    .await?;
+
+    // Delete source concept
+    sqlx::query("DELETE FROM ontology_concepts WHERE id = ?")
+        .bind(&source_id_resolved)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await.context("Merge transaction failed")?;
+
+    Ok(MergeResult {
+        source_name: source.1,
+        target_name: target.1,
+        memory_edges_merged: memory_edges,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SimilarConcept {
+    pub id: String,
+    pub name: String,
+    pub similarity: f32,
+    pub edge_count: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConceptWithSimilarityWarning {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scope: Option<String>,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub similar_concepts: Vec<SimilarConcept>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MergeCandidate {
+    pub source_id: String,
+    pub source_name: String,
+    pub target_id: String,
+    pub target_name: String,
+    pub similarity: f32,
+    pub source_edges: i64,
+    pub target_edges: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct MergeResult {
+    pub source_name: String,
+    pub target_name: String,
+    pub memory_edges_merged: i64,
 }

@@ -37,6 +37,9 @@ pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
                 println!("ID:         {}", m.id);
                 println!("Type:       {}", m.memory_type);
                 println!("Importance: {}", m.importance);
+                if let Some(qs) = m.quality_score {
+                    println!("Quality:    {:.2}", qs);
+                }
                 println!("Created:    {}", m.created_at);
                 if !m.scopes.is_empty() { println!("Scopes:     {}", m.scopes.join(", ")); }
                 if !m.tags.is_empty()   { println!("Tags:       {}", m.tags.join(", ")); }

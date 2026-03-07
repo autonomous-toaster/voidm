@@ -45,6 +45,10 @@ pub enum ConceptCommands {
     List(ConceptListArgs),
     /// Delete a concept
     Delete(ConceptDeleteArgs),
+    /// Merge source concept into target (retargets edges, deletes source)
+    Merge(ConceptMergeArgs),
+    /// Find merge candidates (similar concepts for deduplication)
+    FindDuplicates(FindDuplicatesArgs),
 }
 
 #[derive(Args)]
@@ -128,6 +132,21 @@ pub struct ConceptDeleteArgs {
     pub id: String,
 }
 
+#[derive(Args)]
+pub struct ConceptMergeArgs {
+    /// Source concept ID (to merge from)
+    pub source: String,
+    /// Target concept ID (to merge into)
+    pub target: String,
+}
+
+#[derive(Args)]
+pub struct FindDuplicatesArgs {
+    /// Similarity threshold (0.0-1.0, default 0.8 for high similarity)
+    #[arg(long, default_value = "0.8")]
+    pub threshold: f32,
+}
+
 // ─── Edge subcommands ─────────────────────────────────────────────────────────
 
 #[derive(Args)]
@@ -205,7 +224,13 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
 
             // NLI enrichment if requested
             let suggestions = if args.enrich {
-                run_enrichment_for_concept(&concept.id, &concept_text(&concept), pool, config, 10).await
+                let concept_text = format!(
+                    "{}{}{}",
+                    &concept.name,
+                    concept.description.as_ref().map(|d| format!(" - {}", d)).unwrap_or_default(),
+                    concept.scope.as_ref().map(|s| format!(" ({})", s)).unwrap_or_default()
+                );
+                run_enrichment_for_concept(&concept.id, &concept_text, pool, config, 10).await
             } else {
                 vec![]
             };
@@ -218,8 +243,19 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
                 println!("Concept added: {} ({})", concept.name, &concept.id[..8]);
                 if let Some(ref d) = concept.description { println!("  Description: {}", d); }
                 if let Some(ref s) = concept.scope { println!("  Scope: {}", s); }
+                
+                // Show similar concepts warning
+                if !concept.similar_concepts.is_empty() {
+                    println!("\n⚠ Similar concepts found (consider merging):");
+                    for sim in &concept.similar_concepts {
+                        println!("  [{}] {} ({:.1}% similar, {} edges) — voidm ontology concept merge {} {}",
+                            &sim.id[..8], sim.name, sim.similarity * 100.0, sim.edge_count,
+                            &concept.id[..8], &sim.id[..8]);
+                    }
+                }
+                
                 if !suggestions.is_empty() {
-                    println!("Suggested relations ({}):", suggestions.len());
+                    println!("\nSuggested relations ({}):", suggestions.len());
                     for s in &suggestions {
                         println!("  [{:.2}] {} --[{}]--> {} \"{}\"",
                             s.confidence, &concept.id[..8], s.suggested_rel,
@@ -283,6 +319,43 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
             } else {
                 eprintln!("Concept '{}' not found.", args.id);
                 std::process::exit(1);
+            }
+        }
+
+        ConceptCommands::Merge(args) => {
+            let result = ontology::merge_concepts(pool, &args.source, &args.target).await?;
+            if json {
+                println!("{}", serde_json::to_string(&result)?);
+            } else {
+                println!("Merged concept '{}' into '{}'", result.source_name, result.target_name);
+                println!("  Memory edges retargeted: {}", result.memory_edges_merged);
+            }
+        }
+
+        ConceptCommands::FindDuplicates(args) => {
+            let candidates = ontology::find_merge_candidates(pool, args.threshold).await?;
+            if json {
+                println!("{}", serde_json::to_string(&candidates)?);
+            } else {
+                if candidates.is_empty() {
+                    println!("No merge candidates found at similarity >= {}", args.threshold);
+                } else {
+                    println!("Found {} merge candidates (similarity >= {}):\n", candidates.len(), args.threshold);
+                    for (idx, candidate) in candidates.iter().enumerate() {
+                        println!("{}. [{}] {} ({} edges) → [{}] {} ({} edges)", 
+                            idx + 1,
+                            candidate.source_id.chars().take(8).collect::<String>(),
+                            candidate.source_name,
+                            candidate.source_edges,
+                            candidate.target_id.chars().take(8).collect::<String>(),
+                            candidate.target_name,
+                            candidate.target_edges);
+                        println!("   Similarity: {:.2}%", candidate.similarity * 100.0);
+                        println!("   Action: voidm ontology concept merge {} {}\n", 
+                            candidate.source_id.chars().take(8).collect::<String>(),
+                            candidate.target_id.chars().take(8).collect::<String>());
+                    }
+                }
             }
         }
     }

@@ -7,7 +7,7 @@ use crate::models::{
     AddMemoryRequest, AddMemoryResponse, DuplicateWarning, EdgeType, LinkResponse,
     ConflictWarning, Memory,
 };
-use crate::{embeddings, search, vector};
+use crate::{embeddings, search, vector, quality};
 use crate::config::Config;
 
 /// Resolve a full or short (prefix) ID to a full memory ID.
@@ -47,7 +47,7 @@ pub async fn resolve_id(pool: &SqlitePool, id: &str) -> Result<String> {
 }
 
 /// Add a memory — full workflow:
-/// 1. Compute embedding (outside tx)
+/// 1. Compute embedding + quality_score (outside tx)
 /// 2. BEGIN tx
 /// 3. Insert memory + scopes + FTS + vec + graph node + links
 /// 4. COMMIT
@@ -71,6 +71,10 @@ pub async fn add_memory(pool: &SqlitePool, req: AddMemoryRequest, config: &Confi
     } else {
         None
     };
+
+    // Compute quality score OUTSIDE transaction (will persist to DB)
+    let memory_type_enum = req.memory_type.clone();
+    let quality = quality::compute_quality_score(&req.content, &memory_type_enum);
 
     // Ensure vec_memories table exists with correct dimension
     if let Some(ref emb) = embedding_result {
@@ -106,10 +110,10 @@ pub async fn add_memory(pool: &SqlitePool, req: AddMemoryRequest, config: &Confi
     // 2–8: Atomic transaction
     let mut tx = pool.begin().await?;
 
-    // Insert memory
+    // Insert memory with persistent quality_score
     sqlx::query(
-        "INSERT INTO memories (id, type, content, importance, tags, metadata, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO memories (id, type, content, importance, tags, metadata, quality_score, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&id)
     .bind(&memory_type_str)
@@ -117,6 +121,7 @@ pub async fn add_memory(pool: &SqlitePool, req: AddMemoryRequest, config: &Confi
     .bind(req.importance)
     .bind(&tags_json)
     .bind(&metadata_json)
+    .bind(quality.score)
     .bind(&now)
     .bind(&now)
     .execute(&mut *tx)
@@ -251,6 +256,7 @@ pub async fn add_memory(pool: &SqlitePool, req: AddMemoryRequest, config: &Confi
         tags: req.tags,
         importance: req.importance,
         created_at: now,
+        quality_score: Some(quality.score),
         suggested_links,
         duplicate_warning,
     })
@@ -258,18 +264,28 @@ pub async fn add_memory(pool: &SqlitePool, req: AddMemoryRequest, config: &Confi
 
 /// Get a single memory by ID.
 pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
-    let row: Option<(String, String, String, i64, String, String, String, String)> = sqlx::query_as(
-        "SELECT id, type, content, importance, tags, metadata, created_at, updated_at
+    let row: Option<(String, String, String, i64, String, String, Option<f32>, String, String)> = sqlx::query_as(
+        "SELECT id, type, content, importance, tags, metadata, quality_score, created_at, updated_at
          FROM memories WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
 
-    if let Some((id, memory_type, content, importance, tags_json, metadata_json, created_at, updated_at)) = row {
+    if let Some((id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, created_at, updated_at)) = row {
         let scopes = get_scopes(pool, &id).await?;
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
         let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or(serde_json::Value::Object(Default::default()));
+        
+        // Use persisted quality_score if available, otherwise compute and return
+        let quality_score = if let Some(score) = quality_score_db {
+            Some(score)
+        } else {
+            let memory_type_enum: crate::models::MemoryType = memory_type.parse().unwrap_or(crate::models::MemoryType::Semantic);
+            let quality_score_val = quality::compute_quality_score(&content, &memory_type_enum);
+            Some(quality_score_val.score)
+        };
+        
         Ok(Some(Memory {
             id,
             memory_type,
@@ -280,6 +296,7 @@ pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
             scopes,
             created_at,
             updated_at,
+            quality_score,
         }))
     } else {
         Ok(None)
@@ -294,10 +311,10 @@ pub async fn list_memories(
     limit: usize,
 ) -> Result<Vec<Memory>> {
     // Build query dynamically
-    let rows: Vec<(String, String, String, i64, String, String, String, String)> = if let Some(scope) = scope_filter {
+    let rows: Vec<(String, String, String, i64, String, String, Option<f32>, String, String)> = if let Some(scope) = scope_filter {
         let scope_prefix = format!("{}%", scope);
         sqlx::query_as(
-            "SELECT DISTINCT m.id, m.type, m.content, m.importance, m.tags, m.metadata, m.created_at, m.updated_at
+            "SELECT DISTINCT m.id, m.type, m.content, m.importance, m.tags, m.metadata, m.quality_score, m.created_at, m.updated_at
              FROM memories m
              JOIN memory_scopes ms ON ms.memory_id = m.id
              WHERE ms.scope LIKE ?
@@ -309,7 +326,7 @@ pub async fn list_memories(
         .await?
     } else {
         sqlx::query_as(
-            "SELECT id, type, content, importance, tags, metadata, created_at, updated_at
+            "SELECT id, type, content, importance, tags, metadata, quality_score, created_at, updated_at
              FROM memories ORDER BY created_at DESC LIMIT ?"
         )
         .bind(limit as i64)
@@ -318,14 +335,35 @@ pub async fn list_memories(
     };
 
     let mut memories = Vec::new();
-    for (id, memory_type, content, importance, tags_json, metadata_json, created_at, updated_at) in rows {
+    for (id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, created_at, updated_at) in rows {
         if let Some(t) = type_filter {
             if memory_type != t { continue; }
         }
         let scopes = get_scopes(pool, &id).await?;
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
         let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_default();
-        memories.push(Memory { id, memory_type, content, importance, tags, metadata, scopes, created_at, updated_at });
+        
+        // Use persisted quality_score if available, otherwise compute
+        let quality_score = if let Some(score) = quality_score_db {
+            Some(score)
+        } else {
+            let memory_type_enum: crate::models::MemoryType = memory_type.parse().unwrap_or(crate::models::MemoryType::Semantic);
+            let quality_score_val = quality::compute_quality_score(&content, &memory_type_enum);
+            Some(quality_score_val.score)
+        };
+        
+        memories.push(Memory { 
+            id, 
+            memory_type, 
+            content, 
+            importance, 
+            tags, 
+            metadata, 
+            scopes, 
+            created_at, 
+            updated_at,
+            quality_score,
+        });
     }
     Ok(memories)
 }

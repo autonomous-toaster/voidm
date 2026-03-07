@@ -71,6 +71,9 @@ pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) 
     } else {
         println!("Added memory: {}", resp.id);
         println!("Type: {}  Importance: {}", resp.memory_type, resp.importance);
+        if let Some(qs) = resp.quality_score {
+            println!("Quality: {:.2}", qs);
+        }
         if !resp.scopes.is_empty() {
             println!("Scopes: {}", resp.scopes.join(", "));
         }

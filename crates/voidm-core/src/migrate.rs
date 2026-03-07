@@ -5,25 +5,50 @@ use sqlx::SqlitePool;
 /// Idempotent — safe to run on every startup.
 pub async fn run(pool: &SqlitePool) -> Result<()> {
     sqlx::query(SCHEMA).execute(pool).await?;
+    upgrade_add_quality_score(pool).await?;
+    Ok(())
+}
+
+/// Add quality_score column to existing memories table (Phase 2)
+/// Safe to run multiple times (idempotent via IF NOT EXISTS... / PRAGMA table_info)
+async fn upgrade_add_quality_score(pool: &SqlitePool) -> Result<()> {
+    // Check if quality_score column already exists
+    let column_exists: (bool,) = sqlx::query_as(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('memories') WHERE name = 'quality_score'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !column_exists.0 {
+        sqlx::query("ALTER TABLE memories ADD COLUMN quality_score REAL")
+            .execute(pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_quality_score ON memories(quality_score DESC)")
+            .execute(pool)
+            .await?;
+    }
+
     Ok(())
 }
 
 const SCHEMA: &str = r#"
 -- Core memory storage
 CREATE TABLE IF NOT EXISTS memories (
-    id          TEXT PRIMARY KEY,
-    type        TEXT NOT NULL CHECK (type IN ('episodic','semantic','procedural','conceptual','contextual')),
-    content     TEXT NOT NULL,
-    importance  INTEGER NOT NULL DEFAULT 5 CHECK (importance BETWEEN 1 AND 10),
-    tags        TEXT NOT NULL DEFAULT '[]',
-    metadata    TEXT NOT NULL DEFAULT '{}',
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    id            TEXT PRIMARY KEY,
+    type          TEXT NOT NULL CHECK (type IN ('episodic','semantic','procedural','conceptual','contextual')),
+    content       TEXT NOT NULL,
+    importance    INTEGER NOT NULL DEFAULT 5 CHECK (importance BETWEEN 1 AND 10),
+    tags          TEXT NOT NULL DEFAULT '[]',
+    metadata      TEXT NOT NULL DEFAULT '{}',
+    quality_score REAL,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_memories_type       ON memories(type);
-CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_type          ON memories(type);
+CREATE INDEX IF NOT EXISTS idx_memories_created_at    ON memories(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_importance    ON memories(importance DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_quality_score ON memories(quality_score DESC);
 
 -- Full-text search virtual table for BM25
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(

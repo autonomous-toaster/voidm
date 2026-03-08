@@ -874,7 +874,7 @@ async fn run_enrich_memories(
     let opts = voidm_core::ontology::EnrichMemoriesOpts {
         scope: args.scope.as_deref(),
         min_score: args.min_score,
-        add: args.add,
+        add: true,  // ALWAYS add new concepts (default behavior changed)
         force: args.force,
         dry_run: args.dry_run,
         limit: args.limit,
@@ -933,8 +933,33 @@ async fn run_enrich_memories(
         processed, total, total_links, total_created,
     );
 
-    if !args.add && total_links < processed {
-        println!("Tip: use --add to automatically create missing concepts.");
+    // Auto-dedup newly created concepts (if not dry-run)
+    if !args.dry_run && total_created > 0 {
+        if !json {
+            println!("\nAuto-deduplicating newly created concepts...");
+        }
+        let candidates = ontology::find_merge_candidates(pool, 0.90).await?;
+        if candidates.len() > 0 {
+            let plan = voidm_core::models::MergePlan {
+                merges: candidates
+                    .iter()
+                    .map(|c| voidm_core::models::MergePair {
+                        source: c.source_id.clone(),
+                        target: c.target_id.clone(),
+                    })
+                    .collect(),
+            };
+            let batch_id = Uuid::new_v4().to_string();
+            if let Ok(result) = ontology::execute_merge_batch(pool, &batch_id, &plan).await {
+                if !json {
+                    println!("✓ Deduplicated {} concept pairs", result.succeeded);
+                }
+            }
+        } else {
+            if !json {
+                println!("✓ No duplicates found");
+            }
+        }
     }
 
     Ok(())
@@ -1185,6 +1210,8 @@ async fn run_auto_improve(
         println!("═══════════════════════════════════════════════════════════\n");
     }
 
+    let mut enrich_results: Vec<serde_json::Value> = Vec::new();
+
     // Step 1: Enrich memories with auto-add (skip if --merge-only)
     if !args.merge_only {
         if !json {
@@ -1239,7 +1266,7 @@ async fn run_auto_improve(
             println!("═══════════════════════════════════════════════════════════");
             println!("Database is clean and optimized.");
         } else {
-            println!("{{\"status\": \"complete\", \"duplicates_found\": 0}}");
+            println!("{{\"status\":\"ok\",\"duplicates\":0}}");
         }
         return Ok(());
     }
@@ -1255,8 +1282,7 @@ async fn run_auto_improve(
             .collect(),
     };
 
-    // For auto-improve, auto-execute unless --dry-run or not --force
-    // (Different from merge-batch which defaults to preview)
+    // For auto-improve, auto-execute unless --dry-run
     if args.dry_run {
         // Show preview in dry-run mode
         if !json {
@@ -1276,8 +1302,7 @@ async fn run_auto_improve(
             }
             println!("\n(dry-run: no changes will be made)");
         } else {
-            println!("{{\"status\": \"preview\", \"duplicates\": {}, \"threshold\": {}}}", 
-                candidates.len(), args.threshold);
+            println!("{{\"status\":\"preview\",\"duplicates\":{}}}", candidates.len());
         }
         return Ok(());
     }
@@ -1287,7 +1312,8 @@ async fn run_auto_improve(
     let result = ontology::execute_merge_batch(pool, &batch_id, &plan).await?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        // Agent-friendly JSON: minimal, single line
+        println!("{{\"status\":\"ok\",\"merged\":{},\"conflicts\":{}}}", result.succeeded, result.conflicts);
     } else {
         println!("✓ Merged {} concept pairs\n", result.succeeded);
         if result.failed > 0 {

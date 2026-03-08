@@ -636,12 +636,6 @@ async fn resolve_node_id(pool: &SqlitePool, id: &str, kind: &NodeKind) -> Result
 // ─── NLI enrichment ──────────────────────────────────────────────────────────
 
 /// Build a text representation for NLI scoring from a concept.
-fn concept_text(c: &ontology::Concept) -> String {
-    match &c.description {
-        Some(d) => format!("{}: {}", c.name, d),
-        None => c.name.clone(),
-    }
-}
 
 /// Run NLI enrichment for a single concept against all other concepts.
 /// Returns relation suggestions sorted by confidence.
@@ -1209,8 +1203,6 @@ async fn run_auto_improve(
         println!("Auto-Improve: Merging duplicate concepts");
         println!("═══════════════════════════════════════════════════════════\n");
     }
-
-    let mut enrich_results: Vec<serde_json::Value> = Vec::new();
 
     // Step 1: Enrich memories with auto-add (skip if --merge-only)
     if !args.merge_only {

@@ -32,6 +32,9 @@ pub enum OntologyCommands {
     Extract(ExtractArgs),
     /// Batch-enrich all memories with NER entity extraction, auto-linking to existing concepts
     EnrichMemories(EnrichMemoriesArgs),
+    /// Auto-improve database: enrich memories + auto-merge duplicates (one command)
+    #[command(alias = "improve")]
+    AutoImprove(AutoImproveArgs),
 }
 
 // ─── Concept subcommands ──────────────────────────────────────────────────────
@@ -59,6 +62,9 @@ pub enum ConceptCommands {
     RollbackMerge(RollbackMergeArgs),
     /// List merge operation history
     MergeHistory(MergeHistoryArgs),
+    /// Auto-merge similar concepts (one-command database cleanup)
+    #[command(alias = "auto", alias = "cleanup")]
+    AutoMerge(AutoMergeArgs),
 }
 
 #[derive(Args)]
@@ -118,6 +124,25 @@ pub struct EnrichMemoriesArgs {
     /// Max number of memories to process (default: all)
     #[arg(long, default_value = "0")]
     pub limit: usize,
+}
+
+#[derive(Args)]
+pub struct AutoImproveArgs {
+    /// Minimum NER confidence score for enrichment (default: 0.7)
+    #[arg(long, default_value = "0.7")]
+    pub min_score: f32,
+    /// Similarity threshold for auto-merge (default: 0.90)
+    #[arg(long, default_value = "0.90")]
+    pub threshold: f32,
+    /// Dry-run: show what would be done without making changes
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Skip preview and run immediately
+    #[arg(long)]
+    pub force: bool,
+    /// Only process memories with this scope prefix
+    #[arg(long, short)]
+    pub scope: Option<String>,
 }
 
 #[derive(Args)]
@@ -192,6 +217,19 @@ pub struct MergeHistoryArgs {
     pub status: Option<String>,
 }
 
+#[derive(Args)]
+pub struct AutoMergeArgs {
+    /// Similarity threshold (0.0-1.0, default 0.90 for high confidence)
+    #[arg(long, short, default_value = "0.90")]
+    pub threshold: f32,
+    /// Dry-run: show what would be merged without making changes
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Skip preview and merge immediately
+    #[arg(long)]
+    pub force: bool,
+}
+
 // ─── Edge subcommands ─────────────────────────────────────────────────────────
 
 #[derive(Args)]
@@ -251,6 +289,7 @@ pub async fn run(cmd: OntologyCommands, pool: &SqlitePool, config: &Config, json
         OntologyCommands::Benchmark => run_benchmark(json).await,
         OntologyCommands::Extract(args) => run_extract(args, pool, json).await,
         OntologyCommands::EnrichMemories(args) => run_enrich_memories(args, pool, json).await,
+        OntologyCommands::AutoImprove(args) => run_auto_improve(args, pool, json).await,
     }
 }
 
@@ -424,6 +463,9 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
         }
         ConceptCommands::MergeHistory(args) => {
             handle_merge_history(args.batch.as_deref(), args.status.as_deref(), pool, json).await?;
+        }
+        ConceptCommands::AutoMerge(args) => {
+            handle_automerge(args.threshold, args.dry_run, args.force, pool, json).await?;
         }
     }
     Ok(())
@@ -1036,6 +1078,215 @@ async fn handle_merge_history(
             }
             println!("      At: {}", entry.created_at);
         }
+    }
+
+    Ok(())
+}
+
+async fn handle_automerge(
+    threshold: f32,
+    dry_run: bool,
+    force: bool,
+    pool: &SqlitePool,
+    json: bool,
+) -> Result<()> {
+    use voidm_core::models::MergePlan;
+
+    // Find all candidates above threshold
+    let candidates = ontology::find_merge_candidates(pool, threshold).await?;
+
+    if candidates.is_empty() {
+        if !json {
+            println!("✓ Database is clean: no duplicate concepts found above {:.0}% similarity", threshold * 100.0);
+        } else {
+            println!("{{\"status\": \"clean\", \"candidates\": 0}}");
+        }
+        return Ok(());
+    }
+
+    // Convert to merge plan
+    let plan = MergePlan {
+        merges: candidates
+            .iter()
+            .map(|c| voidm_core::models::MergePair {
+                source: c.source_id.clone(),
+                target: c.target_id.clone(),
+            })
+            .collect(),
+    };
+
+    // Show preview unless --force is set
+    if !force && !dry_run {
+        if !json {
+            println!("Auto-Merge Preview:");
+            println!("───────────────────────────────────────────────────────────");
+            println!("Found {} duplicate concept pairs above {:.0}% similarity", candidates.len(), threshold * 100.0);
+            println!();
+            for (idx, candidate) in candidates.iter().enumerate() {
+                println!("{}. [{}] {} ({} edges) → [{}] {} ({} edges)",
+                    idx + 1,
+                    candidate.source_id.chars().take(8).collect::<String>(),
+                    candidate.source_name,
+                    candidate.source_edges,
+                    candidate.target_id.chars().take(8).collect::<String>(),
+                    candidate.target_name,
+                    candidate.target_edges);
+                println!("   Similarity: {:.1}%\n", candidate.similarity * 100.0);
+            }
+            println!("Execute merge with: voidm ontology concept automerge --threshold {} --force", threshold);
+        } else {
+            println!("{{\"status\": \"preview\", \"candidates\": {}, \"threshold\": {}}}", candidates.len(), threshold);
+        }
+        return Ok(());
+    }
+
+    // Execute merge
+    let batch_id = Uuid::new_v4().to_string();
+    let result = ontology::execute_merge_batch(pool, &batch_id, &plan).await?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("Auto-Merge Complete:");
+        println!("───────────────────────────────────────────────────────────");
+        println!("✓ Batch ID: {}", result.batch_id);
+        println!("✓ Merged: {}/{} concept pairs", result.succeeded, result.total);
+        if result.failed > 0 {
+            println!("⚠ Failed: {}", result.failed);
+            for (source, target, reason) in &result.errors {
+                println!("  - {} → {}: {}", &source[..8], &target[..8], reason);
+            }
+        }
+        if result.conflicts > 0 {
+            println!("⚠ Conflicts kept: {} (both CONTRADICTS edges preserved)", result.conflicts);
+        }
+        println!("Edges retargeted: {}", result.edges_retargeted);
+        println!("\nDatabase improved. Run again to check for more duplicates.");
+    }
+
+    Ok(())
+}
+
+// ─── Auto-improve handler ──────────────────────────────────────────────────────
+
+async fn run_auto_improve(
+    args: AutoImproveArgs,
+    pool: &SqlitePool,
+    json: bool,
+) -> Result<()> {
+    if !json {
+        println!("Auto-Improve: Enriching memories + Auto-merging duplicates");
+        println!("═══════════════════════════════════════════════════════════\n");
+    }
+
+    // Step 1: Enrich memories with auto-add
+    if !json {
+        println!("Step 1: Enriching memories...");
+    }
+    let enrich_args = EnrichMemoriesArgs {
+        scope: args.scope.clone(),
+        min_score: args.min_score,
+        add: true,  // Always auto-add new concepts
+        force: false,
+        dry_run: args.dry_run,
+        limit: 0,  // Process all
+    };
+
+    if args.dry_run {
+        if !json {
+            println!("(dry-run mode: no changes will be written)\n");
+        }
+        return Ok(());
+    }
+
+    // Run enrich_memories
+    match run_enrich_memories(enrich_args, pool, json).await {
+        Ok(_) => {
+            if !json {
+                println!("\n✓ Memory enrichment complete\n");
+            }
+        }
+        Err(e) => {
+            if !json {
+                println!("\n⚠ Enrichment had warnings (continuing): {}\n", e);
+            }
+        }
+    }
+
+    // Step 2: Auto-merge duplicates
+    if !json {
+        println!("Step 2: Auto-merging similar concepts...");
+    }
+
+    let candidates = ontology::find_merge_candidates(pool, args.threshold).await?;
+
+    if candidates.is_empty() {
+        if !json {
+            println!("✓ No duplicates found above {:.0}% similarity\n", args.threshold * 100.0);
+            println!("═══════════════════════════════════════════════════════════");
+            println!("Database is clean and optimized.");
+        } else {
+            println!("{{\"status\": \"complete\", \"duplicates_found\": 0}}");
+        }
+        return Ok(());
+    }
+
+    // Convert to merge plan and execute
+    let plan = voidm_core::models::MergePlan {
+        merges: candidates
+            .iter()
+            .map(|c| voidm_core::models::MergePair {
+                source: c.source_id.clone(),
+                target: c.target_id.clone(),
+            })
+            .collect(),
+    };
+
+    // Show preview unless --force
+    if !args.force {
+        if !json {
+            println!("Found {} duplicate concept pairs above {:.0}% similarity\n", 
+                candidates.len(), args.threshold * 100.0);
+            for (idx, candidate) in candidates.iter().take(5).enumerate() {
+                println!("{}. [{}] {} → [{}] {} ({}% similar)",
+                    idx + 1,
+                    candidate.source_id.chars().take(8).collect::<String>(),
+                    candidate.source_name,
+                    candidate.target_id.chars().take(8).collect::<String>(),
+                    candidate.target_name,
+                    (candidate.similarity * 100.0) as i32);
+            }
+            if candidates.len() > 5 {
+                println!("... and {} more", candidates.len() - 5);
+            }
+            println!("\nExecute merge with: voidm auto-improve --threshold {} --force", args.threshold);
+        } else {
+            println!("{{\"status\": \"preview\", \"duplicates\": {}, \"threshold\": {}}}", 
+                candidates.len(), args.threshold);
+        }
+        return Ok(());
+    }
+
+    // Execute merge
+    let batch_id = Uuid::new_v4().to_string();
+    let result = ontology::execute_merge_batch(pool, &batch_id, &plan).await?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("✓ Merged {} concept pairs\n", result.succeeded);
+        if result.failed > 0 {
+            println!("⚠ Failed: {}", result.failed);
+        }
+        if result.conflicts > 0 {
+            println!("⚠ Conflicts: {} CONTRADICTS edges preserved", result.conflicts);
+        }
+
+        println!("\n═══════════════════════════════════════════════════════════");
+        println!("Auto-Improve Complete:");
+        println!("✓ Memories enriched with new concepts");
+        println!("✓ Database deduplicated");
+        println!("\nRun again to check for more opportunities.");
     }
 
     Ok(())

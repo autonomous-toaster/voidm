@@ -43,6 +43,8 @@ pub enum Commands {
     Link(commands::link::LinkArgs),
     /// Remove a graph edge
     Unlink(commands::unlink::UnlinkArgs),
+    /// Initialize voidm: download and cache all models
+    Init(commands::init::InitArgs),
     /// Graph operations
     #[command(subcommand)]
     Graph(commands::graph::GraphCommands),
@@ -133,6 +135,9 @@ async fn run(cli: Cli) -> Result<()> {
             let config = Config::load();
             return commands::info::run(args.clone(), &config, cli.db.as_deref(), cli.json);
         }
+        Commands::Init(args) => {
+            return commands::init::run(args.clone()).await;
+        }
         Commands::Models(cmd) => {
             if let commands::models::ModelsCommands::List = cmd {
                 return commands::models::run_list(cli.json);
@@ -182,6 +187,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Models(cmd) => commands::models::run(cmd, &pool, &config, cli.json).await,
         Commands::Instructions(_) => unreachable!(),
         Commands::Info(_) => unreachable!(),
+        Commands::Init(_) => unreachable!(),
         Commands::Stats(args) => commands::stats::run(args, &pool, &config, cli.json).await,
     }
 }

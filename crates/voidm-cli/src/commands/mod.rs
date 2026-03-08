@@ -15,3 +15,4 @@ pub mod models;
 pub mod instructions;
 pub mod info;
 pub mod stats;
+pub mod init;

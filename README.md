@@ -40,13 +40,15 @@ cp target/release/voidm ~/.local/bin/
 
 ### Model Initialization (Optional)
 
-To pre-download all models before use (useful for CI/offline environments):
+To pre-download models for offline use (useful for CI):
 
 ```bash
 voidm init
 ```
 
-This downloads all 9 models (7 embeddings + NER + NLI) sequentially to `~/.cache/voidm/models/`. Idempotent—skips already-cached models. Useful in CI pipelines to avoid concurrent download conflicts.
+This downloads the configured embedding model (default: `Xenova/all-MiniLM-L6-v2`), NER, and NLI models to `~/.cache/voidm/models/`. Total: ~300-400 MB. Idempotent—skips already-cached models.
+
+If you change the embedding model later via `voidm config set embeddings.model <name>`, the new model will be automatically downloaded on first use.
 
 ---
 

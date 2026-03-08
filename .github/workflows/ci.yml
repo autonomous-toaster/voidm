@@ -19,19 +19,11 @@ jobs:
       - name: Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-
-      - name: Pre-cache NLI model
-        env:
-          HF_HOME: /home/runner/.cache/voidm/models
-        run: |
-          uv tool run --with huggingface-hub python -c "from huggingface_hub import snapshot_download; snapshot_download('cross-encoder/nli-deberta-v3-small')"
-
       - name: Build
         run: cargo build --release
 
+      - name: Initialize models
+        run: cargo run --release -- init
+
       - name: Test
-        env:
-          HF_HOME: /home/runner/.cache/voidm/models
         run: cargo test --release -- --test-threads=4

@@ -1669,7 +1669,7 @@ pub async fn rollback_merge(
     .fetch_optional(pool)
     .await?;
 
-    let (source_id, target_id, edge_count) = entry.ok_or_else(|| anyhow::anyhow!("Merge not found: {}", merge_id))?;
+    let (source_id, target_id, _edge_count) = entry.ok_or_else(|| anyhow::anyhow!("Merge not found: {}", merge_id))?;
     let now = chrono::Local::now().to_rfc3339();
 
     let mut tx = pool.begin().await?;

@@ -143,6 +143,9 @@ pub struct AutoImproveArgs {
     /// Only process memories with this scope prefix
     #[arg(long, short)]
     pub scope: Option<String>,
+    /// Skip enrichment step, only merge duplicates (much faster)
+    #[arg(long)]
+    pub merge_only: bool,
 }
 
 #[derive(Args)]
@@ -1174,48 +1177,58 @@ async fn run_auto_improve(
     pool: &SqlitePool,
     json: bool,
 ) -> Result<()> {
-    if !json {
+    if !json && !args.merge_only {
         println!("Auto-Improve: Enriching memories + Auto-merging duplicates");
+        println!("═══════════════════════════════════════════════════════════\n");
+    } else if !json && args.merge_only {
+        println!("Auto-Improve: Merging duplicate concepts");
         println!("═══════════════════════════════════════════════════════════\n");
     }
 
-    // Step 1: Enrich memories with auto-add
-    if !json {
-        println!("Step 1: Enriching memories...");
-    }
-    let enrich_args = EnrichMemoriesArgs {
-        scope: args.scope.clone(),
-        min_score: args.min_score,
-        add: true,  // Always auto-add new concepts
-        force: false,
-        dry_run: args.dry_run,
-        limit: 0,  // Process all
-    };
+    // Step 1: Enrich memories with auto-add (skip if --merge-only)
+    if !args.merge_only {
+        if !json {
+            println!("Step 1: Enriching memories...");
+        }
+        let enrich_args = EnrichMemoriesArgs {
+            scope: args.scope.clone(),
+            min_score: args.min_score,
+            add: true,  // Always auto-add new concepts
+            force: args.force,  // Pass through the force flag
+            dry_run: args.dry_run,
+            limit: 0,  // Process all
+        };
 
-    if args.dry_run {
+        if args.dry_run {
+            if !json {
+                println!("(dry-run mode: no changes will be written)\n");
+            }
+            return Ok(());
+        }
+
+        // Run enrich_memories
+        match run_enrich_memories(enrich_args, pool, json).await {
+            Ok(_) => {
+                if !json {
+                    println!("\n✓ Memory enrichment complete\n");
+                }
+            }
+            Err(e) => {
+                if !json {
+                    println!("\n⚠ Enrichment had warnings (continuing): {}\n", e);
+                }
+            }
+        }
+    } else if args.dry_run {
         if !json {
             println!("(dry-run mode: no changes will be written)\n");
         }
         return Ok(());
     }
 
-    // Run enrich_memories
-    match run_enrich_memories(enrich_args, pool, json).await {
-        Ok(_) => {
-            if !json {
-                println!("\n✓ Memory enrichment complete\n");
-            }
-        }
-        Err(e) => {
-            if !json {
-                println!("\n⚠ Enrichment had warnings (continuing): {}\n", e);
-            }
-        }
-    }
-
-    // Step 2: Auto-merge duplicates
+    // Step 2: Auto-merge duplicates (always run this)
     if !json {
-        println!("Step 2: Auto-merging similar concepts...");
+        println!("Step {}: Auto-merging similar concepts...", if args.merge_only { 1 } else { 2 });
     }
 
     let candidates = ontology::find_merge_candidates(pool, args.threshold).await?;
@@ -1242,8 +1255,10 @@ async fn run_auto_improve(
             .collect(),
     };
 
-    // Show preview unless --force
-    if !args.force {
+    // For auto-improve, auto-execute unless --dry-run or not --force
+    // (Different from merge-batch which defaults to preview)
+    if args.dry_run {
+        // Show preview in dry-run mode
         if !json {
             println!("Found {} duplicate concept pairs above {:.0}% similarity\n", 
                 candidates.len(), args.threshold * 100.0);
@@ -1259,7 +1274,7 @@ async fn run_auto_improve(
             if candidates.len() > 5 {
                 println!("... and {} more", candidates.len() - 5);
             }
-            println!("\nExecute merge with: voidm auto-improve --threshold {} --force", args.threshold);
+            println!("\n(dry-run: no changes will be made)");
         } else {
             println!("{{\"status\": \"preview\", \"duplicates\": {}, \"threshold\": {}}}", 
                 candidates.len(), args.threshold);
@@ -1284,7 +1299,9 @@ async fn run_auto_improve(
 
         println!("\n═══════════════════════════════════════════════════════════");
         println!("Auto-Improve Complete:");
-        println!("✓ Memories enriched with new concepts");
+        if !args.merge_only {
+            println!("✓ Memories enriched with new concepts");
+        }
         println!("✓ Database deduplicated");
         println!("\nRun again to check for more opportunities.");
     }

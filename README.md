@@ -9,13 +9,17 @@ Local-first persistent memory for LLM agents.
 ## Features
 
 - **Hybrid search** — vector (ANN), BM25, fuzzy, keyword, or combined with RRF scoring
+- **Quality scoring** — automatic scoring (0.0-1.0) for all memories; filtering by quality threshold
 - **Knowledge graph** — link memories with typed directed edges (SUPPORTS, DERIVED_FROM, PART_OF, …)
 - **Ontology layer** — first-class concept nodes, IS-A hierarchies, INSTANCE_OF links, subsumption queries
+- **Concept deduplication** — manual merge, auto-detection, prevention at creation time; batch merge operations
+- **Graph visualization** — export as interactive HTML, DOT (Graphviz), JSON, CSV; force-directed layout
 - **Local NER** — entity extraction via `Xenova/bert-base-NER` (ONNX, ~103 MB, downloaded once)
 - **Local NLI** — relation classification + contradiction detection via `cross-encoder/nli-deberta-v3-small`
 - **Conflict management** — surface CONTRADICTS edges, resolve with INVALIDATES
 - **Cypher queries** — read-only graph traversal; `:Memory` and `:Concept` node labels both supported
-- **Local embeddings** — [fastembed](https://github.com/Anush008/fastembed-rs) + ONNX, `all-MiniLM-L6-v2` by default
+- **Local embeddings** — [fastembed](https://github.com/Anush008/fastembed-rs) + ONNX, 7 models available
+- **Model initialization** — `voidm init` pre-downloads all models for offline use (CI-friendly)
 - **Auto-init** — DB created on first write, no setup step
 - **Short IDs** — use any 4+ char UUID prefix instead of full IDs
 - **JSON output** — every command supports `--json` for agent consumption
@@ -33,6 +37,16 @@ cp target/release/voidm ~/.local/bin/
 
 > Requires Rust 1.70+. SQLite is bundled — no system dependencies.  
 > ML models are downloaded on first use to `~/.cache/voidm/`.
+
+### Model Initialization (Optional)
+
+To pre-download all models before use (useful for CI/offline environments):
+
+```bash
+voidm init
+```
+
+This downloads all 9 models (7 embeddings + NER + NLI) sequentially to `~/.cache/voidm/models/`. Idempotent—skips already-cached models. Useful in CI pipelines to avoid concurrent download conflicts.
 
 ---
 
@@ -54,6 +68,18 @@ voidm search "database" --scope work/acme --mode semantic
 voidm search "migration" --min-score 0 --limit 20 --json
 ```
 
+Filter by quality score (0.0-1.0, added automatically):
+
+```bash
+# Only high-quality memories (0.8+)
+voidm search "pattern" --min-quality 0.8 --limit 10
+
+# All memories regardless of quality
+voidm search "pattern" --min-quality 0.0
+```
+
+Quality scores reflect genericity, abstraction, temporal independence, and substance. Use `--min-quality` to skip low-confidence memories.
+
 ### Link memories together
 
 ```bash
@@ -74,6 +100,24 @@ voidm graph cypher "MATCH (c:Concept) WHERE c.name = 'AuthService' RETURN c.id, 
 ```
 
 Supported Cypher clauses: `MATCH`, `WHERE`, `RETURN`, `ORDER BY`, `LIMIT`, `WITH`. Write operations are rejected. Both `:Memory` and `:Concept` node labels are supported.
+
+### Export and visualize the graph
+
+```bash
+# Export as interactive HTML (force-directed, searchable, filterable)
+voidm graph export --format html > graph.html
+open graph.html
+
+# Export as DOT (Graphviz format)
+voidm graph export --format dot > graph.dot
+dot -Tsvg graph.dot -o graph.svg
+
+# Export as JSON (for custom tools)
+voidm graph export --format json > graph.json
+
+# Export as CSV (edge list, for spreadsheets)
+voidm graph export --format csv > edges.csv
+```
 
 ---
 
@@ -148,6 +192,49 @@ voidm ontology concept add "..." --enrich   # enrich at creation time
 
 The NLI model (`cross-encoder/nli-deberta-v3-small`) is downloaded once to `~/.cache/voidm/nli/`. Contradiction threshold: 0.80.
 
+### Concept Deduplication
+
+voidm detects and merges duplicate concepts in three ways:
+
+#### 1. Manual Merge
+```bash
+voidm ontology concept merge <source-id> <target-id>
+# Retargets all INSTANCE_OF and IS_A edges from source to target, then deletes source
+```
+
+#### 2. Auto-Detection
+```bash
+voidm ontology concept find-merge-candidates --threshold 0.90
+# Lists concept pairs with > 90% name similarity
+
+voidm ontology concept find-merge-candidates --threshold 0.90 --output candidates.json
+# Save to file for batch processing
+```
+
+#### 3. Batch Merge (Preview & Execute)
+```bash
+# Preview impact without changing anything
+voidm ontology concept merge-batch --from candidates.json
+
+# Execute the merges
+voidm ontology concept merge-batch --from candidates.json --execute
+
+# View merge history
+voidm ontology concept merge-history
+
+# Rollback a merge if needed
+voidm ontology concept rollback-merge <merge-id>
+```
+
+#### 4. Prevention at Creation Time
+When adding a concept, similar existing concepts are checked and reported:
+```bash
+voidm ontology concept add "DatabaseConnection"
+# Warning: Similar concepts found (consider merging):
+#   - Database (87% similar, 5 edges)
+#   - DBConnection (94% similar, 3 edges)
+```
+
 ---
 
 ## Conflict Management
@@ -191,6 +278,7 @@ Resolving replaces the `CONTRADICTS` edge with an `INVALIDATES` edge (winner →
 | `voidm graph cypher "<query>"` | Read-only Cypher. `:Memory` and `:Concept` labels supported. |
 | `voidm graph path <from> <to>` | Shortest path between two memories. |
 | `voidm graph stats` | Edge counts by type. |
+| `voidm graph export --format <fmt>` | Export graph. Formats: `html` (interactive), `dot` (Graphviz), `json`, `csv`. |
 
 ### Ontology
 
@@ -208,6 +296,11 @@ Resolving replaces the `CONTRADICTS` edge with an `INVALIDATES` edge (winner →
 | `voidm ontology extract <id>` | Extract NER entities from a memory. `--add`, `--min-score`. |
 | `voidm ontology enrich-memories` | Batch NER enrichment. `--scope`, `--add`, `--force`, `--dry-run`, `--limit`. |
 | `voidm ontology enrich <text1> <text2>` | NLI relation classification between two texts. |
+| `voidm ontology concept merge <src> <tgt>` | Manually merge source concept into target. |
+| `voidm ontology concept find-merge-candidates` | Auto-detect duplicates. `--threshold` (0.0-1.0), `--output` (JSON file). |
+| `voidm ontology concept merge-batch --from <file>` | Preview or execute batch merge. Add `--execute` to apply. |
+| `voidm ontology concept merge-history` | View merge audit trail. Filter: `--batch`, `--status`. |
+| `voidm ontology concept rollback-merge <id>` | Undo a merge operation. |
 | `voidm ontology benchmark` | NLI model benchmark on built-in test pairs. |
 
 ### Conflicts
@@ -223,6 +316,7 @@ Resolving replaces the `CONTRADICTS` edge with an `INVALIDATES` edge (winner →
 |---------|-------------|
 | `voidm models list` | List available embedding models. |
 | `voidm models reembed` | Re-embed all memories with current model. |
+| `voidm init` | Pre-download all models to `~/.cache/voidm/models/`. Idempotent. |
 | `voidm config show/set` | Show or update config. |
 | `voidm info` | DB path, config path, model, search defaults. |
 | `voidm stats` | Memory counts, embedding coverage, top tags, DB size. |

@@ -964,4 +964,23 @@ mod neo4j_integration_tests {
         assert!(deleted, "Concept should be deleted");
         println!("✓ Deleted concept");
     }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_verify_migrated_memories() {
+        use crate::db::Database;
+
+        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let memories = db.list_memories(None).await.expect("Failed to list memories");
+        
+        println!("Found {} memories in Neo4j:", memories.len());
+        for mem in &memories {
+            println!("  - {} ({}): {}", mem.id, mem.memory_type, mem.content);
+        }
+        
+        assert!(memories.len() >= 2, "Should have at least 2 memories from migration");
+    }
 }

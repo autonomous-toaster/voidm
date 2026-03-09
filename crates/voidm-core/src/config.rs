@@ -248,3 +248,26 @@ pub fn save_config(config: &Config) -> Result<()> {
     std::fs::write(&path, s)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_neo4j_config() {
+        let toml_str = r#"
+[database.neo4j]
+uri = "bolt://localhost:7687"
+username = "neo4j"
+password = "neo4jneo4j"
+"#;
+        
+        let config: Config = toml::from_str(toml_str).expect("Failed to parse");
+        assert!(config.database.neo4j.is_some(), "neo4j config should be parsed");
+        if let Some(nc) = &config.database.neo4j {
+            assert_eq!(nc.uri, "bolt://localhost:7687");
+            assert_eq!(nc.username, "neo4j");
+            assert_eq!(nc.password, "neo4jneo4j");
+        }
+    }
+}

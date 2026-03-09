@@ -23,6 +23,7 @@ Local-first persistent memory for LLM agents.
 - **Auto-init** — DB created on first write, no setup step
 - **Short IDs** — use any 4+ char UUID prefix instead of full IDs
 - **JSON output** — every command supports `--json` for agent consumption
+- **MCP server** — expose assistant-friendly memory and ontology tools/resources over stdio with `voidm mcp`
 
 ---
 
@@ -68,6 +69,42 @@ voidm add "Run rake db:migrate then restart puma" --type procedural --scope work
 voidm search "deployment"
 voidm search "database" --scope work/acme --mode semantic
 voidm search "migration" --min-score 0 --limit 20 --json
+```
+
+### MCP server
+
+Expose a small assistant-focused subset of `voidm` as an MCP server over stdio:
+
+```bash
+voidm mcp --transport stdio
+```
+
+This is intended for MCP clients such as `mcporter` and other assistants. v1 exposes assistant-friendly tools for:
+- searching memories
+- storing memories (with `quality_score` and warnings)
+- deleting memories
+- linking memories
+- searching, listing, getting, and creating concepts
+- linking memories to concepts
+- linking concepts together
+
+It also exposes read-only MCP resources for recent memories/concepts and item-by-id reads.
+
+Example with `mcporter`:
+
+```bash
+npx -y mcporter list \
+  --stdio ./target/debug/voidm \
+  --stdio-arg mcp \
+  --stdio-arg --transport \
+  --stdio-arg stdio
+
+npx -y mcporter call \
+  --stdio ./target/debug/voidm \
+  --stdio-arg mcp \
+  --stdio-arg --transport \
+  --stdio-arg stdio \
+  search_concepts query=docker --output json
 ```
 
 Filter by quality score (0.0-1.0, added automatically):

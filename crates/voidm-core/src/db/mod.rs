@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, Context};
 use std::sync::Arc;
 use std::pin::Pin;
 use std::future::Future;
@@ -182,8 +182,14 @@ impl DbPool {
                 Ok(Arc::new(crate::db::sqlite::SqliteDatabase { pool }))
             }
             "neo4j" => {
-                // Phase 2: implement Neo4j connection
-                anyhow::bail!("Neo4j backend not yet implemented (Phase 2)")
+                let neo4j_config = config.neo4j.as_ref()
+                    .context("Neo4j backend selected but no [database.neo4j] config provided")?;
+                let db = crate::db::neo4j::Neo4jDatabase::connect(
+                    &neo4j_config.uri,
+                    &neo4j_config.username,
+                    &neo4j_config.password,
+                ).await?;
+                Ok(Arc::new(db))
             }
             other => {
                 anyhow::bail!("Unknown database backend: '{}'. Use 'sqlite' or 'neo4j'", other)

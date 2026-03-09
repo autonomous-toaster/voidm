@@ -29,3 +29,4 @@ voidm-graph      = { path = "../voidm-graph" }
 ort              = { version = "2.0.0-rc.10", features = ["download-binaries"] }
 hf-hub           = { version = "0.5", features = ["tokio"] }
 tokenizers       = { version = "0.22", default-features = false, features = ["onig"] }
+neo4rs           = "0.7"

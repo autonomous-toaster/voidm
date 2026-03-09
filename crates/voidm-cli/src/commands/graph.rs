@@ -468,13 +468,21 @@ async fn export_html(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
 async fn run_show(pool: &SqlitePool) -> Result<()> {
     use std::fs;
     use std::process::Command;
-    
-    // Generate HTML
-    // Capture export_html output to string by reimplementing minimal version
-    use serde_json::json;
-    
+
+    // Compute all analytics
+    let degrees = voidm_graph::compute_degrees(pool).await?;
+    let pagerank_results = voidm_graph::pagerank(pool, 0.85, 20).await?;
+    let link_strengths = voidm_graph::compute_link_strength(pool).await?;
+    let communities = voidm_graph::detect_communities(pool).await?;
+
+    let pagerank_map: std::collections::HashMap<String, f64> = pagerank_results.into_iter().collect();
+    let community_map: std::collections::HashMap<String, i32> = communities
+        .into_iter()
+        .map(|c| (c.memory_id, c.community_id))
+        .collect();
+
     let memories: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT id, type, SUBSTR(content, 1, 100) as preview FROM memories LIMIT 1000"
+        "SELECT id, type, SUBSTR(content, 1, 50) as preview FROM memories LIMIT 1000"
     )
     .fetch_all(pool)
     .await?;
@@ -485,170 +493,99 @@ async fn run_show(pool: &SqlitePool) -> Result<()> {
     .fetch_all(pool)
     .await?;
 
-    let edges: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000"
-    )
-    .fetch_all(pool)
-    .await?;
-
     let mut nodes_json = Vec::new();
+
     for (id, mem_type, preview) in &memories {
-        let color = match mem_type.as_str() {
-            "semantic" => "#ADD8E6",
-            "episodic" => "#90EE90",
-            "procedural" => "#FFFFE0",
-            "conceptual" => "#E0FFFF",
-            "contextual" => "#D3D3D3",
-            _ => "#FFFFFF",
-        };
-        nodes_json.push(json!({
-            "id": &id[..8],
+        let degree = degrees.get(id).map(|d| d.degree).unwrap_or(0);
+        let pagerank = pagerank_map.get(id).copied().unwrap_or(0.0);
+        let community = community_map.get(id).copied().unwrap_or(0);
+        let color = voidm_graph::community_color_palette(community);
+
+        nodes_json.push(serde_json::json!({
+            "id": id,
             "label": preview.replace("\"", ""),
-            "title": id,
+            "type": "memory",
+            "memory_type": mem_type,
+            "degree": degree,
+            "pagerank": pagerank,
+            "community": community,
             "color": color,
-            "shape": "box",
-            "type": "memory"
+            "communityColor": color
         }));
     }
 
     for (id, name) in &concepts {
-        nodes_json.push(json!({
-            "id": &id[..8],
+        let degree = degrees.get(id).map(|d| d.degree).unwrap_or(0);
+        let pagerank = pagerank_map.get(id).copied().unwrap_or(0.0);
+        let community = community_map.get(id).copied().unwrap_or(0);
+        let color = voidm_graph::community_color_palette(community);
+
+        nodes_json.push(serde_json::json!({
+            "id": id,
             "label": name,
-            "title": id,
-            "color": "#E6D5FA",
-            "shape": "dot",
-            "type": "concept"
+            "type": "concept",
+            "memory_type": "concept",
+            "degree": degree,
+            "pagerank": pagerank,
+            "community": community,
+            "color": color,
+            "communityColor": color
         }));
     }
 
     let mut edges_json = Vec::new();
-    for (from, to, rel) in &edges {
-        let from_id = if from.len() > 8 { &from[..8] } else { from };
-        let to_id = if to.len() > 8 { &to[..8] } else { to };
-        edges_json.push(json!({
-            "from": from_id,
-            "to": to_id,
-            "label": rel,
-            "arrows": "to",
-            "smooth": {"type": "continuous"}
+    for edge_strength in &link_strengths {
+        edges_json.push(serde_json::json!({
+            "source": edge_strength.source_id,
+            "target": edge_strength.target_id,
+            "type": edge_strength.rel_type,
+            "count": edge_strength.count,
+            "weight": edge_strength.weight,
+            "strength": edge_strength.strength
         }));
     }
 
-    let nodes_str = serde_json::to_string(&nodes_json)?;
-    let edges_str = serde_json::to_string(&edges_json)?;
-    
-    let html = create_html_viewer(&nodes_str, &edges_str);
-    
+    let num_communities = community_map.values().max().copied().unwrap_or(0) as usize + 1;
+    let density = if nodes_json.len() > 1 {
+        let max_edges = nodes_json.len() * (nodes_json.len() - 1);
+        edges_json.len() as f64 / max_edges as f64
+    } else {
+        0.0
+    };
+
+    let stats = serde_json::json!({
+        "node_count": nodes_json.len(),
+        "edge_count": edges_json.len(),
+        "density": density,
+        "num_communities": num_communities
+    });
+
+    let data_json = serde_json::json!({
+        "nodes": nodes_json,
+        "edges": edges_json,
+        "stats": stats
+    });
+
+    let data_str = serde_json::to_string(&data_json)?;
+
+    // Load D3 template
+    let template = include_str!("../../templates/graph_d3.html");
+    let html = template.replace("{DATA_JSON}", &data_str);
+
     // Write to temp file
     let temp_path = std::env::temp_dir().join("voidm_graph_viewer.html");
     fs::write(&temp_path, html)?;
-    
+
     // Open in browser
     #[cfg(target_os = "macos")]
     Command::new("open").arg(&temp_path).spawn()?;
-    
+
     #[cfg(target_os = "linux")]
     Command::new("xdg-open").arg(&temp_path).spawn()?;
-    
+
     #[cfg(target_os = "windows")]
     Command::new("cmd").args(&["/C", "start", temp_path.to_str().unwrap()]).spawn()?;
-    
+
     println!("Opened: {}", temp_path.display());
     Ok(())
-}
-
-fn create_html_viewer(nodes_str: &str, edges_str: &str) -> String {
-    format!(r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>voidm Graph Viewer</title>
-    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
-    <style type="text/css">
-        *{{ margin:0; padding:0; box-sizing:border-box; }}
-        body{{ font-family:Segoe UI, sans-serif; overflow:hidden; background:#f5f5f5; }}
-        #network{{ width:100%; height:100vh; border:1px solid #ddd; background:white; }}
-        #controls{{ position:fixed; top:10px; left:10px; background:white; padding:15px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:1000; max-width:300px; }}
-        .control-group{{ margin-bottom:12px; }}
-        label{{ display:block; margin-bottom:5px; font-weight:600; font-size:12px; color:#333; }}
-        input, select{{ width:100%; padding:6px; border:1px solid #ccc; border-radius:4px; font-size:12px; }}
-        button{{ background:#007bff; color:white; border:none; padding:8px 12px; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600; width:100%; margin-bottom:5px; }}
-        button:hover{{ background:#0056b3; }}
-        #stats{{ position:fixed; bottom:10px; left:10px; background:white; padding:12px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:1000; font-size:12px; color:#555; }}
-        #info{{ position:fixed; top:10px; right:10px; background:white; padding:15px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:1000; max-width:300px; max-height:400px; overflow-y:auto; font-size:12px; }}
-    </style>
-</head>
-<body>
-    <div id="network"></div>
-    <div id="controls">
-        <div class="control-group">
-            <label>Search</label>
-            <input type="text" id="searchInput" placeholder="Node ID or label...">
-        </div>
-        <div class="control-group">
-            <label>Filter</label>
-            <select id="filterType">
-                <option value="">All</option>
-                <option value="memory">Memories</option>
-                <option value="concept">Concepts</option>
-            </select>
-        </div>
-        <button onclick="resetView()">Reset View</button>
-        <button onclick="focusSelected()">Focus</button>
-    </div>
-    <div id="stats">
-        <strong>Nodes:</strong> <span id="nodeCount">0</span><br>
-        <strong>Edges:</strong> <span id="edgeCount">0</span>
-    </div>
-    <div id="info">
-        <strong>Node Info</strong>
-        <div id="nodeInfo">Click a node</div>
-    </div>
-
-    <script>
-        const rawNodes = {nodes_str};
-        const rawEdges = {edges_str};
-        let filteredNodes = new vis.DataSet(rawNodes);
-        let filteredEdges = new vis.DataSet(rawEdges);
-        const data = {{ nodes: filteredNodes, edges: filteredEdges }};
-        const options = {{
-            physics: {{ enabled: true, stabilization: {{ iterations: 200 }} }},
-            interaction: {{ navigationButtons: true, keyboard: true }},
-            layout: {{ randomSeed: 42 }}
-        }};
-        const network = new vis.Network(document.getElementById('network'), data, options);
-        document.getElementById('nodeCount').textContent = rawNodes.length;
-        document.getElementById('edgeCount').textContent = rawEdges.length;
-        
-        document.getElementById('searchInput').addEventListener('keyup', function() {{
-            const query = this.value.toLowerCase();
-            const node = rawNodes.find(n => n.id.includes(query) || n.label.toLowerCase().includes(query));
-            if (node) {{ network.selectNodes([node.id]); network.focus(node.id, {{ scale: 2 }}); }}
-        }});
-        
-        document.getElementById('filterType').addEventListener('change', function() {{
-            const filtered = rawNodes.filter(n => !this.value || n.type === this.value);
-            const ids = new Set(filtered.map(n => n.id));
-            filteredNodes.clear(); filtered.forEach(n => filteredNodes.add(n));
-            const fedges = rawEdges.filter(e => ids.has(e.from) && ids.has(e.to));
-            filteredEdges.clear(); fedges.forEach(e => filteredEdges.add(e));
-            document.getElementById('nodeCount').textContent = filtered.length;
-            document.getElementById('edgeCount').textContent = fedges.length;
-        }});
-        
-        network.on('selectNode', function(p) {{
-            if (p.nodes.length) {{
-                const node = rawNodes.find(n => n.id === p.nodes[0]);
-                document.getElementById('nodeInfo').innerHTML = `<strong>${{node.label}}</strong><br>ID: <code>${{node.title}}</code>`;
-            }}
-        }});
-        
-        function resetView() {{ network.fit(); }}
-        function focusSelected() {{ const s = network.getSelectedNodes(); if (s.length) network.focus(s[0], {{ scale: 2 }}); }}
-        document.addEventListener('keydown', e => {{ if (e.key === 'Escape') resetView(); }});
-    </script>
-</body>
-</html>"#, nodes_str = nodes_str, edges_str = edges_str)
 }

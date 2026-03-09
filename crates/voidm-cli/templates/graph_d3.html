@@ -183,6 +183,25 @@
         </div>
 
         <div class="control-group">
+            <label>Filter Edge Type</label>
+            <select id="filter-edge-type">
+                <option value="">All Edge Types</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>Min Degree</label>
+            <input type="range" id="filter-min-degree" min="0" max="100" value="0">
+            <span id="degree-value">0</span>
+        </div>
+
+        <div class="control-group">
+            <button id="reset-filters-btn">Clear Filters</button>
+        </div>
+
+        <div id="active-filters" style="margin-top: 8px; min-height: 20px;"></div>
+
+        <div class="control-group">
             <button id="reset-view-btn">Reset View (R)</button>
             <button id="fit-view-btn">Fit All (F)</button>
             <button id="toggle-physics-btn">Physics: ON (S)</button>
@@ -232,6 +251,36 @@
         const DATA = {DATA_JSON};
 
         // ─────────────────────────────────────────────────────────────────
+        // Edge Type Colors & Configuration
+        // ─────────────────────────────────────────────────────────────────
+        const EDGE_COLORS = {
+            'SUPPORTS': '#2ecc71',          // green
+            'CONTRADICTS': '#e74c3c',       // red
+            'DERIVED_FROM': '#3498db',      // blue
+            'PRECEDES': '#9b59b6',          // purple
+            'PART_OF': '#f39c12',           // orange
+            'EXEMPLIFIES': '#1abc9c',       // cyan
+            'INVALIDATES': '#c0392b',       // dark red
+            'RELATES_TO': '#95a5a6',        // gray
+            'IS_A': '#5dade2',              // light blue
+            'INSTANCE_OF': '#bb8fce',       // light purple
+            'HAS_PROPERTY': '#b8860b'       // brown
+        };
+
+        function getEdgeColor(edgeType) {
+            return EDGE_COLORS[edgeType] || '#cccccc';
+        }
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : { r: 204, g: 204, b: 204 };
+        }
+
+        // ─────────────────────────────────────────────────────────────────
         // Global State
         // ─────────────────────────────────────────────────────────────────
         const state = {
@@ -246,6 +295,12 @@
             colorByCommunity: true,
             physicsEnabled: true,
             zoom: d3.zoomIdentity,
+            filters: {
+                nodeType: '',
+                community: '',
+                edgeType: '',
+                minDegree: 0
+            }
         };
 
         // Canvas & D3 setup
@@ -302,8 +357,11 @@
                 const tgt = edge.target;
                 const strength = edge.strength || 1;
                 const opacity = Math.min(1, strength / 6);
-
-                ctx.strokeStyle = `rgba(100, 100, 100, ${opacity * 0.5})`;
+                
+                // Use edge type color if available, otherwise gray
+                const edgeColor = getEdgeColor(edge.type);
+                const rgbColor = hexToRgb(edgeColor);
+                ctx.strokeStyle = `rgba(${rgbColor.r}, ${rgbColor.g}, ${rgbColor.b}, ${opacity * 0.7})`;
                 ctx.lineWidth = Math.max(0.5, Math.min(3, strength / 3));
                 ctx.beginPath();
                 ctx.moveTo(src.x, src.y);
@@ -409,6 +467,12 @@
 
         document.getElementById('filter-type').addEventListener('change', applyFilters);
         document.getElementById('filter-community').addEventListener('change', applyFilters);
+        document.getElementById('filter-edge-type').addEventListener('change', applyFilters);
+        document.getElementById('filter-min-degree').addEventListener('change', (e) => {
+            document.getElementById('degree-value').textContent = e.target.value;
+            applyFilters();
+        });
+        document.getElementById('reset-filters-btn').addEventListener('click', resetAllFilters);
         document.getElementById('reset-view-btn').addEventListener('click', resetView);
         document.getElementById('fit-view-btn').addEventListener('click', fitView);
         document.getElementById('toggle-physics-btn').addEventListener('click', togglePhysics);
@@ -419,21 +483,72 @@
         function applyFilters() {
             const typeFilter = document.getElementById('filter-type').value;
             const commFilter = document.getElementById('filter-community').value;
+            const edgeTypeFilter = document.getElementById('filter-edge-type').value;
+            const minDegree = parseInt(document.getElementById('filter-min-degree').value) || 0;
 
+            // Store active filters
+            state.filters.nodeType = typeFilter;
+            state.filters.community = commFilter;
+            state.filters.edgeType = edgeTypeFilter;
+            state.filters.minDegree = minDegree;
+
+            // First, filter edges if edge type specified
+            let availableEdges = state.edges;
+            if (edgeTypeFilter) {
+                availableEdges = state.edges.filter(e => e.type === edgeTypeFilter);
+            }
+            const connectedNodeIds = new Set();
+            if (edgeTypeFilter) {
+                availableEdges.forEach(e => {
+                    connectedNodeIds.add(e.source);
+                    connectedNodeIds.add(e.target);
+                });
+            }
+
+            // Filter nodes
             state.filteredNodes = state.nodes.filter(n => {
                 if (typeFilter && n.type !== typeFilter) return false;
                 if (commFilter && n.community.toString() !== commFilter) return false;
+                if (n.degree < minDegree) return false;
+                if (edgeTypeFilter && !connectedNodeIds.has(n.id)) return false;
                 return true;
             });
 
             const nodeIds = new Set(state.filteredNodes.map(n => n.id));
-            state.filteredEdges = state.edges.filter(e => 
+            state.filteredEdges = availableEdges.filter(e => 
                 nodeIds.has(e.source) && nodeIds.has(e.target)
             );
 
+            updateActiveFiltersDisplay();
             state.selectedNode = null;
             closeInfoPanel();
             initSimulation();
+        }
+
+        function updateActiveFiltersDisplay() {
+            const filterDiv = document.getElementById('active-filters');
+            const filters = [];
+            if (state.filters.nodeType) filters.push(`Type: ${state.filters.nodeType}`);
+            if (state.filters.community) filters.push(`Community: ${state.filters.community}`);
+            if (state.filters.edgeType) filters.push(`Edge: ${state.filters.edgeType}`);
+            if (state.filters.minDegree > 0) filters.push(`Min Degree: ${state.filters.minDegree}`);
+
+            if (filters.length === 0) {
+                filterDiv.innerHTML = '';
+            } else {
+                filterDiv.innerHTML = '<strong>Active:</strong> ' + filters.join(', ');
+                filterDiv.style.fontSize = '11px';
+                filterDiv.style.color = '#666';
+            }
+        }
+
+        function resetAllFilters() {
+            document.getElementById('filter-type').value = '';
+            document.getElementById('filter-community').value = '';
+            document.getElementById('filter-edge-type').value = '';
+            document.getElementById('filter-min-degree').value = '0';
+            document.getElementById('degree-value').textContent = '0';
+            applyFilters();
         }
 
         function resetView() {
@@ -654,6 +769,20 @@
                 opt.value = comm.toString();
                 opt.textContent = `Community ${comm}`;
                 commSelect.appendChild(opt);
+            });
+
+            // Populate edge type filter with counts
+            const edgeTypeCounts = {};
+            state.edges.forEach(e => {
+                edgeTypeCounts[e.type] = (edgeTypeCounts[e.type] || 0) + 1;
+            });
+            const edgeTypes = Object.keys(edgeTypeCounts).sort();
+            const edgeTypeSelect = document.getElementById('filter-edge-type');
+            edgeTypes.forEach(type => {
+                const opt = document.createElement('option');
+                opt.value = type;
+                opt.textContent = `${type} (${edgeTypeCounts[type]})`;
+                edgeTypeSelect.appendChild(opt);
             });
 
             // Update stats

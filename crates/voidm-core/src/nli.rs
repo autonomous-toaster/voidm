@@ -12,6 +12,7 @@ use once_cell::sync::OnceCell;
 use ort::session::Session;
 use ort::value::Tensor;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -41,7 +42,7 @@ pub struct RelationSuggestion {
 // ─── Model state ──────────────────────────────────────────────────────────────
 
 struct NliModel {
-    session: Session,
+    session: Mutex<Session>,
     tokenizer: tokenizers::Tokenizer,
 }
 
@@ -98,7 +99,7 @@ fn build_session(onnx_path: &PathBuf, tokenizer_path: &PathBuf) -> Result<NliMod
         .commit_from_file(onnx_path)
         .context("Failed to load NLI ONNX model")?;
 
-    Ok(NliModel { session, tokenizer })
+    Ok(NliModel { session: Mutex::new(session), tokenizer })
 }
 
 async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
@@ -153,22 +154,25 @@ pub fn classify(premise: &str, hypothesis: &str) -> Result<NliScores> {
         ([1usize, seq_len], attention_mask.into_boxed_slice())
     ).context("Failed to create attention_mask tensor")?;
 
-    // Run inference — DeBERTa-v3 takes only input_ids + attention_mask (no token_type_ids)
-    let outputs = model.session.run(
-        ort::inputs![
-            "input_ids"      => ids_tensor,
-            "attention_mask" => mask_tensor
-        ].context("Failed to build NLI inputs")?
-    ).context("NLI inference failed")?;
+    // Run inference and extract logits within the lock scope
+    let logits_flat = {
+        let mut session_lock = model.session.lock().unwrap();
+        let outputs = session_lock.run(
+            ort::inputs![
+                "input_ids"      => ids_tensor,
+                "attention_mask" => mask_tensor
+            ]
+        ).context("NLI inference failed")?;
 
-    // Extract logits [1, 3]: contradiction=0, neutral=1, entailment=2 (DeBERTa-NLI convention)
-    let logits_value = outputs.get("logits")
-        .context("No 'logits' output from NLI model")?;
-    let logits_tensor = logits_value
-        .try_extract_tensor::<f32>()
-        .context("Failed to extract logits as f32 tensor")?;
-    let logits_raw = logits_tensor.view();
-    let logits_flat: Vec<f32> = logits_raw.iter().cloned().collect();
+        // Extract logits [1, 3]: contradiction=0, neutral=1, entailment=2 (DeBERTa-NLI convention)
+        let logits_value = outputs.get("logits")
+            .context("No 'logits' output from NLI model")?;
+        let logits_tensor = logits_value
+            .try_extract_tensor::<f32>()
+            .context("Failed to extract logits as f32 tensor")?;
+        let (_shape, logits_raw) = logits_tensor;
+        logits_raw.to_vec()
+    };
 
     if logits_flat.len() < 3 {
         anyhow::bail!("Unexpected logits shape: {} elements (expected 3)", logits_flat.len());
@@ -329,7 +333,8 @@ mod tests {
         ensure_nli_model().await.expect("model load");
         let wrapper = NLI_MODEL.get().unwrap();
         let model = &wrapper.0;
-        let input_names: Vec<&str> = model.session.inputs.iter().map(|i| i.name.as_str()).collect();
+        let session = model.session.lock().unwrap();
+        let input_names: Vec<&str> = session.inputs().iter().map(|i| i.name()).collect();
         assert!(input_names.contains(&"input_ids"), "must have input_ids");
         assert!(input_names.contains(&"attention_mask"), "must have attention_mask");
         assert!(!input_names.contains(&"token_type_ids"), "DeBERTa has no token_type_ids");

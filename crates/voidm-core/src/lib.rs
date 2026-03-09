@@ -13,6 +13,6 @@ pub mod embeddings;
 
 pub use config::Config;
 pub use config::config_path_display;
-pub use db::open_pool;
+pub use db::sqlite::open_pool;  // Re-export for backward compatibility
 pub use crud::resolve_id;
 pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning};

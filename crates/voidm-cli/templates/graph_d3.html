@@ -967,6 +967,23 @@
                 </div>`;
             });
             legend += '</div>';
+
+            // Edge type legend with counts
+            legend += '<div class="legend-group"><div class="legend-title">Edge Types</div>';
+            const edgeTypeCounts = {};
+            state.edges.forEach(e => {
+                edgeTypeCounts[e.type] = (edgeTypeCounts[e.type] || 0) + 1;
+            });
+            const edgeTypes = Object.keys(edgeTypeCounts).sort();
+            edgeTypes.forEach(type => {
+                const color = getEdgeColor(type);
+                const count = edgeTypeCounts[type];
+                legend += `<div class="legend-item">
+                    <div class="legend-color" style="background: ${color}"></div>
+                    ${type} (${count})
+                </div>`;
+            });
+            legend += '</div>';
             
             content.innerHTML = legend;
             panel.classList.add('active');

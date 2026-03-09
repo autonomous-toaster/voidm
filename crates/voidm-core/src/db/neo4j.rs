@@ -794,3 +794,174 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 }
+
+#[cfg(test)]
+mod neo4j_integration_tests {
+    use super::*;
+    use crate::db::Database;
+    use crate::models::{AddMemoryRequest, MemoryType};
+
+    /// Test Neo4j connection with local instance
+    /// Requires: docker run --publish=7474:7474 --publish=7687:7687 neo4j
+    /// Run with: cargo test -- --ignored --test-threads=1
+    #[tokio::test]
+    #[ignore]  // Run manually with local Neo4j instance
+    async fn test_neo4j_health_check() {
+        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j")
+            .await
+            .expect("Failed to connect to Neo4j - is it running?");
+
+        db.health_check().await.expect("Health check failed");
+        println!("✓ Neo4j health check passed");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_neo4j_memory_crud() {
+        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let config = crate::Config::default();
+
+        // Create memory
+        let req = AddMemoryRequest {
+            content: "Integration test memory".to_string(),
+            memory_type: MemoryType::Semantic,
+            scopes: vec!["integration_test".to_string()],
+            tags: vec!["test".to_string()],
+            importance: 5,
+            metadata: serde_json::json!({}),
+            links: vec![],
+        };
+
+        let response = db.add_memory(req, &config)
+            .await
+            .expect("Failed to add memory");
+        println!("✓ Created memory: {}", response.id);
+
+        // Get memory
+        let mem = db.get_memory(&response.id)
+            .await
+            .expect("Failed to get memory");
+        assert!(mem.is_some(), "Memory should exist");
+        let mem = mem.unwrap();
+        assert_eq!(mem.content, "Integration test memory");
+        assert_eq!(mem.memory_type.to_lowercase(), "semantic");
+        println!("✓ Retrieved memory: {}", mem.id);
+
+        // Update memory
+        db.update_memory(&response.id, "Updated content")
+            .await
+            .expect("Failed to update memory");
+        println!("✓ Updated memory");
+
+        // Delete memory
+        let deleted = db.delete_memory(&response.id)
+            .await
+            .expect("Failed to delete memory");
+        assert!(deleted, "Memory should be deleted");
+        println!("✓ Deleted memory");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_neo4j_relationships() {
+        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let config = crate::Config::default();
+
+        // Create two memories
+        let req1 = AddMemoryRequest {
+            content: "First memory".to_string(),
+            memory_type: MemoryType::Semantic,
+            scopes: vec!["rel_test".to_string()],
+            tags: vec![],
+            importance: 5,
+            metadata: serde_json::json!({}),
+            links: vec![],
+        };
+
+        let id1 = db.add_memory(req1, &config)
+            .await
+            .expect("Failed to create memory 1")
+            .id;
+
+        let req2 = AddMemoryRequest {
+            content: "Second memory".to_string(),
+            memory_type: MemoryType::Semantic,
+            scopes: vec!["rel_test".to_string()],
+            tags: vec![],
+            importance: 5,
+            metadata: serde_json::json!({}),
+            links: vec![],
+        };
+
+        let id2 = db.add_memory(req2, &config)
+            .await
+            .expect("Failed to create memory 2")
+            .id;
+
+        // Link them
+        let link = db.link_memories(&id1, &crate::models::EdgeType::RelatesTo, &id2, Some("test link"))
+            .await
+            .expect("Failed to link memories");
+        assert!(link.created, "Link should be created");
+        println!("✓ Created relationship: {} -> {} ({})", id1, id2, link.rel);
+
+        // Unlink them
+        let unlinked = db.unlink_memories(&id1, &crate::models::EdgeType::RelatesTo, &id2)
+            .await
+            .expect("Failed to unlink");
+        assert!(unlinked, "Relationship should be deleted");
+        println!("✓ Deleted relationship");
+
+        // Cleanup
+        let _ = db.delete_memory(&id1).await;
+        let _ = db.delete_memory(&id2).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_neo4j_concepts() {
+        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        // Create concept
+        let concept_resp = db.add_concept("TestConcept", Some("A test concept"), Some("testing"))
+            .await
+            .expect("Failed to add concept");
+        println!("✓ Created concept: {}", concept_resp.id);
+
+        // Get concept
+        let concept = db.get_concept(&concept_resp.id)
+            .await
+            .expect("Failed to get concept");
+        assert_eq!(concept.name, "TestConcept");
+        println!("✓ Retrieved concept: {}", concept.name);
+
+        // List concepts
+        let concepts = db.list_concepts(Some("testing"), 10)
+            .await
+            .expect("Failed to list concepts");
+        assert!(!concepts.is_empty(), "Should have at least one concept");
+        println!("✓ Listed {} concepts", concepts.len());
+
+        // Search concepts
+        let search_results = db.search_concepts("Test", None, 10)
+            .await
+            .expect("Failed to search concepts");
+        assert!(!search_results.is_empty(), "Should find test concept");
+        println!("✓ Found {} concepts in search", search_results.len());
+
+        // Delete concept
+        let deleted = db.delete_concept(&concept_resp.id)
+            .await
+            .expect("Failed to delete concept");
+        assert!(deleted, "Concept should be deleted");
+        println!("✓ Deleted concept");
+    }
+}

@@ -433,6 +433,15 @@ async fn export_html(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
         }));
     }
 
+    // Compute edge type counts for filtering UI
+    let mut edge_type_counts = std::collections::HashMap::new();
+    for edge in &edges_json {
+        let edge_type = edge.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+        *edge_type_counts.entry(edge_type.to_string()).or_insert(0) += 1;
+    }
+    let edge_type_counts_json: serde_json::Value = 
+        serde_json::to_value(&edge_type_counts).unwrap_or(json!({}));
+
     // Build graph stats
     let num_communities = community_map.values().max().copied().unwrap_or(0) as usize + 1;
     let density = if nodes_json.len() > 1 {
@@ -446,7 +455,8 @@ async fn export_html(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
         "node_count": nodes_json.len(),
         "edge_count": edges_json.len(),
         "density": density,
-        "num_communities": num_communities
+        "num_communities": num_communities,
+        "edge_type_counts": edge_type_counts_json
     });
 
     let data_json = json!({
@@ -553,11 +563,21 @@ async fn run_show(pool: &SqlitePool) -> Result<()> {
         0.0
     };
 
+    // Compute edge type counts for filtering UI
+    let mut edge_type_counts = std::collections::HashMap::new();
+    for edge in &edges_json {
+        let edge_type = edge.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+        *edge_type_counts.entry(edge_type.to_string()).or_insert(0) += 1;
+    }
+    let edge_type_counts_json: serde_json::Value = 
+        serde_json::to_value(&edge_type_counts).unwrap_or(serde_json::json!({}));
+
     let stats = serde_json::json!({
         "node_count": nodes_json.len(),
         "edge_count": edges_json.len(),
         "density": density,
-        "num_communities": num_communities
+        "num_communities": num_communities,
+        "edge_type_counts": edge_type_counts_json
     });
 
     let data_json = serde_json::json!({

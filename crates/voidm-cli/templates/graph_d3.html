@@ -183,6 +183,40 @@
         </div>
 
         <div class="control-group">
+            <label>Filter Edge Type</label>
+            <select id="filter-edge-type">
+                <option value="">All Edge Types</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>Min Degree</label>
+            <input type="range" id="filter-min-degree" min="0" max="100" value="0">
+            <span id="degree-value">0</span>
+        </div>
+
+        <div class="control-group">
+            <label>Min PageRank</label>
+            <input type="range" id="filter-min-pagerank" min="0" max="1" step="0.01" value="0">
+            <span id="pagerank-value">0.00</span>
+        </div>
+
+        <div class="control-group">
+            <button id="reset-filters-btn">Clear Filters</button>
+            <button id="save-preset-btn" style="margin-top: 4px;">Save Preset</button>
+        </div>
+
+        <div id="preset-section" style="margin-top: 8px; font-size: 11px; display: none;">
+            <label style="margin-top: 4px;">Load Preset:</label>
+            <select id="preset-select" onchange="loadPreset()">
+                <option value="">-- Select --</option>
+            </select>
+            <button id="delete-preset-btn" style="width: 100%; margin-top: 4px;">Delete Selected</button>
+        </div>
+
+        <div id="active-filters" style="margin-top: 8px; min-height: 20px;"></div>
+
+        <div class="control-group">
             <button id="reset-view-btn">Reset View (R)</button>
             <button id="fit-view-btn">Fit All (F)</button>
             <button id="toggle-physics-btn">Physics: ON (S)</button>
@@ -210,6 +244,15 @@
         <div id="info-content"></div>
     </div>
 
+    <!-- Search Results Panel -->
+    <div id="search-results-panel" class="panel" style="top: 80px; left: 10px; max-width: 350px; max-height: 400px; display: none; overflow-y: auto;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong>Search Results</strong>
+            <button style="width: auto; padding: 4px 8px; font-size: 11px;" onclick="closeSearchResults()">×</button>
+        </div>
+        <div id="search-results-content"></div>
+    </div>
+
     <!-- Legend Panel -->
     <div id="legend-panel" class="panel">
         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -232,6 +275,36 @@
         const DATA = {DATA_JSON};
 
         // ─────────────────────────────────────────────────────────────────
+        // Edge Type Colors & Configuration
+        // ─────────────────────────────────────────────────────────────────
+        const EDGE_COLORS = {
+            'SUPPORTS': '#2ecc71',          // green
+            'CONTRADICTS': '#e74c3c',       // red
+            'DERIVED_FROM': '#3498db',      // blue
+            'PRECEDES': '#9b59b6',          // purple
+            'PART_OF': '#f39c12',           // orange
+            'EXEMPLIFIES': '#1abc9c',       // cyan
+            'INVALIDATES': '#c0392b',       // dark red
+            'RELATES_TO': '#95a5a6',        // gray
+            'IS_A': '#5dade2',              // light blue
+            'INSTANCE_OF': '#bb8fce',       // light purple
+            'HAS_PROPERTY': '#b8860b'       // brown
+        };
+
+        function getEdgeColor(edgeType) {
+            return EDGE_COLORS[edgeType] || '#cccccc';
+        }
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : { r: 204, g: 204, b: 204 };
+        }
+
+        // ─────────────────────────────────────────────────────────────────
         // Global State
         // ─────────────────────────────────────────────────────────────────
         const state = {
@@ -246,6 +319,13 @@
             colorByCommunity: true,
             physicsEnabled: true,
             zoom: d3.zoomIdentity,
+            filters: {
+                nodeType: '',
+                community: '',
+                edgeType: '',
+                minDegree: 0,
+                minPageRank: 0
+            }
         };
 
         // Canvas & D3 setup
@@ -302,8 +382,11 @@
                 const tgt = edge.target;
                 const strength = edge.strength || 1;
                 const opacity = Math.min(1, strength / 6);
-
-                ctx.strokeStyle = `rgba(100, 100, 100, ${opacity * 0.5})`;
+                
+                // Use edge type color if available, otherwise gray
+                const edgeColor = getEdgeColor(edge.type);
+                const rgbColor = hexToRgb(edgeColor);
+                ctx.strokeStyle = `rgba(${rgbColor.r}, ${rgbColor.g}, ${rgbColor.b}, ${opacity * 0.7})`;
                 ctx.lineWidth = Math.max(0.5, Math.min(3, strength / 3));
                 ctx.beginPath();
                 ctx.moveTo(src.x, src.y);
@@ -391,24 +474,212 @@
         // ─────────────────────────────────────────────────────────────────
         // UI Controls
         // ─────────────────────────────────────────────────────────────────
+        // Search functionality with history and results
+        let searchHistory = JSON.parse(localStorage.getItem('searchHistory') || '[]');
+        let currentSearchResults = [];
+        let searchResultIndex = 0;
+
         document.getElementById('search-input').addEventListener('keyup', (e) => {
-            const query = e.target.value.toLowerCase();
-            const node = state.nodes.find(n => 
-                n.id.toLowerCase().includes(query) || 
+            const query = e.target.value.toLowerCase().trim();
+            
+            if (e.key === 'Escape') {
+                closeSearchResults();
+                return;
+            }
+            
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                searchResultIndex = Math.max(0, searchResultIndex - 1);
+                highlightSearchResult(searchResultIndex);
+                return;
+            }
+            
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                searchResultIndex = Math.min(currentSearchResults.length - 1, searchResultIndex + 1);
+                highlightSearchResult(searchResultIndex);
+                return;
+            }
+            
+            if (e.key === 'Enter' && currentSearchResults.length > 0) {
+                const node = currentSearchResults[searchResultIndex];
+                selectSearchResult(node);
+                // Add to history
+                searchHistory = searchHistory.filter(s => s !== query);
+                searchHistory.unshift(query);
+                searchHistory = searchHistory.slice(0, 10);
+                localStorage.setItem('searchHistory', JSON.stringify(searchHistory));
+                return;
+            }
+
+            if (query.length === 0) {
+                closeSearchResults();
+                return;
+            }
+
+            // Fuzzy search results
+            const results = state.nodes.filter(n =>
+                n.id.toLowerCase().includes(query) ||
                 n.label.toLowerCase().includes(query)
             );
-            if (node) {
-                state.selectedNode = state.simulation.nodes().find(n => n.id === node.id);
-                if (state.selectedNode) {
-                    showNodeInfo(state.selectedNode);
-                    focusNode(state.selectedNode);
-                    render();
-                }
+
+            currentSearchResults = results;
+            searchResultIndex = 0;
+
+            if (results.length > 0) {
+                showSearchResults(results, query);
+            } else {
+                closeSearchResults();
             }
         });
 
+        function showSearchResults(results, query) {
+            const panel = document.getElementById('search-results-panel');
+            const content = document.getElementById('search-results-content');
+            
+            if (results.length === 0) {
+                content.innerHTML = '<div style="font-size: 11px; color: #999;">No results found</div>';
+                panel.style.display = 'block';
+                return;
+            }
+
+            const html = results.slice(0, 10).map((node, idx) => {
+                const inDegree = state.edges.filter(e => e.target === node.id).length;
+                const outDegree = state.edges.filter(e => e.source === node.id).length;
+                const highlighted = query ? node.label.replace(
+                    new RegExp(`(${query})`, 'gi'),
+                    '<mark style="background: yellow; font-weight: bold;">$1</mark>'
+                ) : node.label;
+
+                return `
+                    <div class="search-result-item ${idx === searchResultIndex ? 'active' : ''}" 
+                         onclick="selectSearchResult(state.nodes.find(n => n.id === '${node.id}')))"
+                         style="padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; ${idx === searchResultIndex ? 'background: #f0f0f0;' : ''}">
+                        <div style="font-weight: 600; font-size: 12px;">${highlighted}</div>
+                        <div style="font-size: 10px; color: #666;">
+                            Type: ${node.type} | Community: ${node.community} | Degree: ${node.degree}
+                        </div>
+                        <div style="font-size: 10px; color: #999;">
+                            ↑${inDegree} ↓${outDegree} | PageRank: ${node.pagerank.toFixed(4)}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            content.innerHTML = html;
+            panel.style.display = 'block';
+        }
+
+        function highlightSearchResult(index) {
+            const items = document.querySelectorAll('.search-result-item');
+            items.forEach((item, idx) => {
+                if (idx === index) {
+                    item.style.background = '#f0f0f0';
+                    item.scrollIntoView({ block: 'nearest' });
+                } else {
+                    item.style.background = '';
+                }
+            });
+        }
+
+        function selectSearchResult(node) {
+            if (!node || !state.simulation) return;
+            state.selectedNode = state.simulation.nodes().find(n => n.id === node.id);
+            if (state.selectedNode) {
+                showNodeInfo(state.selectedNode);
+                focusNode(state.selectedNode);
+                render();
+            }
+        }
+
+        function closeSearchResults() {
+            document.getElementById('search-results-panel').style.display = 'none';
+        }
+
         document.getElementById('filter-type').addEventListener('change', applyFilters);
         document.getElementById('filter-community').addEventListener('change', applyFilters);
+        document.getElementById('filter-edge-type').addEventListener('change', applyFilters);
+        document.getElementById('filter-min-degree').addEventListener('change', (e) => {
+            document.getElementById('degree-value').textContent = e.target.value;
+            applyFilters();
+        });
+        document.getElementById('reset-filters-btn').addEventListener('click', resetAllFilters);
+        document.getElementById('filter-min-pagerank').addEventListener('change', (e) => {
+            document.getElementById('pagerank-value').textContent = parseFloat(e.target.value).toFixed(2);
+            applyFilters();
+        });
+
+        // Filter presets functionality
+        let filterPresets = JSON.parse(localStorage.getItem('filterPresets') || '{}');
+        
+        function updatePresetSelect() {
+            const select = document.getElementById('preset-select');
+            select.innerHTML = '<option value="">-- Select --</option>';
+            const presetNames = Object.keys(filterPresets).sort();
+            if (presetNames.length > 0) {
+                document.getElementById('preset-section').style.display = 'block';
+                presetNames.forEach(name => {
+                    const opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name;
+                    select.appendChild(opt);
+                });
+            } else {
+                document.getElementById('preset-section').style.display = 'none';
+            }
+        }
+
+        function savePreset() {
+            const name = prompt('Enter preset name:');
+            if (!name) return;
+            
+            filterPresets[name] = {
+                nodeType: state.filters.nodeType,
+                community: state.filters.community,
+                edgeType: state.filters.edgeType,
+                minDegree: state.filters.minDegree,
+                minPageRank: state.filters.minPageRank
+            };
+            localStorage.setItem('filterPresets', JSON.stringify(filterPresets));
+            updatePresetSelect();
+            alert(`Preset "${name}" saved!`);
+        }
+
+        function loadPreset() {
+            const name = document.getElementById('preset-select').value;
+            if (!name) return;
+            
+            const preset = filterPresets[name];
+            if (!preset) return;
+
+            document.getElementById('filter-type').value = preset.nodeType || '';
+            document.getElementById('filter-community').value = preset.community || '';
+            document.getElementById('filter-edge-type').value = preset.edgeType || '';
+            document.getElementById('filter-min-degree').value = preset.minDegree || 0;
+            document.getElementById('degree-value').textContent = preset.minDegree || 0;
+            document.getElementById('filter-min-pagerank').value = preset.minPageRank || 0;
+            document.getElementById('pagerank-value').textContent = (preset.minPageRank || 0).toFixed(2);
+            
+            applyFilters();
+        }
+
+        function deletePreset() {
+            const name = document.getElementById('preset-select').value;
+            if (!name) {
+                alert('Please select a preset to delete');
+                return;
+            }
+            if (confirm(`Delete preset "${name}"?`)) {
+                delete filterPresets[name];
+                localStorage.setItem('filterPresets', JSON.stringify(filterPresets));
+                updatePresetSelect();
+            }
+        }
+
+        document.getElementById('save-preset-btn').addEventListener('click', savePreset);
+        document.getElementById('delete-preset-btn').addEventListener('click', deletePreset);
+        updatePresetSelect();
+
         document.getElementById('reset-view-btn').addEventListener('click', resetView);
         document.getElementById('fit-view-btn').addEventListener('click', fitView);
         document.getElementById('toggle-physics-btn').addEventListener('click', togglePhysics);
@@ -419,21 +690,131 @@
         function applyFilters() {
             const typeFilter = document.getElementById('filter-type').value;
             const commFilter = document.getElementById('filter-community').value;
+            const edgeTypeFilter = document.getElementById('filter-edge-type').value;
+            const minDegree = parseInt(document.getElementById('filter-min-degree').value) || 0;
+            const minPageRank = parseFloat(document.getElementById('filter-min-pagerank').value) || 0;
 
+            // Store active filters
+            state.filters.nodeType = typeFilter;
+            state.filters.community = commFilter;
+            state.filters.edgeType = edgeTypeFilter;
+            state.filters.minDegree = minDegree;
+            state.filters.minPageRank = minPageRank;
+
+            // First, filter edges if edge type specified
+            let availableEdges = state.edges;
+            if (edgeTypeFilter) {
+                availableEdges = state.edges.filter(e => e.type === edgeTypeFilter);
+            }
+            const connectedNodeIds = new Set();
+            if (edgeTypeFilter) {
+                availableEdges.forEach(e => {
+                    connectedNodeIds.add(e.source);
+                    connectedNodeIds.add(e.target);
+                });
+            }
+
+            // Filter nodes
             state.filteredNodes = state.nodes.filter(n => {
                 if (typeFilter && n.type !== typeFilter) return false;
                 if (commFilter && n.community.toString() !== commFilter) return false;
+                if (n.degree < minDegree) return false;
+                if (n.pagerank < minPageRank) return false;
+                if (edgeTypeFilter && !connectedNodeIds.has(n.id)) return false;
                 return true;
             });
 
             const nodeIds = new Set(state.filteredNodes.map(n => n.id));
-            state.filteredEdges = state.edges.filter(e => 
+            state.filteredEdges = availableEdges.filter(e => 
                 nodeIds.has(e.source) && nodeIds.has(e.target)
             );
 
+            updateActiveFiltersDisplay();
             state.selectedNode = null;
             closeInfoPanel();
             initSimulation();
+        }
+
+        function updateActiveFiltersDisplay() {
+            const filterDiv = document.getElementById('active-filters');
+            const filters = [];
+            
+            if (state.filters.nodeType) {
+                filters.push({
+                    label: `Type: ${state.filters.nodeType}`,
+                    key: 'nodeType'
+                });
+            }
+            if (state.filters.community) {
+                filters.push({
+                    label: `Community: ${state.filters.community}`,
+                    key: 'community'
+                });
+            }
+            if (state.filters.edgeType) {
+                filters.push({
+                    label: `Edge: ${state.filters.edgeType}`,
+                    key: 'edgeType'
+                });
+            }
+            if (state.filters.minDegree > 0) {
+                filters.push({
+                    label: `Min Degree: ${state.filters.minDegree}`,
+                    key: 'minDegree'
+                });
+            }
+            if (state.filters.minPageRank > 0) {
+                filters.push({
+                    label: `Min PageRank: ${state.filters.minPageRank.toFixed(3)}`,
+                    key: 'minPageRank'
+                });
+            }
+
+            if (filters.length === 0) {
+                filterDiv.innerHTML = '';
+            } else {
+                const chips = filters.map(f => `
+                    <span style="display: inline-block; background: #e8f4f8; color: #333; padding: 4px 8px; border-radius: 12px; margin-right: 6px; margin-bottom: 4px; font-size: 11px; cursor: pointer; border: 1px solid #b0d4e3;" 
+                          onclick="removeFilter('${f.key}'); applyFilters();">
+                        ${f.label} <span style="margin-left: 4px; font-weight: bold;">×</span>
+                    </span>
+                `).join('');
+                
+                filterDiv.innerHTML = '<strong style="display: block; margin-bottom: 6px;">Active Filters:</strong>' + chips;
+            }
+        }
+
+        function removeFilter(key) {
+            switch(key) {
+                case 'nodeType':
+                    document.getElementById('filter-type').value = '';
+                    break;
+                case 'community':
+                    document.getElementById('filter-community').value = '';
+                    break;
+                case 'edgeType':
+                    document.getElementById('filter-edge-type').value = '';
+                    break;
+                case 'minDegree':
+                    document.getElementById('filter-min-degree').value = '0';
+                    document.getElementById('degree-value').textContent = '0';
+                    break;
+                case 'minPageRank':
+                    document.getElementById('filter-min-pagerank').value = '0';
+                    document.getElementById('pagerank-value').textContent = '0.00';
+                    break;
+            }
+        }
+
+        function resetAllFilters() {
+            document.getElementById('filter-type').value = '';
+            document.getElementById('filter-community').value = '';
+            document.getElementById('filter-edge-type').value = '';
+            document.getElementById('filter-min-degree').value = '0';
+            document.getElementById('degree-value').textContent = '0';
+            document.getElementById('filter-min-pagerank').value = '0';
+            document.getElementById('pagerank-value').textContent = '0.00';
+            applyFilters();
         }
 
         function resetView() {
@@ -586,6 +967,23 @@
                 </div>`;
             });
             legend += '</div>';
+
+            // Edge type legend with counts
+            legend += '<div class="legend-group"><div class="legend-title">Edge Types</div>';
+            const edgeTypeCounts = {};
+            state.edges.forEach(e => {
+                edgeTypeCounts[e.type] = (edgeTypeCounts[e.type] || 0) + 1;
+            });
+            const edgeTypes = Object.keys(edgeTypeCounts).sort();
+            edgeTypes.forEach(type => {
+                const color = getEdgeColor(type);
+                const count = edgeTypeCounts[type];
+                legend += `<div class="legend-item">
+                    <div class="legend-color" style="background: ${color}"></div>
+                    ${type} (${count})
+                </div>`;
+            });
+            legend += '</div>';
             
             content.innerHTML = legend;
             panel.classList.add('active');
@@ -654,6 +1052,20 @@
                 opt.value = comm.toString();
                 opt.textContent = `Community ${comm}`;
                 commSelect.appendChild(opt);
+            });
+
+            // Populate edge type filter with counts
+            const edgeTypeCounts = {};
+            state.edges.forEach(e => {
+                edgeTypeCounts[e.type] = (edgeTypeCounts[e.type] || 0) + 1;
+            });
+            const edgeTypes = Object.keys(edgeTypeCounts).sort();
+            const edgeTypeSelect = document.getElementById('filter-edge-type');
+            edgeTypes.forEach(type => {
+                const opt = document.createElement('option');
+                opt.value = type;
+                opt.textContent = `${type} (${edgeTypeCounts[type]})`;
+                edgeTypeSelect.appendChild(opt);
             });
 
             // Update stats

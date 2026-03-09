@@ -3,8 +3,8 @@ use rmcp::{
     Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        AnnotateAble, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParam,
-        RawResource, RawResourceTemplate, ReadResourceRequestParam, ReadResourceResult,
+        AnnotateAble, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
+        RawResource, RawResourceTemplate, ReadResourceRequestParams, ReadResourceResult,
         ResourceContents, ServerCapabilities, ServerInfo,
     },
     schemars,
@@ -55,21 +55,12 @@ impl VoidmMcpServer {
     }
 
     fn server_info() -> ServerInfo {
-        ServerInfo {
-            protocol_version: Default::default(),
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
-                .build(),
-            server_info: rmcp::model::Implementation {
-                name: "voidm".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                title: None,
-                icons: None,
-                website_url: None,
-            },
-            instructions: Some("Assistant-focused memory and ontology access for voidm".to_string()),
-        }
+                .build()
+        )
     }
 
     fn raw_resource(uri: String, name: String, description: &str) -> RawResource {
@@ -79,8 +70,9 @@ impl VoidmMcpServer {
             title: None,
             description: Some(description.to_string()),
             mime_type: Some("application/json".to_string()),
-            size: None,
             icons: None,
+            size: None,
+            meta: None,
         }
     }
 
@@ -91,6 +83,7 @@ impl VoidmMcpServer {
             title: None,
             description: Some(description.to_string()),
             mime_type: Some("application/json".to_string()),
+            icons: None,
         }
     }
 }
@@ -103,7 +96,7 @@ impl ServerHandler for VoidmMcpServer {
 
     async fn list_resources(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<ListResourcesResult, rmcp::ErrorData> {
         let memories = crud::list_memories(&self.pool, None, None, 20)
@@ -148,12 +141,13 @@ impl ServerHandler for VoidmMcpServer {
         Ok(ListResourcesResult {
             resources,
             next_cursor: None,
+            meta: None,
         })
     }
 
     async fn list_resource_templates(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<ListResourceTemplatesResult, rmcp::ErrorData> {
         Ok(ListResourceTemplatesResult {
@@ -162,12 +156,13 @@ impl ServerHandler for VoidmMcpServer {
                 Self::raw_template("voidm://concept/{id}", "concept", "Fetch a concept as JSON").no_annotation(),
             ],
             next_cursor: None,
+            meta: None,
         })
     }
 
     async fn read_resource(
         &self,
-        request: ReadResourceRequestParam,
+        request: ReadResourceRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<ReadResourceResult, rmcp::ErrorData> {
         let uri = request.uri;
@@ -189,13 +184,11 @@ impl ServerHandler for VoidmMcpServer {
             return Err(mcp_err(anyhow!("Unknown resource URI: {uri}")));
         };
 
-        Ok(ReadResourceResult {
-            contents: vec![ResourceContents::text(
-                serde_json::to_string_pretty(&value)
-                    .map_err(|e| mcp_err(anyhow!(e.to_string())))?,
-                uri,
-            )],
-        })
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(
+            serde_json::to_string_pretty(&value)
+                .map_err(|e| mcp_err(anyhow!(e.to_string())))?,
+            uri,
+        )]))
     }
 }
 

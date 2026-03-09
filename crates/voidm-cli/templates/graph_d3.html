@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>voidm Graph Viewer (D3.js Canvas)</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            overflow: hidden;
+        }
+        #canvas {
+            display: block;
+            background: white;
+            cursor: grab;
+        }
+        #canvas:active {
+            cursor: grabbing;
+        }
+        .panel {
+            position: fixed;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        #controls-panel {
+            top: 10px;
+            left: 10px;
+            padding: 15px;
+            max-width: 320px;
+        }
+        .control-group {
+            margin-bottom: 12px;
+        }
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+        .control-group input,
+        .control-group select {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .control-group button {
+            width: 100%;
+            padding: 8px 12px;
+            margin-bottom: 5px;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .control-group button:hover {
+            background: #0056b3;
+        }
+        #stats-panel {
+            bottom: 10px;
+            left: 10px;
+            padding: 12px;
+            max-width: 250px;
+            color: #555;
+        }
+        #stats-panel div {
+            margin-bottom: 6px;
+        }
+        #info-panel {
+            top: 10px;
+            right: 10px;
+            padding: 15px;
+            max-width: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+            display: none;
+        }
+        #info-panel.active {
+            display: block;
+        }
+        .info-label {
+            font-weight: 600;
+            margin-top: 8px;
+            color: #333;
+        }
+        .info-value {
+            color: #666;
+            margin-top: 2px;
+            word-break: break-word;
+        }
+        #legend-panel {
+            top: 10px;
+            right: 10px;
+            padding: 15px;
+            max-width: 250px;
+            display: none;
+        }
+        #legend-panel.active {
+            display: block;
+        }
+        .legend-group {
+            margin-bottom: 12px;
+        }
+        .legend-title {
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: #333;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        #analytics-panel {
+            bottom: 10px;
+            right: 10px;
+            padding: 15px;
+            max-width: 280px;
+            max-height: 400px;
+            overflow-y: auto;
+            display: none;
+        }
+        #analytics-panel.active {
+            display: block;
+        }
+        .analytics-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        .rank-item {
+            padding: 4px 0;
+            font-size: 11px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <!-- Controls Panel -->
+    <div id="controls-panel" class="panel">
+        <div class="control-group">
+            <label>Search</label>
+            <input type="text" id="search-input" placeholder="Node ID or label...">
+        </div>
+        
+        <div class="control-group">
+            <label>Filter Type</label>
+            <select id="filter-type">
+                <option value="">All Nodes</option>
+                <option value="memory">Memories Only</option>
+                <option value="concept">Concepts Only</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>Filter Community</label>
+            <select id="filter-community">
+                <option value="">All Communities</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <button id="reset-view-btn">Reset View (R)</button>
+            <button id="fit-view-btn">Fit All (F)</button>
+            <button id="toggle-physics-btn">Physics: ON (S)</button>
+            <button id="toggle-color-btn">Color: Communities</button>
+            <button id="show-legend-btn">Show Legend (L)</button>
+            <button id="show-analytics-btn">Show Analytics (A)</button>
+        </div>
+    </div>
+
+    <!-- Stats Panel -->
+    <div id="stats-panel" class="panel">
+        <div><strong>Graph Statistics</strong></div>
+        <div>Nodes: <span id="stat-nodes">0</span></div>
+        <div>Edges: <span id="stat-edges">0</span></div>
+        <div>Communities: <span id="stat-communities">0</span></div>
+        <div>Density: <span id="stat-density">0.00</span></div>
+    </div>
+
+    <!-- Info Panel -->
+    <div id="info-panel" class="panel">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <strong>Node Information</strong>
+            <button style="width: auto; padding: 4px 8px; font-size: 11px;" onclick="closeInfoPanel()">×</button>
+        </div>
+        <div id="info-content"></div>
+    </div>
+
+    <!-- Legend Panel -->
+    <div id="legend-panel" class="panel">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <strong>Legend</strong>
+            <button style="width: auto; padding: 4px 8px; font-size: 11px;" onclick="closeLegendPanel()">×</button>
+        </div>
+        <div id="legend-content"></div>
+    </div>
+
+    <!-- Analytics Panel -->
+    <div id="analytics-panel" class="panel">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <strong>Analytics</strong>
+            <button style="width: auto; padding: 4px 8px; font-size: 11px;" onclick="closeAnalyticsPanel()">×</button>
+        </div>
+        <div id="analytics-content"></div>
+    </div>
+
+    <script>
+        const DATA = {DATA_JSON};
+
+        // ─────────────────────────────────────────────────────────────────
+        // Global State
+        // ─────────────────────────────────────────────────────────────────
+        const state = {
+            nodes: DATA.nodes,
+            edges: DATA.edges,
+            stats: DATA.stats,
+            filteredNodes: DATA.nodes,
+            filteredEdges: DATA.edges,
+            selectedNode: null,
+            hoveredNode: null,
+            simulation: null,
+            colorByCommunity: true,
+            physicsEnabled: true,
+            zoom: d3.zoomIdentity,
+        };
+
+        // Canvas & D3 setup
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+
+        // ─────────────────────────────────────────────────────────────────
+        // Initialize Force Simulation
+        // ─────────────────────────────────────────────────────────────────
+        function initSimulation() {
+            const nodeData = state.filteredNodes.map(n => ({
+                ...n,
+                x: Math.random() * width,
+                y: Math.random() * height,
+            }));
+
+            const linkData = state.filteredEdges.filter(e => {
+                const srcExists = state.filteredNodes.some(n => n.id === e.source);
+                const tgtExists = state.filteredNodes.some(n => n.id === e.target);
+                return srcExists && tgtExists;
+            });
+
+            state.simulation = d3.forceSimulation(nodeData)
+                .force('link', d3.forceLink(linkData)
+                    .id(d => d.id)
+                    .distance(d => Math.max(50, d.strength ? 100 / d.strength : 80)))
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(d => d.degree + 5));
+
+            if (!state.physicsEnabled) {
+                state.simulation.stop();
+            }
+
+            state.simulation.on('tick', render);
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Rendering
+        // ─────────────────────────────────────────────────────────────────
+        function render() {
+            ctx.clearRect(0, 0, width, height);
+            ctx.save();
+            ctx.translate(state.zoom.x, state.zoom.y);
+            ctx.scale(state.zoom.k, state.zoom.k);
+
+            // Draw edges
+            state.simulation.force('link').links().forEach(edge => {
+                const src = edge.source;
+                const tgt = edge.target;
+                const strength = edge.strength || 1;
+                const opacity = Math.min(1, strength / 6);
+
+                ctx.strokeStyle = `rgba(100, 100, 100, ${opacity * 0.5})`;
+                ctx.lineWidth = Math.max(0.5, Math.min(3, strength / 3));
+                ctx.beginPath();
+                ctx.moveTo(src.x, src.y);
+                ctx.lineTo(tgt.x, tgt.y);
+                ctx.stroke();
+            });
+
+            // Draw nodes
+            state.simulation.nodes().forEach(node => {
+                const isSelected = state.selectedNode && state.selectedNode.id === node.id;
+                const isHovered = state.hoveredNode && state.hoveredNode.id === node.id;
+
+                // Node circle
+                const radius = 4 + Math.sqrt(node.degree) * 1.5;
+                ctx.fillStyle = node.color || '#999';
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Selection/hover ring
+                if (isSelected || isHovered) {
+                    ctx.strokeStyle = isSelected ? '#FF6B6B' : '#FFD700';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, radius + 3, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+
+                // Label (only when zoomed in or important)
+                if (state.zoom.k > 0.8 || isSelected || isHovered) {
+                    ctx.fillStyle = '#333';
+                    ctx.font = '11px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    const label = node.label.substring(0, 20);
+                    ctx.fillText(label, node.x, node.y + radius + 5);
+                }
+            });
+
+            ctx.restore();
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Interactions
+        // ─────────────────────────────────────────────────────────────────
+        const zoom = d3.zoom().on('zoom', (event) => {
+            state.zoom = event.transform;
+            render();
+        });
+
+        d3.select(canvas).call(zoom);
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left - state.zoom.x) / state.zoom.k;
+            const y = (e.clientY - rect.top - state.zoom.y) / state.zoom.k;
+
+            const radius = 15;
+            state.hoveredNode = state.simulation.nodes().find(n => 
+                Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < radius
+            ) || null;
+            render();
+        });
+
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left - state.zoom.x) / state.zoom.k;
+            const y = (e.clientY - rect.top - state.zoom.y) / state.zoom.k;
+
+            const radius = 15;
+            const clicked = state.simulation.nodes().find(n => 
+                Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < radius
+            ) || null;
+
+            if (clicked) {
+                state.selectedNode = clicked;
+                showNodeInfo(clicked);
+            } else {
+                state.selectedNode = null;
+                closeInfoPanel();
+            }
+            render();
+        });
+
+        // ─────────────────────────────────────────────────────────────────
+        // UI Controls
+        // ─────────────────────────────────────────────────────────────────
+        document.getElementById('search-input').addEventListener('keyup', (e) => {
+            const query = e.target.value.toLowerCase();
+            const node = state.nodes.find(n => 
+                n.id.toLowerCase().includes(query) || 
+                n.label.toLowerCase().includes(query)
+            );
+            if (node) {
+                state.selectedNode = state.simulation.nodes().find(n => n.id === node.id);
+                if (state.selectedNode) {
+                    showNodeInfo(state.selectedNode);
+                    focusNode(state.selectedNode);
+                    render();
+                }
+            }
+        });
+
+        document.getElementById('filter-type').addEventListener('change', applyFilters);
+        document.getElementById('filter-community').addEventListener('change', applyFilters);
+        document.getElementById('reset-view-btn').addEventListener('click', resetView);
+        document.getElementById('fit-view-btn').addEventListener('click', fitView);
+        document.getElementById('toggle-physics-btn').addEventListener('click', togglePhysics);
+        document.getElementById('toggle-color-btn').addEventListener('click', toggleColorMode);
+        document.getElementById('show-legend-btn').addEventListener('click', showLegendPanel);
+        document.getElementById('show-analytics-btn').addEventListener('click', showAnalyticsPanel);
+
+        function applyFilters() {
+            const typeFilter = document.getElementById('filter-type').value;
+            const commFilter = document.getElementById('filter-community').value;
+
+            state.filteredNodes = state.nodes.filter(n => {
+                if (typeFilter && n.type !== typeFilter) return false;
+                if (commFilter && n.community.toString() !== commFilter) return false;
+                return true;
+            });
+
+            const nodeIds = new Set(state.filteredNodes.map(n => n.id));
+            state.filteredEdges = state.edges.filter(e => 
+                nodeIds.has(e.source) && nodeIds.has(e.target)
+            );
+
+            state.selectedNode = null;
+            closeInfoPanel();
+            initSimulation();
+        }
+
+        function resetView() {
+            state.zoom = d3.zoomIdentity;
+            d3.select(canvas).transition().duration(500)
+                .call(zoom.transform, d3.zoomIdentity);
+        }
+
+        function fitView() {
+            const nodes = state.simulation.nodes();
+            if (nodes.length === 0) return;
+
+            const xs = nodes.map(n => n.x);
+            const ys = nodes.map(n => n.y);
+            const minX = Math.min(...xs);
+            const maxX = Math.max(...xs);
+            const minY = Math.min(...ys);
+            const maxY = Math.max(...ys);
+            const padding = 40;
+
+            const scale = Math.min(
+                (width - padding * 2) / (maxX - minX + 2 * padding),
+                (height - padding * 2) / (maxY - minY + 2 * padding)
+            );
+
+            const centerX = (maxX + minX) / 2;
+            const centerY = (maxY + minY) / 2;
+            const tx = width / 2 - centerX * scale;
+            const ty = height / 2 - centerY * scale;
+
+            state.zoom = d3.zoomIdentity.translate(tx, ty).scale(scale);
+            d3.select(canvas).transition().duration(500)
+                .call(zoom.transform, state.zoom);
+        }
+
+        function togglePhysics() {
+            state.physicsEnabled = !state.physicsEnabled;
+            if (state.physicsEnabled) {
+                state.simulation.restart();
+                document.getElementById('toggle-physics-btn').textContent = 'Physics: ON (S)';
+            } else {
+                state.simulation.stop();
+                document.getElementById('toggle-physics-btn').textContent = 'Physics: OFF (S)';
+            }
+        }
+
+        function toggleColorMode() {
+            state.colorByCommunity = !state.colorByCommunity;
+            
+            state.nodes.forEach(n => {
+                if (state.colorByCommunity) {
+                    n.color = n.communityColor || '#999';
+                } else {
+                    // Color by memory type
+                    const typeColors = {
+                        semantic: '#ADD8E6',
+                        episodic: '#90EE90',
+                        procedural: '#FFFFE0',
+                        conceptual: '#E0FFFF',
+                        contextual: '#D3D3D3',
+                    };
+                    n.color = typeColors[n.memory_type] || '#999';
+                }
+            });
+
+            document.getElementById('toggle-color-btn').textContent = 
+                state.colorByCommunity ? 'Color: Communities' : 'Color: Type';
+            render();
+        }
+
+        function focusNode(node) {
+            const scale = 2;
+            const tx = width / 2 - node.x * scale;
+            const ty = height / 2 - node.y * scale;
+            state.zoom = d3.zoomIdentity.translate(tx, ty).scale(scale);
+            d3.select(canvas).transition().duration(500)
+                .call(zoom.transform, state.zoom);
+        }
+
+        function showNodeInfo(node) {
+            const panel = document.getElementById('info-panel');
+            const content = document.getElementById('info-content');
+            
+            const connections = state.edges.filter(e => 
+                e.source === node.id || e.target === node.id
+            ).length;
+
+            content.innerHTML = `
+                <div class="info-label">ID</div>
+                <div class="info-value">${node.id}</div>
+                
+                <div class="info-label">Label</div>
+                <div class="info-value">${node.label}</div>
+                
+                <div class="info-label">Type</div>
+                <div class="info-value">${node.type}</div>
+                
+                <div class="info-label">Degree</div>
+                <div class="info-value">${node.degree}</div>
+                
+                <div class="info-label">PageRank</div>
+                <div class="info-value">${node.pagerank.toFixed(4)}</div>
+                
+                <div class="info-label">Community</div>
+                <div class="info-value">${node.community}</div>
+                
+                <div class="info-label">Connections</div>
+                <div class="info-value">${connections}</div>
+            `;
+            
+            panel.classList.add('active');
+        }
+
+        function closeInfoPanel() {
+            document.getElementById('info-panel').classList.remove('active');
+        }
+
+        function showLegendPanel() {
+            const panel = document.getElementById('legend-panel');
+            const content = document.getElementById('legend-content');
+            
+            // Community legend
+            let legend = '<div class="legend-group"><div class="legend-title">Communities</div>';
+            const communities = new Set(state.nodes.map(n => n.community));
+            communities.forEach(comm => {
+                const node = state.nodes.find(n => n.community === comm);
+                if (node) {
+                    legend += `<div class="legend-item">
+                        <div class="legend-color" style="background: ${node.communityColor}"></div>
+                        Community ${comm}
+                    </div>`;
+                }
+            });
+            legend += '</div>';
+            
+            // Type legend
+            legend += '<div class="legend-group"><div class="legend-title">Node Types</div>';
+            const types = ['semantic', 'episodic', 'procedural', 'conceptual', 'contextual'];
+            const typeColors = {
+                semantic: '#ADD8E6',
+                episodic: '#90EE90',
+                procedural: '#FFFFE0',
+                conceptual: '#E0FFFF',
+                contextual: '#D3D3D3',
+            };
+            types.forEach(type => {
+                legend += `<div class="legend-item">
+                    <div class="legend-color" style="background: ${typeColors[type]}"></div>
+                    ${type}
+                </div>`;
+            });
+            legend += '</div>';
+            
+            content.innerHTML = legend;
+            panel.classList.add('active');
+        }
+
+        function closeLegendPanel() {
+            document.getElementById('legend-panel').classList.remove('active');
+        }
+
+        function showAnalyticsPanel() {
+            const panel = document.getElementById('analytics-panel');
+            const content = document.getElementById('analytics-content');
+            
+            const nodes = state.simulation.nodes();
+            const ranked = [...nodes]
+                .sort((a, b) => b.pagerank - a.pagerank)
+                .slice(0, 10);
+            
+            let analytics = '<div class="analytics-title">Top 10 by PageRank</div>';
+            ranked.forEach((n, i) => {
+                analytics += `<div class="rank-item">#${i+1}: ${n.label.substring(0, 20)} (${n.pagerank.toFixed(4)})</div>`;
+            });
+            
+            content.innerHTML = analytics;
+            panel.classList.add('active');
+        }
+
+        function closeAnalyticsPanel() {
+            document.getElementById('analytics-panel').classList.remove('active');
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Keyboard Shortcuts
+        // ─────────────────────────────────────────────────────────────────
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                state.selectedNode = null;
+                closeInfoPanel();
+                closeLegendPanel();
+                closeAnalyticsPanel();
+                render();
+            } else if (e.key === 'r' || e.key === 'R') {
+                resetView();
+            } else if (e.key === 'f' || e.key === 'F') {
+                fitView();
+            } else if (e.key === 's' || e.key === 'S') {
+                togglePhysics();
+            } else if (e.key === 'c' || e.key === 'C') {
+                toggleColorMode();
+            } else if (e.key === 'l' || e.key === 'L') {
+                showLegendPanel();
+            } else if (e.key === 'a' || e.key === 'A') {
+                showAnalyticsPanel();
+            }
+        });
+
+        // ─────────────────────────────────────────────────────────────────
+        // Initialize
+        // ─────────────────────────────────────────────────────────────────
+        function initUI() {
+            // Populate community filter
+            const communities = [...new Set(state.nodes.map(n => n.community))].sort((a, b) => a - b);
+            const commSelect = document.getElementById('filter-community');
+            communities.forEach(comm => {
+                const opt = document.createElement('option');
+                opt.value = comm.toString();
+                opt.textContent = `Community ${comm}`;
+                commSelect.appendChild(opt);
+            });
+
+            // Update stats
+            document.getElementById('stat-nodes').textContent = state.stats.node_count;
+            document.getElementById('stat-edges').textContent = state.stats.edge_count;
+            document.getElementById('stat-communities').textContent = state.stats.num_communities;
+            document.getElementById('stat-density').textContent = state.stats.density.toFixed(4);
+            
+            // Fit view after simulation stabilizes
+            setTimeout(() => fitView(), 1000);
+        }
+
+        // Window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            render();
+        });
+
+        // Start
+        initUI();
+        initSimulation();
+        toggleColorMode(); // Set initial colors
+        render();
+    </script>
+</body>
+</html>

@@ -71,6 +71,8 @@ pub enum Commands {
     Info(commands::info::InfoArgs),
     /// Show memory and graph statistics
     Stats(commands::stats::StatsArgs),
+    /// Run an assistant-friendly MCP server
+    Mcp(commands::mcp::McpArgs),
 }
 
 #[tokio::main]
@@ -189,5 +191,6 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Info(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Stats(args) => commands::stats::run(args, &pool, &config, cli.json).await,
+        Commands::Mcp(args) => commands::mcp::run(args, pool, config).await,
     }
 }

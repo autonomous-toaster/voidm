@@ -20,15 +20,29 @@ pub struct DatabaseConfig {
     #[serde(default = "default_backend")]
     pub backend: String,
     
-    /// Path to SQLite database file (only for sqlite backend)
+    /// SQLite configuration (used when backend = "sqlite")
+    #[serde(default)]
+    pub sqlite: Option<SqliteConfig>,
+    
+    /// Path to SQLite database file - DEPRECATED, use [database.sqlite].path instead
+    /// This is kept for backward compatibility
     #[serde(default = "default_sqlite_path")]
     pub sqlite_path: String,
     
-    /// Neo4j connection parameters (only for neo4j backend)
+    /// Neo4j connection parameters (used when backend = "neo4j")
     #[serde(default)]
     pub neo4j: Option<Neo4jConfig>,
     
     /// Legacy field for backward compatibility
+    pub path: Option<String>,
+}
+
+/// SQLite configuration section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqliteConfig {
+    /// Path to SQLite database file (optional, defaults to ~/.local/share/voidm/memories.db)
+    /// Supports ~ for home directory
+    #[serde(default)]
     pub path: Option<String>,
 }
 
@@ -103,6 +117,7 @@ impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
             backend: "sqlite".to_string(),
+            sqlite: None,
             sqlite_path: default_sqlite_path(),
             neo4j: None,
             path: None,
@@ -187,7 +202,15 @@ impl Config {
                 return PathBuf::from(p);
             }
         }
-        // New sqlite_path field takes precedence
+        // Check new [database.sqlite].path field first
+        if let Some(sqlite_config) = &self.database.sqlite {
+            if let Some(p) = &sqlite_config.path {
+                if !p.is_empty() {
+                    return PathBuf::from(shellexpand(p));
+                }
+            }
+        }
+        // Legacy sqlite_path field for backward compatibility
         if !self.database.sqlite_path.is_empty() {
             return PathBuf::from(shellexpand(&self.database.sqlite_path));
         }
@@ -269,5 +292,64 @@ password = "neo4jneo4j"
             assert_eq!(nc.username, "neo4j");
             assert_eq!(nc.password, "neo4jneo4j");
         }
+    }
+
+    #[test]
+    fn test_config_with_both_backends() {
+        let toml_str = r#"
+[database]
+backend = "sqlite"
+
+[database.sqlite]
+path = "~/.local/share/voidm/memories.db"
+
+[database.neo4j]
+uri = "bolt://localhost:7687"
+username = "neo4j"
+password = "neo4jneo4j"
+"#;
+        
+        let config: Config = toml::from_str(toml_str).expect("Failed to parse");
+        
+        // Verify backend selection
+        assert_eq!(config.database.backend, "sqlite");
+        
+        // Verify SQLite config is present
+        assert!(config.database.sqlite.is_some());
+        if let Some(sqlite) = &config.database.sqlite {
+            assert_eq!(sqlite.path, Some("~/.local/share/voidm/memories.db".to_string()));
+        }
+        
+        // Verify Neo4j config is present
+        assert!(config.database.neo4j.is_some());
+        if let Some(neo4j) = &config.database.neo4j {
+            assert_eq!(neo4j.uri, "bolt://localhost:7687");
+            assert_eq!(neo4j.username, "neo4j");
+        }
+    }
+
+    #[test]
+    fn test_switch_to_neo4j_backend() {
+        let toml_str = r#"
+[database]
+backend = "neo4j"
+
+[database.sqlite]
+path = "~/.local/share/voidm/memories.db"
+
+[database.neo4j]
+uri = "bolt://localhost:7687"
+username = "neo4j"
+password = "neo4jneo4j"
+"#;
+        
+        let config: Config = toml::from_str(toml_str).expect("Failed to parse");
+        
+        // Verify backend is switched to neo4j
+        assert_eq!(config.database.backend, "neo4j");
+        
+        // Both are still configured
+        assert!(config.database.sqlite.is_some());
+        assert!(config.database.neo4j.is_some());
     }
 }

@@ -206,13 +206,61 @@ async fn migrate_concepts(
 }
 
 async fn migrate_relationships(
-    _source: &(impl Database + ?Sized),
-    _dest: &(impl Database + ?Sized),
-    _skip_ids: &std::collections::HashSet<String>,
-    _dry_run: bool,
-    _json: bool,
+    source: &(impl Database + ?Sized),
+    dest: &(impl Database + ?Sized),
+    skip_ids: &std::collections::HashSet<String>,
+    dry_run: bool,
+    json: bool,
 ) -> Result<()> {
-    // TODO: Implement relationship migration
-    // This requires querying the graph edges from source and recreating them in dest
+    let edges = source.list_edges().await?;
+
+    let mut migrated = 0;
+    let mut skipped = 0;
+
+    for edge in edges {
+        // Skip if either endpoint is in skip list
+        if skip_ids.contains(&edge.from_id) || skip_ids.contains(&edge.to_id) {
+            skipped += 1;
+            continue;
+        }
+
+        if dry_run {
+            migrated += 1;
+            if !json {
+                println!("  [DRY RUN] Would migrate edge: {} -> {} ({})", edge.from_id, edge.to_id, edge.rel_type);
+            }
+            continue;
+        }
+
+        // Parse edge type from string
+        let rel_type = match edge.rel_type.as_str() {
+            "SUPPORTS" => voidm_core::models::EdgeType::Supports,
+            "CONTRADICTS" => voidm_core::models::EdgeType::Contradicts,
+            "PRECEDES" => voidm_core::models::EdgeType::Precedes,
+            "DERIVED_FROM" => voidm_core::models::EdgeType::DerivedFrom,
+            "RELATES_TO" => voidm_core::models::EdgeType::RelatesTo,
+            "EXEMPLIFIES" => voidm_core::models::EdgeType::Exemplifies,
+            "PART_OF" => voidm_core::models::EdgeType::PartOf,
+            _ => {
+                if !json {
+                    eprintln!("  Warning: Unknown edge type '{}', skipping edge {} -> {}", edge.rel_type, edge.from_id, edge.to_id);
+                }
+                skipped += 1;
+                continue;
+            }
+        };
+
+        let _ = dest.link_memories(&edge.from_id, &rel_type, &edge.to_id, edge.note.as_deref()).await?;
+        migrated += 1;
+
+        if !json && migrated % 50 == 0 {
+            println!("  Migrated {} edges...", migrated);
+        }
+    }
+
+    if !json {
+        println!("Edges: {} migrated, {} skipped", migrated, skipped);
+    }
+
     Ok(())
 }

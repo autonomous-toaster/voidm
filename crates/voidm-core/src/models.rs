@@ -205,6 +205,15 @@ pub struct Edge {
 }
 
 /// Return type for link command.
+/// Representation of a link/edge between two memories for migration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryEdge {
+    pub from_id: String,
+    pub to_id: String,
+    pub rel_type: String,
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkResponse {
     pub created: bool,

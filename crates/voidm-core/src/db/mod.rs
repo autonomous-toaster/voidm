@@ -78,6 +78,9 @@ pub trait Database: Send + Sync {
         to_id: &str,
     ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
     
+    /// List all memory-to-memory edges (for migration)
+    fn list_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>>;
+    
     // ===== Search =====
     
     /// Hybrid search (vector + BM25 + fuzzy)

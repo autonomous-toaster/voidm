@@ -560,3 +560,30 @@ pub async fn check_model_mismatch(pool: &SqlitePool, configured_model: &str) -> 
     }
     Ok(None)
 }
+
+/// List all memory-to-memory edges for migration purposes
+pub async fn list_edges(pool: &SqlitePool) -> Result<Vec<crate::models::MemoryEdge>> {
+    // Get all edges with their source and target memory IDs
+    let edges_data: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT gn1.memory_id, gn2.memory_id, ge.rel_type, ge.note
+        FROM graph_edges ge
+        JOIN graph_nodes gn1 ON ge.source_id = gn1.id
+        JOIN graph_nodes gn2 ON ge.target_id = gn2.id
+        ORDER BY ge.created_at
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let edges = edges_data.into_iter().map(|(from_id, to_id, rel_type, note)| {
+        crate::models::MemoryEdge {
+            from_id,
+            to_id,
+            rel_type,
+            note,
+        }
+    }).collect();
+
+    Ok(edges)
+}

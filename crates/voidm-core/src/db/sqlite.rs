@@ -183,6 +183,13 @@ impl crate::db::Database for SqliteDatabase {
         })
     }
 
+    fn list_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            crate::crud::list_edges(&pool).await
+        })
+    }
+
     fn search_hybrid(
         &self,
         opts: &SearchOptions,

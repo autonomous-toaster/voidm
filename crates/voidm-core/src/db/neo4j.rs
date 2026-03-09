@@ -370,6 +370,32 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
+    fn list_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>> {
+        let graph = self.graph.clone();
+
+        Box::pin(async move {
+            let mut result = graph
+                .execute(
+                    neo4rs::query("MATCH (from:Memory)-[r:RELATES]->(to:Memory) RETURN from.id as from_id, to.id as to_id, r.type as rel_type, r.note as note")
+                )
+                .await
+                .context("Failed to list edges from Neo4j")?;
+
+            let mut edges = Vec::new();
+            while let Ok(Some(row)) = result.next().await {
+                let edge = crate::models::MemoryEdge {
+                    from_id: row.get("from_id").context("Missing from_id")?,
+                    to_id: row.get("to_id").context("Missing to_id")?,
+                    rel_type: row.get("rel_type").context("Missing rel_type")?,
+                    note: row.get("note").ok(),
+                };
+                edges.push(edge);
+            }
+
+            Ok(edges)
+        })
+    }
+
     fn search_hybrid(
         &self,
         _opts: &SearchOptions,

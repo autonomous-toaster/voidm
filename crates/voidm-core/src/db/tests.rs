@@ -91,6 +91,10 @@ mod tests {
             Box::pin(async { Ok(true) })
         }
 
+        fn list_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+
         fn search_hybrid(
             &self,
             _opts: &SearchOptions,

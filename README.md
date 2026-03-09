@@ -32,11 +32,17 @@ Local-first persistent memory for LLM agents.
 ```bash
 git clone https://github.com/autonomous-toaster/voidm
 cd voidm
+cargo install --path crates/voidm-cli
+```
+
+Or build manually:
+
+```bash
 cargo build --release
 cp target/release/voidm ~/.local/bin/
 ```
 
-> Requires Rust 1.70+. SQLite is bundled — no system dependencies.  
+> Requires Rust 1.94.0+. SQLite is bundled — no system dependencies.  
 > ML models are downloaded on first use to `~/.cache/voidm/`.
 
 ### Model Initialization (Optional)

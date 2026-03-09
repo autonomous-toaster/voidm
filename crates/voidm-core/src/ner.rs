@@ -65,10 +65,12 @@ fn is_begin(label: &str) -> bool {
     label.starts_with('B')
 }
 
+use std::sync::Mutex;
+
 // ─── Model state ──────────────────────────────────────────────────────────────
 
 struct NerModel {
-    session: Session,
+    session: Mutex<Session>,
     tokenizer: tokenizers::Tokenizer,
 }
 
@@ -116,7 +118,7 @@ async fn load_or_download() -> Result<NerModel> {
         .commit_from_file(&onnx_path)
         .context("Failed to load NER ONNX model")?;
 
-    Ok(NerModel { session, tokenizer })
+    Ok(NerModel { session: Mutex::new(session), tokenizer })
 }
 
 async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
@@ -179,22 +181,26 @@ pub fn extract_entities(text: &str) -> Result<Vec<NamedEntity>> {
         ([1usize, seq_len], token_type_ids.into_boxed_slice())
     ).context("NER token_type_ids tensor")?;
 
-    let outputs = model.session.run(
-        ort::inputs![
-            "input_ids"      => ids_tensor,
-            "attention_mask" => mask_tensor,
-            "token_type_ids" => type_tensor
-        ].context("NER inputs build")?
-    ).context("NER inference failed")?;
+    // Perform inference and extract logits within the lock scope
+    let logits_flat = {
+        let mut session_lock = model.session.lock().unwrap();
+        let outputs = session_lock.run(
+            ort::inputs![
+                "input_ids"      => ids_tensor,
+                "attention_mask" => mask_tensor,
+                "token_type_ids" => type_tensor
+            ]
+        ).context("NER inference failed")?;
 
-    // logits: [1, seq_len, num_labels=9]
-    let logits_value = outputs.get("logits")
-        .context("No 'logits' output from NER model")?;
-    let logits_tensor = logits_value
-        .try_extract_tensor::<f32>()
-        .context("Failed to extract NER logits")?;
-    let logits_view = logits_tensor.view();
-    let logits_flat: Vec<f32> = logits_view.iter().cloned().collect();
+        // logits: [1, seq_len, num_labels=9]
+        let logits_value = outputs.get("logits")
+            .context("No 'logits' output from NER model")?;
+        let logits_tensor = logits_value
+            .try_extract_tensor::<f32>()
+            .context("Failed to extract NER logits")?;
+        let (_shape, logits_raw) = logits_tensor;
+        logits_raw.to_vec()
+    };
 
     let num_labels = LABELS.len();
     let token_offsets = encoding.get_offsets();
@@ -356,7 +362,8 @@ mod tests {
         ensure_ner_model().await.expect("model load");
         let wrapper = NER_MODEL.get().unwrap();
         let model = &wrapper.0;
-        let input_names: Vec<&str> = model.session.inputs.iter().map(|i| i.name.as_str()).collect();
+        let session = model.session.lock().unwrap();
+        let input_names: Vec<&str> = session.inputs().iter().map(|i| i.name()).collect();
         assert!(input_names.contains(&"input_ids"));
         assert!(input_names.contains(&"attention_mask"));
         assert!(input_names.contains(&"token_type_ids"), "BERT-NER uses token_type_ids");

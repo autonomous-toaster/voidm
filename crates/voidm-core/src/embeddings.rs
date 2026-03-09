@@ -1,11 +1,15 @@
 use anyhow::{Context, Result};
 use once_cell::sync::OnceCell;
+use std::sync::Mutex;
 
-static EMBEDDER: OnceCell<fastembed::TextEmbedding> = OnceCell::new();
+static EMBEDDER: OnceCell<Mutex<fastembed::TextEmbedding>> = OnceCell::new();
 
 /// Initialize the embedding model (lazy, called on first use).
-pub fn get_embedder(model_name: &str) -> Result<&'static fastembed::TextEmbedding> {
-    EMBEDDER.get_or_try_init(|| init_embedder(model_name))
+pub fn get_embedder(model_name: &str) -> Result<&'static Mutex<fastembed::TextEmbedding>> {
+    EMBEDDER.get_or_try_init(|| {
+        let embedder = init_embedder(model_name)?;
+        Ok(Mutex::new(embedder))
+    })
 }
 
 fn init_embedder(model_name: &str) -> Result<fastembed::TextEmbedding> {
@@ -57,14 +61,16 @@ pub fn embedding_cache_dir() -> std::path::PathBuf {
 
 /// Embed a single text, returns the float vector.
 pub fn embed_text(model_name: &str, text: &str) -> Result<Vec<f32>> {
-    let embedder = get_embedder(model_name)?;
+    let embedder_lock = get_embedder(model_name)?;
+    let mut embedder = embedder_lock.lock().unwrap();
     let mut results = embedder.embed(vec![text.to_string()], None)?;
     results.pop().context("Embedding returned empty result")
 }
 
 /// Embed multiple texts in one batch.
 pub fn embed_batch(model_name: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-    let embedder = get_embedder(model_name)?;
+    let embedder_lock = get_embedder(model_name)?;
+    let mut embedder = embedder_lock.lock().unwrap();
     embedder.embed(texts.to_vec(), None).context("Batch embedding failed")
 }
 

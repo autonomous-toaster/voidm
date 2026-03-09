@@ -6,9 +6,9 @@ use std::str::FromStr;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 use crate::models::{
-    AddMemoryRequest, AddMemoryResponse, Memory, Edge, EdgeType,
+    AddMemoryRequest, AddMemoryResponse, Memory, EdgeType, LinkResponse,
 };
-use crate::ontology::{Concept, ConceptWithInstances, OntologyEdge};
+use crate::ontology::{Concept, ConceptWithInstances, OntologyEdge, ConceptWithSimilarityWarning, ConceptSearchResult};
 use crate::search::{SearchOptions, SearchResponse};
 
 /// Load sqlite-vec at process level via sqlite3_auto_extension.
@@ -157,7 +157,7 @@ impl crate::db::Database for SqliteDatabase {
         rel: &EdgeType,
         to_id: &str,
         note: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<Edge>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<LinkResponse>> + Send + '_>> {
         let pool = self.pool.clone();
         let from_id = from_id.to_string();
         let to_id = to_id.to_string();
@@ -192,20 +192,23 @@ impl crate::db::Database for SqliteDatabase {
         config_search: &crate::config::SearchConfig,
     ) -> Pin<Box<dyn Future<Output = Result<SearchResponse>> + Send + '_>> {
         let pool = self.pool.clone();
-        let opts = opts.clone();
-        let model_name = model_name.to_string();
-        let config_search = config_search.clone();
-        Box::pin(async move {
+        let opts_owned: SearchOptions = opts.clone();
+        let model_name_owned: String = model_name.to_string();
+        let search_config_owned: crate::config::SearchConfig = config_search.clone();
+        
+        let future = async move {
             crate::search::search(
                 &pool,
-                &opts,
-                &model_name,
+                &opts_owned,
+                &model_name_owned,
                 embeddings_enabled,
                 config_min_score,
-                &config_search,
+                &search_config_owned,
             )
             .await
-        })
+        };
+        
+        Box::pin(future)
     }
 
     fn add_concept(
@@ -213,7 +216,7 @@ impl crate::db::Database for SqliteDatabase {
         name: &str,
         description: Option<&str>,
         scope: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<Concept>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<ConceptWithSimilarityWarning>> + Send + '_>> {
         let pool = self.pool.clone();
         let name = name.to_string();
         let description = description.map(|s| s.to_string());
@@ -275,7 +278,7 @@ impl crate::db::Database for SqliteDatabase {
         query: &str,
         scope: Option<&str>,
         limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Concept>>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ConceptSearchResult>>> + Send + '_>> {
         let pool = self.pool.clone();
         let query = query.to_string();
         let scope = scope.map(|s| s.to_string());

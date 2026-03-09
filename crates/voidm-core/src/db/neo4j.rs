@@ -3,9 +3,9 @@ use std::pin::Pin;
 use std::future::Future;
 
 use crate::models::{
-    AddMemoryRequest, AddMemoryResponse, Memory, Edge, EdgeType,
+    AddMemoryRequest, AddMemoryResponse, Memory, EdgeType, LinkResponse,
 };
-use crate::ontology::{Concept, ConceptWithInstances, OntologyEdge};
+use crate::ontology::{Concept, ConceptWithInstances, OntologyEdge, ConceptWithSimilarityWarning, ConceptSearchResult};
 use crate::search::{SearchOptions, SearchResponse};
 
 /// Neo4j implementation of the Database trait.
@@ -101,7 +101,7 @@ impl crate::db::Database for Neo4jDatabase {
         _rel: &EdgeType,
         _to_id: &str,
         _note: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<Edge>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<LinkResponse>> + Send + '_>> {
         Box::pin(async move {
             anyhow::bail!("Neo4j backend not yet implemented")
         })
@@ -136,7 +136,7 @@ impl crate::db::Database for Neo4jDatabase {
         _name: &str,
         _description: Option<&str>,
         _scope: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<Concept>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<ConceptWithSimilarityWarning>> + Send + '_>> {
         Box::pin(async move {
             anyhow::bail!("Neo4j backend not yet implemented")
         })
@@ -184,7 +184,7 @@ impl crate::db::Database for Neo4jDatabase {
         _query: &str,
         _scope: Option<&str>,
         _limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Concept>>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ConceptSearchResult>>> + Send + '_>> {
         Box::pin(async move {
             anyhow::bail!("Neo4j backend not yet implemented")
         })

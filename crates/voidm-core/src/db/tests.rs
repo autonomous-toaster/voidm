@@ -1,133 +1,179 @@
 #[cfg(test)]
 mod tests {
-    use super::super::*;
+    use std::pin::Pin;
+    use std::future::Future;
     use std::sync::Arc;
+    use anyhow::Result;
+    use crate::db::Database;
+    use crate::models::{AddMemoryRequest, AddMemoryResponse, Memory, EdgeType, LinkResponse};
+    use crate::ontology::{Concept, ConceptWithInstances, OntologyEdge, ConceptWithSimilarityWarning, ConceptSearchResult};
+    use crate::search::{SearchOptions, SearchResponse};
+    use crate::config::SearchConfig;
 
-    /// Test that the Database trait can be used as a trait object
-    #[test]
-    fn test_database_trait_is_object_safe() {
-        // This compiles if the trait is object-safe
-        let _: Arc<dyn Database> = Arc::new(DummyDatabase);
-    }
-
-    /// Dummy implementation for testing
+    /// Dummy implementation to verify the Database trait is object-safe
     struct DummyDatabase;
 
     impl Database for DummyDatabase {
-        fn health_check(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + '_>> {
+        fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
 
-        fn close(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + '_>> {
+        fn close(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
 
-        fn ensure_schema(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + '_>> {
+        fn ensure_schema(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
 
         fn add_memory(
             &self,
-            _req: crate::models::AddMemoryRequest,
+            _req: AddMemoryRequest,
             _config: &crate::Config,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<crate::models::AddMemoryResponse>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<AddMemoryResponse>> + Send + '_>> {
             Box::pin(async {
-                anyhow::bail!("dummy")
+                Err(anyhow::anyhow!("dummy"))
             })
         }
 
-        fn get_memory(&self, _id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Option<crate::models::Memory>>> + Send + '_>> {
+        fn get_memory(&self, _id: &str) -> Pin<Box<dyn Future<Output = Result<Option<Memory>>> + Send + '_>> {
             Box::pin(async { Ok(None) })
         }
 
-        fn list_memories(&self, _limit: Option<usize>) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<crate::models::Memory>>> + Send + '_>> {
+        fn list_memories(&self, _limit: Option<usize>) -> Pin<Box<dyn Future<Output = Result<Vec<Memory>>> + Send + '_>> {
             Box::pin(async { Ok(vec![]) })
         }
 
-        fn delete_memory(&self, _id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        fn delete_memory(&self, _id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
             Box::pin(async { Ok(false) })
         }
 
-        fn update_memory(
-            &self,
-            _id: &str,
-            _content: &str,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + '_>> {
+        fn update_memory(&self, _id: &str, _content: &str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
 
-        fn resolve_memory_id(&self, _id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>> {
-            Box::pin(async { Ok(String::new()) })
+        fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+            let id = id.to_string();
+            Box::pin(async move { Ok(id) })
         }
 
-        fn list_scopes(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<String>>> + Send + '_>> {
+        fn list_scopes(&self) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + '_>> {
             Box::pin(async { Ok(vec![]) })
         }
 
         fn link_memories(
             &self,
-            _from_id: &str,
-            _rel: &crate::models::EdgeType,
-            _to_id: &str,
+            from_id: &str,
+            rel: &EdgeType,
+            to_id: &str,
             _note: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<crate::models::Edge>> + Send + '_>> {
-            Box::pin(async { anyhow::bail!("dummy") })
+        ) -> Pin<Box<dyn Future<Output = Result<LinkResponse>> + Send + '_>> {
+            let from_id = from_id.to_string();
+            let rel = rel.clone();
+            let to_id = to_id.to_string();
+            Box::pin(async move {
+                Ok(LinkResponse {
+                    created: true,
+                    from: from_id,
+                    rel: format!("{:?}", rel),
+                    to: to_id,
+                    conflict_warning: None,
+                })
+            })
         }
 
         fn unlink_memories(
             &self,
             _from_id: &str,
-            _rel: &crate::models::EdgeType,
+            _rel: &EdgeType,
             _to_id: &str,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
-            Box::pin(async { Ok(false) })
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+            Box::pin(async { Ok(true) })
         }
 
         fn search_hybrid(
             &self,
-            _opts: &crate::models::SearchOptions,
+            _opts: &SearchOptions,
             _model_name: &str,
             _embeddings_enabled: bool,
             _config_min_score: f32,
-            _config_search: &crate::config::SearchConfig,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<crate::models::SearchResponse>> + Send + '_>> {
-            Box::pin(async { anyhow::bail!("dummy") })
+            _config_search: &SearchConfig,
+        ) -> Pin<Box<dyn Future<Output = Result<SearchResponse>> + Send + '_>> {
+            Box::pin(async {
+                Ok(SearchResponse {
+                    results: vec![],
+                    threshold_applied: None,
+                    best_score: None,
+                })
+            })
         }
 
         fn add_concept(
             &self,
-            _name: &str,
+            name: &str,
             _description: Option<&str>,
             _scope: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<crate::models::Concept>> + Send + '_>> {
-            Box::pin(async { anyhow::bail!("dummy") })
+        ) -> Pin<Box<dyn Future<Output = Result<ConceptWithSimilarityWarning>> + Send + '_>> {
+            let name = name.to_string();
+            Box::pin(async move {
+                Ok(ConceptWithSimilarityWarning {
+                    id: "c1".to_string(),
+                    name,
+                    description: None,
+                    scope: None,
+                    created_at: "2025-01-01".to_string(),
+                    similar_concepts: vec![],
+                })
+            })
         }
 
-        fn get_concept(&self, _id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<crate::models::Concept>> + Send + '_>> {
-            Box::pin(async { anyhow::bail!("dummy") })
+        fn get_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Concept>> + Send + '_>> {
+            let id = id.to_string();
+            Box::pin(async move {
+                Ok(Concept {
+                    id,
+                    name: "Test".to_string(),
+                    description: None,
+                    scope: None,
+                    created_at: "2025-01-01".to_string(),
+                })
+            })
         }
 
         fn get_concept_with_instances(
             &self,
-            _id: &str,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<crate::models::ConceptWithInstances>> + Send + '_>> {
-            Box::pin(async { anyhow::bail!("dummy") })
+            id: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<ConceptWithInstances>> + Send + '_>> {
+            let id = id.to_string();
+            Box::pin(async move {
+                Ok(ConceptWithInstances {
+                    id,
+                    name: "Test".to_string(),
+                    description: None,
+                    scope: None,
+                    created_at: "2025-01-01".to_string(),
+                    instances: vec![],
+                    subclasses: vec![],
+                    superclasses: vec![],
+                })
+            })
         }
 
         fn list_concepts(
             &self,
             _scope: Option<&str>,
             _limit: usize,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<crate::models::Concept>>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<Concept>>> + Send + '_>> {
             Box::pin(async { Ok(vec![]) })
         }
 
-        fn delete_concept(&self, _id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
-            Box::pin(async { Ok(false) })
+        fn delete_concept(&self, _id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+            Box::pin(async { Ok(true) })
         }
 
-        fn resolve_concept_id(&self, _id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>> {
-            Box::pin(async { Ok(String::new()) })
+        fn resolve_concept_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+            let id = id.to_string();
+            Box::pin(async move { Ok(id) })
         }
 
         fn search_concepts(
@@ -135,47 +181,71 @@ mod tests {
             _query: &str,
             _scope: Option<&str>,
             _limit: usize,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<crate::models::Concept>>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<ConceptSearchResult>>> + Send + '_>> {
             Box::pin(async { Ok(vec![]) })
         }
 
         fn add_ontology_edge(
             &self,
-            _from_id: &str,
-            _from_kind: crate::ontology::NodeKind,
+            from_id: &str,
+            _from_type: crate::ontology::NodeKind,
             _rel: &crate::ontology::OntologyRelType,
-            _to_id: &str,
-            _to_kind: crate::ontology::NodeKind,
+            to_id: &str,
+            _to_type: crate::ontology::NodeKind,
             _note: Option<&str>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<crate::ontology::ConceptEdge>> + Send + '_>> {
-            Box::pin(async { anyhow::bail!("dummy") })
+        ) -> Pin<Box<dyn Future<Output = Result<OntologyEdge>> + Send + '_>> {
+            let from_id = from_id.to_string();
+            let to_id = to_id.to_string();
+            Box::pin(async move {
+                Ok(OntologyEdge {
+                    id: 1,
+                    from_id,
+                    from_type: crate::ontology::NodeKind::Memory,
+                    rel_type: "IS_A".to_string(),
+                    to_id,
+                    to_type: crate::ontology::NodeKind::Concept,
+                    note: None,
+                    created_at: "2025-01-01".to_string(),
+                })
+            })
         }
 
-        fn delete_ontology_edge(&self, _edge_id: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
-            Box::pin(async { Ok(false) })
+        fn delete_ontology_edge(&self, _edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+            Box::pin(async { Ok(true) })
         }
 
         fn query_cypher(
             &self,
             _query: &str,
             _params: &serde_json::Value,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<serde_json::Value>> + Send + '_>> {
-            Box::pin(async { anyhow::bail!("dummy") })
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
+            Box::pin(async {
+                Ok(serde_json::json!({}))
+            })
         }
 
         fn get_neighbors(
             &self,
             _id: &str,
             _depth: usize,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<serde_json::Value>> + Send + '_>> {
-            Box::pin(async { anyhow::bail!("dummy") })
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
+            Box::pin(async {
+                Ok(serde_json::json!({}))
+            })
         }
 
         fn check_model_mismatch(
             &self,
             _configured_model: &str,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Option<(String, String)>>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Option<(String, String)>>> + Send + '_>> {
             Box::pin(async { Ok(None) })
         }
+    }
+
+    #[test]
+    fn test_database_trait_is_object_safe() {
+        // Verify that we can create a trait object
+        let db: Arc<dyn Database> = Arc::new(DummyDatabase);
+        let _ = db;  // Use the variable
     }
 }

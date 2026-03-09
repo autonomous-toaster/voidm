@@ -4,9 +4,9 @@ use std::pin::Pin;
 use std::future::Future;
 
 use crate::models::{
-    AddMemoryRequest, AddMemoryResponse, Memory, Edge, EdgeType,
+    AddMemoryRequest, AddMemoryResponse, Memory, EdgeType, LinkResponse,
 };
-use crate::ontology::{Concept, ConceptWithInstances, OntologyEdge};
+use crate::ontology::{Concept, ConceptWithInstances, OntologyEdge, ConceptWithSimilarityWarning, ConceptSearchResult};
 use crate::search::{SearchOptions, SearchResponse};
 
 /// Database abstraction trait for supporting multiple backends (SQLite, Neo4j, etc.)
@@ -68,7 +68,7 @@ pub trait Database: Send + Sync {
         rel: &EdgeType,
         to_id: &str,
         note: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<Edge>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<LinkResponse>> + Send + '_>>;
     
     /// Remove a link between two memories
     fn unlink_memories(
@@ -98,7 +98,7 @@ pub trait Database: Send + Sync {
         name: &str,
         description: Option<&str>,
         scope: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<Concept>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<ConceptWithSimilarityWarning>> + Send + '_>>;
     
     /// Get a concept by ID
     fn get_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Concept>> + Send + '_>>;
@@ -128,7 +128,7 @@ pub trait Database: Send + Sync {
         query: &str,
         scope: Option<&str>,
         limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Concept>>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ConceptSearchResult>>> + Send + '_>>;
     
     // ===== Ontology Edges =====
     

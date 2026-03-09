@@ -16,7 +16,58 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
+    /// Database backend: "sqlite" or "neo4j" (default: "sqlite")
+    #[serde(default = "default_backend")]
+    pub backend: String,
+    
+    /// Path to SQLite database file (only for sqlite backend)
+    #[serde(default = "default_sqlite_path")]
+    pub sqlite_path: String,
+    
+    /// Neo4j connection parameters (only for neo4j backend)
+    #[serde(default)]
+    pub neo4j: Option<Neo4jConfig>,
+    
+    /// Legacy field for backward compatibility
     pub path: Option<String>,
+}
+
+fn default_backend() -> String {
+    "sqlite".to_string()
+}
+
+fn default_sqlite_path() -> String {
+    let mut path = dirs::data_local_dir().expect("Cannot find data directory");
+    path.push("voidm");
+    path.push("memories.db");
+    path.to_string_lossy().to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Neo4jConfig {
+    /// Neo4j Bolt URI (default: bolt://localhost:7687)
+    #[serde(default = "default_neo4j_uri")]
+    pub uri: String,
+    
+    /// Neo4j username (default: "neo4j")
+    #[serde(default = "default_neo4j_user")]
+    pub username: String,
+    
+    /// Neo4j password (default: "password")
+    #[serde(default = "default_neo4j_password")]
+    pub password: String,
+}
+
+fn default_neo4j_uri() -> String {
+    "bolt://localhost:7687".to_string()
+}
+
+fn default_neo4j_user() -> String {
+    "neo4j".to_string()
+}
+
+fn default_neo4j_password() -> String {
+    "password".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,7 +101,12 @@ pub struct InsertConfig {
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
-        Self { path: None }
+        Self {
+            backend: "sqlite".to_string(),
+            sqlite_path: default_sqlite_path(),
+            neo4j: None,
+            path: None,
+        }
     }
 }
 
@@ -131,6 +187,11 @@ impl Config {
                 return PathBuf::from(p);
             }
         }
+        // New sqlite_path field takes precedence
+        if !self.database.sqlite_path.is_empty() {
+            return PathBuf::from(shellexpand(&self.database.sqlite_path));
+        }
+        // Legacy path field for backward compatibility
         if let Some(p) = &self.database.path {
             if !p.is_empty() {
                 return PathBuf::from(shellexpand(p));

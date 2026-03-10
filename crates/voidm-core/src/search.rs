@@ -36,7 +36,7 @@ pub struct SearchResult {
     pub quality_score: Option<f32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SearchMode {
     Hybrid,
     Semantic,
@@ -59,6 +59,7 @@ impl std::str::FromStr for SearchMode {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchOptions {
     pub query: String,
     pub mode: SearchMode,

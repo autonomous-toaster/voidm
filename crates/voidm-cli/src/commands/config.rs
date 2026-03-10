@@ -45,8 +45,10 @@ fn apply_config_key(config: &mut Config, key: &str, value: &str) -> Result<()> {
         "insert.auto_link_threshold" => config.insert.auto_link_threshold = value.parse()?,
         "insert.duplicate_threshold" => config.insert.duplicate_threshold = value.parse()?,
         "insert.auto_link_limit" => config.insert.auto_link_limit = value.parse()?,
-        "database.path" => config.database.path = Some(value.to_string()),
-        other => anyhow::bail!("Unknown config key: '{}'. Valid keys: embeddings.model, embeddings.enabled, search.mode, search.default_limit, search.min_score, insert.auto_link_threshold, insert.duplicate_threshold, insert.auto_link_limit, database.path", other),
+        "database.backend" => config.database.backend = value.to_string(),
+        "database.sqlite_path" => config.database.sqlite_path = value.to_string(),
+        "database.path" => config.database.path = Some(value.to_string()), // legacy
+        other => anyhow::bail!("Unknown config key: '{}'. Valid keys: embeddings.model, embeddings.enabled, search.mode, search.default_limit, search.min_score, insert.auto_link_threshold, insert.duplicate_threshold, insert.auto_link_limit, database.backend, database.sqlite_path, database.path", other),
     }
     Ok(())
 }

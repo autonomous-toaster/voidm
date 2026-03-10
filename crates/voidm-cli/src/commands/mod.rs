@@ -10,6 +10,7 @@ pub mod ontology;
 pub mod conflicts;
 pub mod scopes;
 pub mod export;
+pub mod migrate;
 pub mod config;
 pub mod models;
 pub mod instructions;

@@ -16,7 +16,72 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
+    /// Database backend: "sqlite" or "neo4j" (default: "sqlite")
+    #[serde(default = "default_backend")]
+    pub backend: String,
+    
+    /// SQLite configuration (used when backend = "sqlite")
+    #[serde(default)]
+    pub sqlite: Option<SqliteConfig>,
+    
+    /// Path to SQLite database file - DEPRECATED, use [database.sqlite].path instead
+    /// This is kept for backward compatibility
+    #[serde(default = "default_sqlite_path")]
+    pub sqlite_path: String,
+    
+    /// Neo4j connection parameters (used when backend = "neo4j")
+    #[serde(default)]
+    pub neo4j: Option<Neo4jConfig>,
+    
+    /// Legacy field for backward compatibility
     pub path: Option<String>,
+}
+
+/// SQLite configuration section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqliteConfig {
+    /// Path to SQLite database file (optional, defaults to ~/.local/share/voidm/memories.db)
+    /// Supports ~ for home directory
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+fn default_backend() -> String {
+    "sqlite".to_string()
+}
+
+fn default_sqlite_path() -> String {
+    let mut path = dirs::data_local_dir().expect("Cannot find data directory");
+    path.push("voidm");
+    path.push("memories.db");
+    path.to_string_lossy().to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Neo4jConfig {
+    /// Neo4j Bolt URI (default: bolt://localhost:7687)
+    #[serde(default = "default_neo4j_uri")]
+    pub uri: String,
+    
+    /// Neo4j username (default: "neo4j")
+    #[serde(default = "default_neo4j_user")]
+    pub username: String,
+    
+    /// Neo4j password (default: "password")
+    #[serde(default = "default_neo4j_password")]
+    pub password: String,
+}
+
+fn default_neo4j_uri() -> String {
+    "bolt://localhost:7687".to_string()
+}
+
+fn default_neo4j_user() -> String {
+    "neo4j".to_string()
+}
+
+fn default_neo4j_password() -> String {
+    "password".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,7 +115,13 @@ pub struct InsertConfig {
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
-        Self { path: None }
+        Self {
+            backend: "sqlite".to_string(),
+            sqlite: None,
+            sqlite_path: default_sqlite_path(),
+            neo4j: None,
+            path: None,
+        }
     }
 }
 
@@ -131,6 +202,19 @@ impl Config {
                 return PathBuf::from(p);
             }
         }
+        // Check new [database.sqlite].path field first
+        if let Some(sqlite_config) = &self.database.sqlite {
+            if let Some(p) = &sqlite_config.path {
+                if !p.is_empty() {
+                    return PathBuf::from(shellexpand(p));
+                }
+            }
+        }
+        // Legacy sqlite_path field for backward compatibility
+        if !self.database.sqlite_path.is_empty() {
+            return PathBuf::from(shellexpand(&self.database.sqlite_path));
+        }
+        // Legacy path field for backward compatibility
         if let Some(p) = &self.database.path {
             if !p.is_empty() {
                 return PathBuf::from(shellexpand(p));
@@ -186,4 +270,86 @@ pub fn save_config(config: &Config) -> Result<()> {
     let s = toml::to_string_pretty(config)?;
     std::fs::write(&path, s)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_neo4j_config() {
+        let toml_str = r#"
+[database.neo4j]
+uri = "bolt://localhost:7687"
+username = "neo4j"
+password = "neo4jneo4j"
+"#;
+        
+        let config: Config = toml::from_str(toml_str).expect("Failed to parse");
+        assert!(config.database.neo4j.is_some(), "neo4j config should be parsed");
+        if let Some(nc) = &config.database.neo4j {
+            assert_eq!(nc.uri, "bolt://localhost:7687");
+            assert_eq!(nc.username, "neo4j");
+            assert_eq!(nc.password, "neo4jneo4j");
+        }
+    }
+
+    #[test]
+    fn test_config_with_both_backends() {
+        let toml_str = r#"
+[database]
+backend = "sqlite"
+
+[database.sqlite]
+path = "~/.local/share/voidm/memories.db"
+
+[database.neo4j]
+uri = "bolt://localhost:7687"
+username = "neo4j"
+password = "neo4jneo4j"
+"#;
+        
+        let config: Config = toml::from_str(toml_str).expect("Failed to parse");
+        
+        // Verify backend selection
+        assert_eq!(config.database.backend, "sqlite");
+        
+        // Verify SQLite config is present
+        assert!(config.database.sqlite.is_some());
+        if let Some(sqlite) = &config.database.sqlite {
+            assert_eq!(sqlite.path, Some("~/.local/share/voidm/memories.db".to_string()));
+        }
+        
+        // Verify Neo4j config is present
+        assert!(config.database.neo4j.is_some());
+        if let Some(neo4j) = &config.database.neo4j {
+            assert_eq!(neo4j.uri, "bolt://localhost:7687");
+            assert_eq!(neo4j.username, "neo4j");
+        }
+    }
+
+    #[test]
+    fn test_switch_to_neo4j_backend() {
+        let toml_str = r#"
+[database]
+backend = "neo4j"
+
+[database.sqlite]
+path = "~/.local/share/voidm/memories.db"
+
+[database.neo4j]
+uri = "bolt://localhost:7687"
+username = "neo4j"
+password = "neo4jneo4j"
+"#;
+        
+        let config: Config = toml::from_str(toml_str).expect("Failed to parse");
+        
+        // Verify backend is switched to neo4j
+        assert_eq!(config.database.backend, "neo4j");
+        
+        // Both are still configured
+        assert!(config.database.sqlite.is_some());
+        assert!(config.database.neo4j.is_some());
+    }
 }

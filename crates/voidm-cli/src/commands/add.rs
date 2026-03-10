@@ -55,6 +55,7 @@ pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) 
     }
 
     let req = AddMemoryRequest {
+        id: None,
         content: args.content,
         memory_type,
         scopes: args.scope,

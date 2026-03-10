@@ -260,6 +260,7 @@ impl VoidmMcpServer {
             .collect::<std::result::Result<Vec<_>, String>>()?;
 
         let req = AddMemoryRequest {
+            id: None,
             content: params.content,
             memory_type,
             scopes: params.scope,

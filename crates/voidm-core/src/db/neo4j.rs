@@ -1006,7 +1006,7 @@ mod neo4j_integration_tests {
             .expect("Failed to connect to Neo4j");
 
         // Create concept
-        let concept_resp = db.add_concept("TestConcept", Some("A test concept"), Some("testing"))
+        let concept_resp = db.add_concept("TestConcept", Some("A test concept"), Some("testing"), None)
             .await
             .expect("Failed to add concept");
         println!("✓ Created concept: {}", concept_resp.id);

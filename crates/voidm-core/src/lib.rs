@@ -10,6 +10,7 @@ pub mod quality;
 pub mod vector;
 pub mod search;
 pub mod embeddings;
+pub mod migration;
 
 pub use config::Config;
 pub use config::config_path_display;

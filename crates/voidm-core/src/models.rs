@@ -143,6 +143,7 @@ pub struct Memory {
 /// Request to add a memory.
 #[derive(Debug, Clone)]
 pub struct AddMemoryRequest {
+    pub id: Option<String>,
     pub content: String,
     pub memory_type: MemoryType,
     pub scopes: Vec<String>,
@@ -205,6 +206,26 @@ pub struct Edge {
 }
 
 /// Return type for link command.
+/// Representation of a link/edge between two memories for migration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryEdge {
+    pub from_id: String,
+    pub to_id: String,
+    pub rel_type: String,
+    pub note: Option<String>,
+}
+
+/// Representation of an ontology edge (concept-concept, concept-memory, etc.) for migration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyEdgeForMigration {
+    pub from_id: String,
+    pub from_type: String,  // "memory" or "concept"
+    pub to_id: String,
+    pub to_type: String,    // "memory" or "concept"
+    pub rel_type: String,
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkResponse {
     pub created: bool,

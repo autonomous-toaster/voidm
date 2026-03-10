@@ -16,8 +16,10 @@ pub fn run(_args: InfoArgs, config: &Config, db_override: Option<&str>, json: bo
         "--db flag"
     } else if std::env::var("VOIDM_DB").map(|v| !v.is_empty()).unwrap_or(false) {
         "$VOIDM_DB"
-    } else if config.database.path.as_ref().map(|p| !p.is_empty()).unwrap_or(false) {
+    } else if !config.database.sqlite_path.is_empty() {
         "config file"
+    } else if config.database.path.as_ref().map(|p| !p.is_empty()).unwrap_or(false) {
+        "config file (legacy path field)"
     } else {
         "default (XDG)"
     };

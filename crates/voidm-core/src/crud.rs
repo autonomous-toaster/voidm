@@ -53,7 +53,7 @@ pub async fn resolve_id(pool: &SqlitePool, id: &str) -> Result<String> {
 /// 4. COMMIT
 /// Returns AddMemoryResponse with suggested_links and duplicate_warning.
 pub async fn add_memory(pool: &SqlitePool, req: AddMemoryRequest, config: &Config) -> Result<AddMemoryResponse> {
-    let id = Uuid::new_v4().to_string();
+    let id = req.id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let now = Utc::now().to_rfc3339();
     let tags_json = serde_json::to_string(&req.tags)?;
     let metadata_json = serde_json::to_string(&req.metadata)?;
@@ -559,4 +559,57 @@ pub async fn check_model_mismatch(pool: &SqlitePool, configured_model: &str) -> 
         }
     }
     Ok(None)
+}
+
+/// List all memory-to-memory edges for migration purposes
+pub async fn list_edges(pool: &SqlitePool) -> Result<Vec<crate::models::MemoryEdge>> {
+    // Get all edges with their source and target memory IDs
+    let edges_data: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT gn1.memory_id, gn2.memory_id, ge.rel_type, ge.note
+        FROM graph_edges ge
+        JOIN graph_nodes gn1 ON ge.source_id = gn1.id
+        JOIN graph_nodes gn2 ON ge.target_id = gn2.id
+        ORDER BY ge.created_at
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let edges = edges_data.into_iter().map(|(from_id, to_id, rel_type, note)| {
+        crate::models::MemoryEdge {
+            from_id,
+            to_id,
+            rel_type,
+            note,
+        }
+    }).collect();
+
+    Ok(edges)
+}
+
+/// List all ontology edges for migration purposes
+pub async fn list_ontology_edges(pool: &SqlitePool) -> Result<Vec<crate::models::OntologyEdgeForMigration>> {
+    let edges_data: Vec<(String, String, String, String, String, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT from_id, from_type, to_id, to_type, rel_type, note
+        FROM ontology_edges
+        ORDER BY from_id
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let edges = edges_data.into_iter().map(|(from_id, from_type, to_id, to_type, rel_type, note)| {
+        crate::models::OntologyEdgeForMigration {
+            from_id,
+            from_type,
+            to_id,
+            to_type,
+            rel_type,
+            note,
+        }
+    }).collect();
+
+    Ok(edges)
 }

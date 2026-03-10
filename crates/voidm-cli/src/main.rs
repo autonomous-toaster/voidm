@@ -73,6 +73,8 @@ pub enum Commands {
     Stats(commands::stats::StatsArgs),
     /// Run an assistant-friendly MCP server
     Mcp(commands::mcp::McpArgs),
+    /// Migrate data between backends (sqlite ↔ neo4j)
+    Migrate(commands::migrate::MigrateArgs),
 }
 
 #[tokio::main]
@@ -140,6 +142,10 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Init(args) => {
             return commands::init::run(args.clone()).await;
         }
+        Commands::Migrate(args) => {
+            let config = Config::load();
+            return commands::migrate::run(args.clone(), &config, cli.db.as_deref(), cli.json).await;
+        }
         Commands::Models(cmd) => {
             if let commands::models::ModelsCommands::List = cmd {
                 return commands::models::run_list(cli.json);
@@ -190,6 +196,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Instructions(_) => unreachable!(),
         Commands::Info(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
+        Commands::Migrate(_) => unreachable!(),
         Commands::Stats(args) => commands::stats::run(args, &pool, &config, cli.json).await,
         Commands::Mcp(args) => commands::mcp::run(args, pool, config).await,
     }

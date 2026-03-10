@@ -27,3 +27,6 @@ jobs:
 
       - name: Test
         run: cargo test --release -- --test-threads=4
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.13"
+

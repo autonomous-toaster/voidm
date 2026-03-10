@@ -1,6 +1,6 @@
 [package]
 name = "voidm-core"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "Core storage, search, and embedding engine for voidm"
 license = "MIT"
@@ -26,7 +26,7 @@ tracing          = { workspace = true }
 once_cell        = { workspace = true }
 strsim           = { workspace = true }
 voidm-graph      = { path = "../voidm-graph" }
-ort              = { version = "2.0.0-rc.10", features = ["download-binaries"] }
+ort              = { version = "2.0.0-rc.10" }
 hf-hub           = { version = "0.5", features = ["tokio"] }
 tokenizers       = { version = "0.22", default-features = false, features = ["onig"] }
 neo4rs           = "0.7"

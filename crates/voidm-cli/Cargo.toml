@@ -1,6 +1,6 @@
 [package]
 name = "voidm-cli"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "voidm — local-first persistent memory CLI for LLM agents"
 license = "MIT"

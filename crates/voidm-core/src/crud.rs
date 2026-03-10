@@ -53,7 +53,7 @@ pub async fn resolve_id(pool: &SqlitePool, id: &str) -> Result<String> {
 /// 4. COMMIT
 /// Returns AddMemoryResponse with suggested_links and duplicate_warning.
 pub async fn add_memory(pool: &SqlitePool, req: AddMemoryRequest, config: &Config) -> Result<AddMemoryResponse> {
-    let id = Uuid::new_v4().to_string();
+    let id = req.id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let now = Utc::now().to_rfc3339();
     let tags_json = serde_json::to_string(&req.tags)?;
     let metadata_json = serde_json::to_string(&req.metadata)?;

@@ -143,6 +143,7 @@ pub struct Memory {
 /// Request to add a memory.
 #[derive(Debug, Clone)]
 pub struct AddMemoryRequest {
+    pub id: Option<String>,
     pub content: String,
     pub memory_type: MemoryType,
     pub scopes: Vec<String>,

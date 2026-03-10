@@ -78,6 +78,12 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
         ).await?)
     };
 
+    // Ensure schemas are initialized
+    if !args.dry_run {
+        source_db.ensure_schema().await?;
+        dest_db.ensure_schema().await?;
+    }
+
     // Migrate memories
     migrate_memories(source_db.as_ref(), dest_db.as_ref(), config, &args.scope_filter, &skip_ids, args.dry_run, json).await?;
 
@@ -108,7 +114,7 @@ async fn migrate_memories(
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
-    let memories = source.list_memories(None).await?;
+    let memories = source.list_memories(Some(10000)).await?;
 
     let mut migrated = 0;
     let mut skipped = 0;
@@ -137,6 +143,7 @@ async fn migrate_memories(
         }
 
         let req = voidm_core::models::AddMemoryRequest {
+            id: Some(mem.id.clone()),
             content: mem.content.clone(),
             memory_type: mem.memory_type.parse()?,
             scopes: mem.scopes.clone(),
@@ -250,11 +257,26 @@ async fn migrate_relationships(
             }
         };
 
-        let _ = dest.link_memories(&edge.from_id, &rel_type, &edge.to_id, edge.note.as_deref()).await?;
-        migrated += 1;
-
-        if !json && migrated % 50 == 0 {
-            println!("  Migrated {} edges...", migrated);
+        match dest.link_memories(&edge.from_id, &rel_type, &edge.to_id, edge.note.as_deref()).await {
+            Ok(resp) => {
+                if resp.created {
+                    migrated += 1;
+                    if !json && migrated % 10 == 0 {
+                        println!("  Migrated {} edges...", migrated);
+                    }
+                } else {
+                    if !json {
+                        eprintln!("  ERROR: Edge NOT created (MATCH failed?) {} -> {} ({})", edge.from_id, edge.to_id, edge.rel_type);
+                    }
+                    skipped += 1;
+                }
+            }
+            Err(e) => {
+                if !json {
+                    eprintln!("  ERROR: {} -> {} ({}): {}", edge.from_id, edge.to_id, edge.rel_type, e);
+                }
+                skipped += 1;
+            }
         }
     }
 

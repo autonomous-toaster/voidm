@@ -87,7 +87,7 @@ impl crate::db::Database for Neo4jDatabase {
         let config_model = config.embeddings.model.clone();
 
         Box::pin(async move {
-            let id = uuid::Uuid::new_v4().to_string();
+            let id = req.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let created_at = chrono::Utc::now().to_rfc3339();
             let memory_type = req.memory_type.to_string();
 
@@ -852,6 +852,7 @@ mod neo4j_integration_tests {
 
         // Create memory
         let req = AddMemoryRequest {
+            id: None,
             content: "Integration test memory".to_string(),
             memory_type: MemoryType::Semantic,
             scopes: vec!["integration_test".to_string()],
@@ -901,6 +902,7 @@ mod neo4j_integration_tests {
 
         // Create two memories
         let req1 = AddMemoryRequest {
+            id: None,
             content: "First memory".to_string(),
             memory_type: MemoryType::Semantic,
             scopes: vec!["rel_test".to_string()],
@@ -916,6 +918,7 @@ mod neo4j_integration_tests {
             .id;
 
         let req2 = AddMemoryRequest {
+            id: None,
             content: "Second memory".to_string(),
             memory_type: MemoryType::Semantic,
             scopes: vec!["rel_test".to_string()],

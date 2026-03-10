@@ -190,6 +190,26 @@ impl crate::db::Database for SqliteDatabase {
         })
     }
 
+    fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            crate::crud::list_ontology_edges(&pool).await
+        })
+    }
+
+    fn create_ontology_edge(
+        &self,
+        _from_id: &str,
+        _from_type: &str,
+        _rel_type: &str,
+        _to_id: &str,
+        _to_type: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        // SQLite doesn't support ontology edge creation via this trait
+        // It would need to be added to the crud module
+        Box::pin(async { Ok(false) })
+    }
+
     fn search_hybrid(
         &self,
         opts: &SearchOptions,
@@ -223,6 +243,7 @@ impl crate::db::Database for SqliteDatabase {
         name: &str,
         description: Option<&str>,
         scope: Option<&str>,
+        _id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<ConceptWithSimilarityWarning>> + Send + '_>> {
         let pool = self.pool.clone();
         let name = name.to_string();

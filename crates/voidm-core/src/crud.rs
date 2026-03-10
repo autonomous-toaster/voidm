@@ -587,3 +587,29 @@ pub async fn list_edges(pool: &SqlitePool) -> Result<Vec<crate::models::MemoryEd
 
     Ok(edges)
 }
+
+/// List all ontology edges for migration purposes
+pub async fn list_ontology_edges(pool: &SqlitePool) -> Result<Vec<crate::models::OntologyEdgeForMigration>> {
+    let edges_data: Vec<(String, String, String, String, String, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT from_id, from_type, to_id, to_type, rel_type, note
+        FROM ontology_edges
+        ORDER BY from_id
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let edges = edges_data.into_iter().map(|(from_id, from_type, to_id, to_type, rel_type, note)| {
+        crate::models::OntologyEdgeForMigration {
+            from_id,
+            from_type,
+            to_id,
+            to_type,
+            rel_type,
+            note,
+        }
+    }).collect();
+
+    Ok(edges)
+}

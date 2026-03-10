@@ -396,6 +396,50 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
+    fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>> {
+        // TODO: Implement ontology edge querying from Neo4j
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Link a memory or concept to another memory or concept (for ontology edges)
+    fn create_ontology_edge(
+        &self,
+        from_id: &str,
+        from_type: &str,
+        rel_type: &str,
+        to_id: &str,
+        to_type: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let from_id = from_id.to_string();
+        let to_id = to_id.to_string();
+        let from_label = if from_type == "memory" { "Memory" } else { "Concept" };
+        let to_label = if to_type == "memory" { "Memory" } else { "Concept" };
+        let rel_type = rel_type.to_string();
+
+        Box::pin(async move {
+            let query_str = format!(
+                "MATCH (from:{} {{id: $from_id}}), (to:{} {{id: $to_id}})
+                 CREATE (from)-[r:{}]->(to)
+                 RETURN true as created",
+                from_label, to_label, rel_type
+            );
+
+            let mut result = graph
+                .execute(neo4rs::query(&query_str)
+                    .param("from_id", from_id.clone())
+                    .param("to_id", to_id.clone()))
+                .await
+                .with_context(|| format!("Failed to link {} -> {} in Neo4j", from_id, to_id))?;
+
+            if let Ok(Some(_row)) = result.next().await {
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+    }
+
     fn search_hybrid(
         &self,
         _opts: &SearchOptions,
@@ -415,14 +459,16 @@ impl crate::db::Database for Neo4jDatabase {
         name: &str,
         description: Option<&str>,
         scope: Option<&str>,
+        id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<ConceptWithSimilarityWarning>> + Send + '_>> {
         let graph = self.graph.clone();
         let name = name.to_string();
         let description = description.map(|s| s.to_string());
         let scope = scope.map(|s| s.to_string());
+        let id_owned = id.map(|s| s.to_string());
 
         Box::pin(async move {
-            let id = uuid::Uuid::new_v4().to_string();
+            let id = id_owned.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let created_at = chrono::Utc::now().to_rfc3339();
 
             let query = neo4rs::query(

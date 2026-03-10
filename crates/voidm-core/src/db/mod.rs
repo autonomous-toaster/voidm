@@ -81,6 +81,19 @@ pub trait Database: Send + Sync {
     /// List all memory-to-memory edges (for migration)
     fn list_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>>;
     
+    /// List all ontology edges (concept-to-concept, concept-to-memory, etc.)
+    fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>>;
+
+    /// Create an ontology edge (for migration)
+    fn create_ontology_edge(
+        &self,
+        from_id: &str,
+        from_type: &str,
+        rel_type: &str,
+        to_id: &str,
+        to_type: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
+    
     // ===== Search =====
     
     /// Hybrid search (vector + BM25 + fuzzy)
@@ -101,6 +114,7 @@ pub trait Database: Send + Sync {
         name: &str,
         description: Option<&str>,
         scope: Option<&str>,
+        id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<ConceptWithSimilarityWarning>> + Send + '_>>;
     
     /// Get a concept by ID

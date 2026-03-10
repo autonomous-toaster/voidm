@@ -95,6 +95,21 @@ mod tests {
             Box::pin(async { Ok(vec![]) })
         }
 
+        fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+
+        fn create_ontology_edge(
+            &self,
+            _from_id: &str,
+            _from_type: &str,
+            _rel_type: &str,
+            _to_id: &str,
+            _to_type: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+            Box::pin(async { Ok(false) })
+        }
+
         fn search_hybrid(
             &self,
             _opts: &SearchOptions,
@@ -117,6 +132,7 @@ mod tests {
             name: &str,
             _description: Option<&str>,
             _scope: Option<&str>,
+            _id: Option<&str>,
         ) -> Pin<Box<dyn Future<Output = Result<ConceptWithSimilarityWarning>> + Send + '_>> {
             let name = name.to_string();
             Box::pin(async move {

@@ -90,8 +90,11 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
     // Migrate concepts
     migrate_concepts(source_db.as_ref(), dest_db.as_ref(), &args.scope_filter, args.dry_run, json).await?;
 
-    // Migrate relationships
+    // Migrate relationships (memory-to-memory edges)
     migrate_relationships(source_db.as_ref(), dest_db.as_ref(), &skip_ids, args.dry_run, json).await?;
+
+    // Migrate ontology edges (concept-concept, concept-memory, etc.)
+    migrate_ontology_edges(source_db.as_ref(), dest_db.as_ref(), &skip_ids, args.dry_run, json).await?;
 
     if !json {
         println!("\n✓ Migration complete!");
@@ -197,7 +200,7 @@ async fn migrate_concepts(
             continue;
         }
 
-        let _ = dest.add_concept(&concept.name, concept.description.as_deref(), concept.scope.as_deref()).await?;
+        let _ = dest.add_concept(&concept.name, concept.description.as_deref(), concept.scope.as_deref(), Some(&concept.id)).await?;
         migrated += 1;
 
         if !json && migrated % 100 == 0 {
@@ -285,4 +288,73 @@ async fn migrate_relationships(
     }
 
     Ok(())
+}
+
+async fn migrate_ontology_edges(
+    source: &(impl Database + ?Sized),
+    dest: &(impl Database + ?Sized),
+    skip_ids: &std::collections::HashSet<String>,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    let edges = source.list_ontology_edges().await?;
+
+    let mut migrated = 0;
+    let mut skipped = 0;
+    let mut failed = 0;
+
+    for edge in edges {
+        // Skip if either endpoint is in skip list
+        if skip_ids.contains(&edge.from_id) || skip_ids.contains(&edge.to_id) {
+            skipped += 1;
+            continue;
+        }
+
+        if dry_run {
+            migrated += 1;
+            if !json {
+                println!("  [DRY RUN] Would migrate ontology edge: {} ({}) -> {} ({}) [{}]", 
+                    edge.from_id, edge.from_type, edge.to_id, edge.to_type, edge.rel_type);
+            }
+            continue;
+        }
+
+        // Try to create the ontology edge
+        match dest.create_ontology_edge(&edge.from_id, &edge.from_type, &edge.rel_type, &edge.to_id, &edge.to_type).await {
+            Ok(true) => {
+                migrated += 1;
+                if !json && migrated % 100 == 0 {
+                    println!("  Migrated {} ontology edges...", migrated);
+                }
+            }
+            Ok(false) => {
+                if !json && failed < 5 {
+                    eprintln!("  Warning: Ontology edge not created: {} -> {}", edge.from_id, edge.to_id);
+                }
+                failed += 1;
+            }
+            Err(e) => {
+                if !json && failed < 5 {
+                    eprintln!("  Error: {} -> {}: {}", edge.from_id, edge.to_id, e);
+                }
+                failed += 1;
+            }
+        }
+    }
+
+    if !json {
+        println!("Ontology Edges: {} migrated, {} failed, {} skipped", migrated, failed, skipped);
+    }
+
+    Ok(())
+}
+
+async fn try_create_ontology_edge(
+    dest: &(impl Database + ?Sized),
+    edge: &voidm_core::models::OntologyEdgeForMigration,
+) -> Result<bool> {
+    // For Neo4j, we need direct access to use link_ontology
+    // For now, we return Ok(false) indicating not implemented for other backends
+    // This is a limitation of the trait-based approach
+    Ok(false)
 }

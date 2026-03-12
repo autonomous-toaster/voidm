@@ -75,6 +75,8 @@ pub enum Commands {
     Mcp(commands::mcp::McpArgs),
     /// Migrate data between backends (sqlite ↔ neo4j)
     Migrate(commands::migrate::MigrateArgs),
+    /// Check for new releases on GitHub
+    CheckUpdate(commands::update::CheckUpdateArgs),
 }
 
 #[tokio::main]
@@ -146,6 +148,9 @@ async fn run(cli: Cli) -> Result<()> {
             let config = Config::load();
             return commands::migrate::run(args.clone(), &config, cli.db.as_deref(), cli.json).await;
         }
+        Commands::CheckUpdate(args) => {
+            return commands::update::check_update(args.clone()).await;
+        }
         Commands::Models(cmd) => {
             if let commands::models::ModelsCommands::List = cmd {
                 return commands::models::run_list(cli.json);
@@ -197,6 +202,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Info(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Migrate(_) => unreachable!(),
+        Commands::CheckUpdate(_) => unreachable!(),
         Commands::Stats(args) => commands::stats::run(args, &pool, &config, cli.json).await,
         Commands::Mcp(args) => commands::mcp::run(args, pool, config).await,
     }

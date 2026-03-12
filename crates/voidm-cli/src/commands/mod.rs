@@ -18,3 +18,4 @@ pub mod info;
 pub mod stats;
 pub mod init;
 pub mod mcp;
+pub mod update;

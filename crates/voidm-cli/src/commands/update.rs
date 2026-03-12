@@ -1,13 +1,19 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Parser, Debug, Clone)]
 pub struct CheckUpdateArgs {
     /// Output JSON (machine-readable)
     #[arg(long)]
     pub json: bool,
+
+    /// Force refresh cache (ignore 24h TTL and fetch fresh)
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,20 +32,86 @@ pub struct UpdateCheckResult {
     pub published_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct CachedRelease {
+    tag_name: String,
+    html_url: String,
+    published_at: String,
+    cached_at: u64,
+}
+
+/// Get cache file path: ~/.config/voidm/update-check.json (or platform equivalent)
+fn get_cache_path() -> Result<PathBuf> {
+    let config_dir = dirs::config_dir()
+        .ok_or_else(|| anyhow!("Could not determine config directory"))?
+        .join("voidm");
+    Ok(config_dir.join("update-check.json"))
+}
+
+/// Check if cache is still valid (< 24 hours old)
+fn is_cache_valid(cached_at: u64) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let age_secs = now.saturating_sub(cached_at);
+    age_secs < 86400 // 24 hours
+}
+
+/// Load cached release info if available and valid
+/// If ignore_ttl is true, return cache regardless of age
+fn load_cached_release(ignore_ttl: bool) -> Option<CachedRelease> {
+    let cache_path = get_cache_path().ok()?;
+    let content = fs::read_to_string(&cache_path).ok()?;
+    let cached: CachedRelease = serde_json::from_str(&content).ok()?;
+
+    if ignore_ttl || is_cache_valid(cached.cached_at) {
+        return Some(cached);
+    }
+
+    None
+}
+
+/// Save release info to cache
+fn save_cached_release(release: &GitHubRelease) -> Result<()> {
+    let cache_path = get_cache_path()?;
+
+    // Create config directory if it doesn't exist
+    if let Some(parent) = cache_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let cached = CachedRelease {
+        tag_name: release.tag_name.clone(),
+        html_url: release.html_url.clone(),
+        published_at: release.published_at.clone(),
+        cached_at: now,
+    };
+
+    let json = serde_json::to_string_pretty(&cached)?;
+    fs::write(&cache_path, json)?;
+    Ok(())
+}
+
 /// Parse version string, handling both "v0.8.0" and "0.8.0" formats
 /// Returns (major, minor, patch, prerelease_num)
 /// For "0.8.0-rc.10", returns (0, 8, 0, Some(10))
 /// For "0.8.0", returns (0, 8, 0, None)
 fn parse_version(version_str: &str) -> Result<(u32, u32, u32, Option<u32>)> {
     let version = version_str.trim_start_matches('v');
-    
+
     // First check if there's a pre-release marker
     let (base_version, prerelease_part) = if let Some(dash_idx) = version.find('-') {
         (&version[..dash_idx], Some(&version[dash_idx + 1..]))
     } else {
         (version, None)
     };
-    
+
     let parts: Vec<&str> = base_version.split('.').collect();
 
     if parts.len() < 3 {
@@ -49,7 +121,7 @@ fn parse_version(version_str: &str) -> Result<(u32, u32, u32, Option<u32>)> {
     let major = parts[0].parse::<u32>()?;
     let minor = parts[1].parse::<u32>()?;
     let patch = parts[2].parse::<u32>()?;
-    
+
     // Extract pre-release number if present
     let prerelease_num = prerelease_part.and_then(|pre| {
         // Extract number from strings like "rc.10", "alpha.1", etc
@@ -69,13 +141,13 @@ fn is_update_available(current: &str, latest: &str) -> Result<bool> {
     // Compare major.minor.patch first
     let curr_tuple = (curr_major, curr_minor, curr_patch);
     let latest_tuple = (latest_major, latest_minor, latest_patch);
-    
+
     if latest_tuple > curr_tuple {
         return Ok(true);
     } else if latest_tuple < curr_tuple {
         return Ok(false);
     }
-    
+
     // If major.minor.patch are equal, compare pre-release versions
     // Release version (None) > pre-release version (Some)
     match (curr_prerelease, latest_prerelease) {
@@ -86,10 +158,8 @@ fn is_update_available(current: &str, latest: &str) -> Result<bool> {
     }
 }
 
-pub async fn check_update(args: CheckUpdateArgs) -> Result<()> {
-    let current_version = env!("CARGO_PKG_VERSION");
-
-    // Fetch latest release from GitHub API
+/// Fetch latest release from GitHub API
+async fn fetch_latest_release() -> Result<GitHubRelease> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
@@ -109,10 +179,9 @@ pub async fn check_update(args: CheckUpdateArgs) -> Result<()> {
             }
         })?;
 
-    // Check for rate limiting
     if response.status() == 403 {
         return Err(anyhow!(
-            "GitHub API rate limited. Try again later or authenticate with GITHUB_TOKEN"
+            "GitHub API rate limited. Try again later or set GITHUB_TOKEN environment variable"
         ));
     }
 
@@ -127,6 +196,55 @@ pub async fn check_update(args: CheckUpdateArgs) -> Result<()> {
     let release: GitHubRelease = response.json().await.map_err(|e| {
         anyhow!("Could not parse GitHub release info: {}", e)
     })?;
+
+    // Save to cache
+    let _ = save_cached_release(&release);
+    Ok(release)
+}
+
+pub async fn check_update(args: CheckUpdateArgs) -> Result<()> {
+    let current_version = env!("CARGO_PKG_VERSION");
+
+    // Strategy:
+    // 1. If cache exists and valid, use it (fast path)
+    // 2. If --force, skip cache and fetch fresh
+    // 3. Otherwise, try to fetch; if that fails, use stale cache as fallback
+
+    let release = if let Some(cached) = load_cached_release(false) {
+        // Cache hit - use it
+        if !args.json {
+            eprintln!("(cached)");
+        }
+        GitHubRelease {
+            tag_name: cached.tag_name,
+            html_url: cached.html_url,
+            published_at: cached.published_at,
+        }
+    } else if args.force {
+        // --force: skip cache and fetch fresh
+        fetch_latest_release().await?
+    } else {
+        // Cache miss - try to fetch, with stale cache as fallback
+        match fetch_latest_release().await {
+            Ok(release) => release,
+            Err(e) => {
+                // Fetch failed - try to use stale cache
+                if let Some(cached) = load_cached_release(true) {
+                    if !args.json {
+                        eprintln!("(cached - GitHub API unavailable)");
+                    }
+                    GitHubRelease {
+                        tag_name: cached.tag_name,
+                        html_url: cached.html_url,
+                        published_at: cached.published_at,
+                    }
+                } else {
+                    // No cache available - return the fetch error
+                    return Err(e);
+                }
+            }
+        }
+    };
 
     // Extract version from tag (e.g., "v0.8.0" -> "0.8.0")
     let latest_version = release.tag_name.trim_start_matches('v').to_string();
@@ -211,5 +329,22 @@ mod tests {
         // Pre-release versions
         assert!(is_update_available("0.8.0-rc.10", "0.8.0-rc.11").unwrap());
         assert!(is_update_available("0.8.0-rc.10", "0.8.0").unwrap());
+    }
+
+    #[test]
+    fn test_is_cache_valid() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Cache from 1 hour ago should be valid
+        assert!(is_cache_valid(now - 3600));
+
+        // Cache from 25 hours ago should be invalid
+        assert!(!is_cache_valid(now - 90000));
+
+        // Cache from 1 second ago should be valid
+        assert!(is_cache_valid(now - 1));
     }
 }

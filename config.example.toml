@@ -1,0 +1,65 @@
+# voidm Configuration Example
+# Location: ~/.config/voidm/config.toml
+
+[database]
+backend = "sqlite"
+
+[database.sqlite]
+path = "~/.local/share/voidm/memories.db"
+
+[embeddings]
+enabled = true
+model = "Xenova/all-MiniLM-L6-v2"
+
+[search]
+mode = "hybrid"
+default_limit = 10
+min_score = 0.3
+neighbor_decay = 0.7
+neighbor_min_score = 0.2
+default_neighbor_depth = 1
+default_edge_types = ["PART_OF", "SUPPORTS", "DERIVED_FROM", "EXEMPLIFIES"]
+
+# === RERANKER CONFIGURATION ===
+# Optional: Enable cross-encoder reranking for better search quality
+# Two models available:
+#   - ms-marco-TinyBERT    : 11MB, 6-12ms/result, 70-80% accuracy vs bge
+#   - bge-reranker-base    : 278MB, 20-30ms/result, highest accuracy
+# 
+# Recommended: Start with ms-marco-TinyBERT for most use cases
+# Use bge-reranker-base only if maximum accuracy is critical
+
+# Example 1: Enable ms-marco-TinyBERT (lightweight, fast)
+[search.reranker]
+enabled = true
+model = "ms-marco-TinyBERT"
+apply_to_top_k = 10
+blend = 0.7
+
+# Example 2: Enable bge-reranker-base (heavyweight, accurate)
+# [search.reranker]
+# enabled = true
+# model = "bge-reranker-base"
+# apply_to_top_k = 10
+# blend = 0.7
+
+# Example 3: Disabled (default)
+# [search.reranker]
+# enabled = false
+
+[insert]
+auto_link_threshold = 0.7
+duplicate_threshold = 0.95
+auto_link_limit = 5
+
+# Reranker parameter guide:
+# - enabled (bool): Turn reranking on/off
+# - model (string): "ms-marco-TinyBERT" or "bge-reranker-base"
+# - apply_to_top_k (usize): Rerank only top-k results (0-100). Higher = more thorough, slower
+# - blend (float 0.0-1.0): Score = rerank_score * blend + orig_score * (1 - blend)
+#   - 0.7 = 70% reranker weight, 30% original RRF score (recommended)
+#   - 1.0 = pure reranker (less stable)
+#   - 0.5 = equal weight (safe middle ground)
+#
+# CLI overrides:
+#   voidm search "query" --reranker --reranker-model bge-reranker-base --reranker-top-k 15

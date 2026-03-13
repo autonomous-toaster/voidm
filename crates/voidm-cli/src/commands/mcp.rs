@@ -372,6 +372,7 @@ impl VoidmMcpServer {
             &params.name,
             params.description.as_deref(),
             params.scope.as_deref(),
+            None,  // concept_type not provided via MCP yet
         )
         .await
         .map_err(|e| e.to_string())?;

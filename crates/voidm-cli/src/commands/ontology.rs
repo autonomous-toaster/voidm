@@ -306,6 +306,7 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
                 &args.name,
                 args.description.as_deref(),
                 args.scope.as_deref(),
+                None,  // concept_type not provided via CLI yet
             )
             .await?;
 
@@ -824,7 +825,7 @@ async fn run_extract(args: ExtractArgs, pool: &SqlitePool, json: bool) -> Result
 
         let mut added = Vec::new();
         for c in &new_candidates {
-            match ontology::add_concept(pool, &c.name, None, args.scope.as_deref()).await {
+            match ontology::add_concept(pool, &c.name, None, args.scope.as_deref(), None).await {
                 Ok(concept) => {
                     if !json {
                         println!("  ✓ {} [{}] ({})", concept.name, &concept.id[..8], c.entity_type);

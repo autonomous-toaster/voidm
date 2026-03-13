@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{crud, models::EdgeType, resolve_id};
+use std::time::Instant;
+use voidm_core::{crud, models::EdgeType, resolve_id, user_interactions::track_interaction};
 
 #[derive(Args)]
 pub struct LinkArgs {
@@ -17,10 +18,27 @@ pub struct LinkArgs {
 }
 
 pub async fn run(args: LinkArgs, pool: &SqlitePool, json: bool) -> Result<()> {
+    let start = Instant::now();
+    let user_id = std::env::var("VOIDM_USER").unwrap_or_else(|_| "agent-cli".to_string());
+    
     let edge_type: EdgeType = args.rel.parse()?;
     let from = resolve_id(pool, &args.from).await?;
     let to   = resolve_id(pool, &args.to).await?;
     let resp = crud::link_memories(pool, &from, &edge_type, &to, args.note.as_deref()).await?;
+
+    // Track the link/explore interaction
+    let duration_ms = start.elapsed().as_millis() as i64;
+    let context = format!("explore:{}", args.rel);
+    let _ = track_interaction(
+        pool,
+        &user_id,
+        "explore",
+        &from,
+        &format!("{} {} {}", from[..from.len().min(8)].to_string(), args.rel, to[..to.len().min(8)].to_string()),
+        "success",
+        duration_ms,
+        Some(&context),
+    ).await;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&resp)?);

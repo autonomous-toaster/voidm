@@ -523,6 +523,7 @@ impl crate::db::Database for Neo4jDatabase {
                     name: node.get("name").context("Missing name")?,
                     description: node.get("description").ok(),
                     scope: node.get("scope").ok(),
+                    concept_type: node.get("concept_type").ok(),
                     created_at: node.get("created_at").context("Missing created_at")?,
                 };
                 
@@ -606,6 +607,7 @@ impl crate::db::Database for Neo4jDatabase {
                     name: node.get("name").context("Missing name")?,
                     description: node.get("description").ok(),
                     scope: node.get("scope").ok(),
+                    concept_type: node.get("concept_type").ok(),
                     created_at: node.get("created_at").context("Missing created_at")?,
                 };
                 

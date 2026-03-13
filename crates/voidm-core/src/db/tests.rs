@@ -155,6 +155,7 @@ mod tests {
                     name: "Test".to_string(),
                     description: None,
                     scope: None,
+                    concept_type: None,
                     created_at: "2025-01-01".to_string(),
                 })
             })

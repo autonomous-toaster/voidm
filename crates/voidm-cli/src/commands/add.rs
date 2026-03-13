@@ -1,7 +1,12 @@
 use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{Config, crud, models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType}};
+use std::time::Instant;
+use voidm_core::{
+    Config, crud, models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType}, 
+    user_interactions::track_interaction,
+    user_adaptive_system::{UserAdaptiveConfig, get_adaptive_response},
+};
 
 #[derive(Args)]
 pub struct AddArgs {
@@ -31,7 +36,14 @@ pub struct AddArgs {
 }
 
 pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+    let start = Instant::now();
+    let user_id = std::env::var("VOIDM_USER").unwrap_or_else(|_| "agent-cli".to_string());
+    
     let memory_type: MemoryType = args.r#type.parse()?;
+    
+    // Store these before they're moved
+    let memory_type_str = format!("{}", memory_type);
+    let content_preview = args.content[..args.content.len().min(50)].to_string();
 
     // Validate importance before touching the DB
     if !(1..=10).contains(&args.importance) {
@@ -67,6 +79,20 @@ pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) 
 
     let resp = crud::add_memory(pool, req, config).await?;
 
+    // Track the create/enrich interaction
+    let duration_ms = start.elapsed().as_millis() as i64;
+    let context = format!("create:{}", memory_type_str);
+    let _ = track_interaction(
+        pool,
+        &user_id,
+        "create",
+        &resp.id,
+        &content_preview,
+        "success",
+        duration_ms,
+        Some(&context),
+    ).await;
+
     if json {
         println!("{}", serde_json::to_string_pretty(&resp)?);
     } else {
@@ -87,6 +113,22 @@ pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) 
         if let Some(ref dup) = resp.duplicate_warning {
             eprintln!("\nWarning: {}", dup.message);
             eprintln!("  Existing: {} [{:.2}]", dup.id, dup.score);
+        }
+
+        // Show personalization hint
+        let adaptive_config = UserAdaptiveConfig::default();
+        if let Ok(adaptive) = get_adaptive_response(pool, &user_id, &adaptive_config).await {
+            if adaptive.confidence > 0.5 {
+                if let Some(defaults) = adaptive.defaults {
+                    eprintln!("\n💡 Next time try:");
+                    if let Some(scope) = defaults.preferred_scope {
+                        eprintln!("  --scope {} (your favorite scope)", scope);
+                    }
+                    if let Some(concept_type) = defaults.preferred_concept_type {
+                        eprintln!("  --type {} (your preferred concept type)", concept_type);
+                    }
+                }
+            }
         }
     }
 

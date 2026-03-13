@@ -6,6 +6,9 @@ use sqlx::SqlitePool;
 pub async fn run(pool: &SqlitePool) -> Result<()> {
     sqlx::query(SCHEMA).execute(pool).await?;
     upgrade_add_quality_score(pool).await?;
+    upgrade_add_concept_type(pool).await?;
+    upgrade_add_search_sessions(pool).await?;
+    upgrade_add_search_session_summary(pool).await?;
     Ok(())
 }
 
@@ -24,6 +27,127 @@ async fn upgrade_add_quality_score(pool: &SqlitePool) -> Result<()> {
             .execute(pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_quality_score ON memories(quality_score DESC)")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Add concept_type column to ontology_concepts table
+/// Safe to run multiple times (idempotent)
+async fn upgrade_add_concept_type(pool: &SqlitePool) -> Result<()> {
+    // Check if concept_type column already exists
+    let column_exists: (bool,) = sqlx::query_as(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('ontology_concepts') WHERE name = 'concept_type'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !column_exists.0 {
+        sqlx::query("ALTER TABLE ontology_concepts ADD COLUMN concept_type TEXT")
+            .execute(pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_ontology_concepts_type ON ontology_concepts(concept_type)")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Create search_sessions table for tracking search → get behavior
+/// Idempotent — safe to run multiple times
+async fn upgrade_add_search_sessions(pool: &SqlitePool) -> Result<()> {
+    // Check if search_sessions table already exists
+    let table_exists: (bool,) = sqlx::query_as(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='search_sessions'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !table_exists.0 {
+        sqlx::query(
+            r#"
+            CREATE TABLE search_sessions (
+                id                TEXT PRIMARY KEY,
+                user_id           TEXT NOT NULL,
+                query_hash        TEXT NOT NULL,
+                started_at        TEXT NOT NULL,
+                result_count      INTEGER NOT NULL,
+                clicked_results   TEXT,
+                last_activity_at  TEXT NOT NULL,
+                session_status    TEXT NOT NULL DEFAULT 'open' CHECK (session_status IN ('open', 'closed')),
+                closed_at         TEXT,
+                created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            "#
+        )
+        .execute(pool)
+        .await?;
+
+        // Create indexes for efficient queries
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_search_sessions_user_id_status ON search_sessions(user_id, session_status)")
+            .execute(pool)
+            .await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_search_sessions_last_activity ON search_sessions(last_activity_at DESC)")
+            .execute(pool)
+            .await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_search_sessions_query_hash ON search_sessions(query_hash)")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Create search_session_summary table for aggregated session analytics
+/// Idempotent — safe to run multiple times
+async fn upgrade_add_search_session_summary(pool: &SqlitePool) -> Result<()> {
+    // Check if search_session_summary table already exists
+    let table_exists: (bool,) = sqlx::query_as(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='search_session_summary'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !table_exists.0 {
+        sqlx::query(
+            r#"
+            CREATE TABLE search_session_summary (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id                 TEXT NOT NULL,
+                query_hash              TEXT NOT NULL,
+                period_start            TEXT NOT NULL,
+                period_end              TEXT NOT NULL,
+                total_searches          INTEGER NOT NULL,
+                successful_searches     INTEGER NOT NULL,
+                total_clicks            INTEGER NOT NULL,
+                avg_results_per_session REAL NOT NULL,
+                avg_clicks_per_session  REAL NOT NULL,
+                success_rate            REAL NOT NULL,
+                max_exploration_depth   INTEGER NOT NULL,
+                created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, query_hash, period_start)
+            )
+            "#
+        )
+        .execute(pool)
+        .await?;
+
+        // Create indexes for efficient queries
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_summary_user_query ON search_session_summary(user_id, query_hash)")
+            .execute(pool)
+            .await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_summary_period ON search_session_summary(period_start DESC, period_end DESC)")
+            .execute(pool)
+            .await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_summary_success_rate ON search_session_summary(success_rate DESC)")
             .execute(pool)
             .await?;
     }
@@ -272,4 +396,80 @@ CREATE TABLE IF NOT EXISTS ontology_merge_batch (
 );
 
 CREATE INDEX IF NOT EXISTS idx_merge_batch_created ON ontology_merge_batch(created_at DESC);
+
+-- ── Telemetry and Feedback (Self-Improvement) ────────────────────────────────
+
+-- Concept usage telemetry: tracks how agents use concepts
+CREATE TABLE IF NOT EXISTS concept_telemetry (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    concept_id       TEXT NOT NULL,
+    concept_name     TEXT NOT NULL,
+    event_type       TEXT NOT NULL CHECK (event_type IN ('query', 'instance_fetch', 'edge_traverse', 'feedback')),
+    timestamp        TEXT NOT NULL,
+    agent_id         TEXT,
+    context          TEXT,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_concept_telemetry_id       ON concept_telemetry(concept_id);
+CREATE INDEX IF NOT EXISTS idx_concept_telemetry_event    ON concept_telemetry(event_type);
+CREATE INDEX IF NOT EXISTS idx_concept_telemetry_agent    ON concept_telemetry(agent_id);
+CREATE INDEX IF NOT EXISTS idx_concept_telemetry_time     ON concept_telemetry(timestamp DESC);
+
+-- Agent feedback on concepts: for self-improvement
+CREATE TABLE IF NOT EXISTS agent_feedback (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id         TEXT NOT NULL,
+    feedback_type    TEXT NOT NULL CHECK (feedback_type IN ('helpful', 'duplicate', 'missing', 'contradictory', 'underspecified')),
+    concept_id       TEXT,
+    concept_name     TEXT NOT NULL,
+    message          TEXT,
+    timestamp        TEXT NOT NULL,
+    context          TEXT,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_agent      ON agent_feedback(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_type       ON agent_feedback(feedback_type);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_concept    ON agent_feedback(concept_id);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_timestamp  ON agent_feedback(timestamp DESC);
+
+-- ── User Behavior & Interaction Tracking ────────────────────────────────────
+
+-- Track every user interaction with voidm
+CREATE TABLE IF NOT EXISTS user_interactions (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          TEXT NOT NULL,
+    interaction_type TEXT NOT NULL CHECK (interaction_type IN ('search', 'view', 'enrich', 'feedback', 'merge', 'create', 'explore', 'export')),
+    target_id        TEXT,
+    target_name      TEXT NOT NULL,
+    result           TEXT NOT NULL CHECK (result IN ('success', 'skip', 'cancel', 'error')),
+    duration_ms      INTEGER DEFAULT 0,
+    timestamp        TEXT NOT NULL,
+    context          TEXT,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_interactions_user_id      ON user_interactions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_interactions_type         ON user_interactions(interaction_type);
+CREATE INDEX IF NOT EXISTS idx_user_interactions_target       ON user_interactions(target_id);
+CREATE INDEX IF NOT EXISTS idx_user_interactions_timestamp    ON user_interactions(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_user_interactions_result      ON user_interactions(result);
+
+-- User preferences and behavior patterns (computed, not inserted directly)
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          TEXT NOT NULL UNIQUE,
+    favorite_scopes  TEXT,                          -- JSON: [{"scope": "auth", "count": 15}]
+    favorite_concepts TEXT,                         -- JSON: [{"name": "JWT", "count": 10}]
+    enrichment_rate  REAL DEFAULT 0.5,
+    preferred_types  TEXT,                          -- JSON: [{"type": "TECHNIQUE", "freq": 0.6}]
+    avg_duration_ms  INTEGER DEFAULT 500,
+    peak_hours       TEXT,                          -- JSON: [9, 14, 18]
+    work_style       TEXT,                          -- JSON: detailed work style
+    last_updated     TEXT NOT NULL,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_preferences_user_id ON user_preferences(user_id);
 "#;

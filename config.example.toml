@@ -7,6 +7,13 @@ backend = "sqlite"
 [database.sqlite]
 path = "~/.local/share/voidm/memories.db"
 
+# Alternatively, use Neo4j
+# backend = "neo4j"
+# [database.neo4j]
+# uri = "bolt://localhost:7687"
+# username = "neo4j"
+# password = "password"
+
 [embeddings]
 enabled = true
 model = "Xenova/all-MiniLM-L6-v2"
@@ -63,3 +70,36 @@ auto_link_limit = 5
 #
 # CLI overrides:
 #   voidm search "query" --reranker --reranker-model bge-reranker-base --reranker-top-k 15
+
+[enrichment]
+# Enrichment pipeline configuration (optional)
+
+# Semantic deduplication: uses MiniLM embeddings to improve concept merge detection
+[enrichment.semantic_dedup]
+enabled = true                           # Enable semantic dedup (recommended)
+model = "minilm-l6-v2"                  # Model identifier (for caching)
+threshold = 0.75                         # Min semantic similarity (0.0-1.0)
+use_onnx = false                         # Use ONNX Runtime (future optimization)
+
+# USAGE:
+# Enable semantic dedup and run: voidm ontology concept auto-merge --threshold 0.85 --use-semantic
+# This will:
+# 1. Find fuzzy matches (fast first pass)
+# 2. Compute semantic similarity for fuzzy matches
+# 3. Filter by semantic threshold (0.75 default)
+# 4. Present merge candidates sorted by semantic similarity
+#
+# Example similarity scores (with default threshold=0.75):
+# - "Docker" vs "Dockerfile": 0.92 ✓ (will merge)
+# - "Docker" vs "Containerization": 0.72 ✗ (below 0.75, won't merge)
+# - "Docker" vs "Python": 0.23 ✗ (too different)
+#
+# Tune threshold based on your needs:
+# - 0.50-0.65: Liberal (more merges, some false positives)
+# - 0.70-0.80: Balanced (recommended default 0.75)
+# - 0.85-0.95: Conservative (fewer merges, higher confidence)
+
+# Advanced: NLI enrichment settings
+[enrichment.nli]
+enabled = false                          # Compute relation suggestions (slow, ~300MB model)
+top_k = 5                                # Relation candidates per concept

@@ -250,7 +250,7 @@ impl crate::db::Database for SqliteDatabase {
         let description = description.map(|s| s.to_string());
         let scope = scope.map(|s| s.to_string());
         Box::pin(async move {
-            crate::ontology::add_concept(&pool, &name, description.as_deref(), scope.as_deref()).await
+            crate::ontology::add_concept(&pool, &name, description.as_deref(), scope.as_deref(), None).await
         })
     }
 

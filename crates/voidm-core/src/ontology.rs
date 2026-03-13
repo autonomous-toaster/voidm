@@ -12,6 +12,7 @@ pub struct Concept {
     pub name: String,
     pub description: Option<String>,
     pub scope: Option<String>,
+    pub concept_type: Option<String>,
     pub created_at: String,
 }
 
@@ -107,6 +108,7 @@ pub async fn add_concept(
     name: &str,
     description: Option<&str>,
     scope: Option<&str>,
+    concept_type: Option<&str>,
 ) -> Result<ConceptWithSimilarityWarning> {
     // Check for exact name+scope duplicate
     let existing: Option<String> = sqlx::query_scalar(
@@ -129,13 +131,14 @@ pub async fn add_concept(
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
-        "INSERT INTO ontology_concepts (id, name, description, scope, created_at)
-         VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO ontology_concepts (id, name, description, scope, concept_type, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)"
     )
     .bind(&id)
     .bind(name)
     .bind(description)
     .bind(scope)
+    .bind(concept_type)
     .bind(&now)
     .execute(pool)
     .await
@@ -162,15 +165,15 @@ pub async fn add_concept(
 /// Get a concept by full or short (prefix) ID.
 pub async fn get_concept(pool: &SqlitePool, id: &str) -> Result<Concept> {
     let full_id = resolve_concept_id(pool, id).await?;
-    let row: (String, String, Option<String>, Option<String>, String) = sqlx::query_as(
-        "SELECT id, name, description, scope, created_at FROM ontology_concepts WHERE id = ?"
+    let row: (String, String, Option<String>, Option<String>, Option<String>, String) = sqlx::query_as(
+        "SELECT id, name, description, scope, concept_type, created_at FROM ontology_concepts WHERE id = ?"
     )
     .bind(&full_id)
     .fetch_one(pool)
     .await
     .with_context(|| format!("Concept '{}' not found", id))?;
 
-    Ok(Concept { id: row.0, name: row.1, description: row.2, scope: row.3, created_at: row.4 })
+    Ok(Concept { id: row.0, name: row.1, description: row.2, scope: row.3, concept_type: row.4, created_at: row.5 })
 }
 
 /// List concepts, optionally filtered by scope prefix.
@@ -179,10 +182,10 @@ pub async fn list_concepts(
     scope_filter: Option<&str>,
     limit: usize,
 ) -> Result<Vec<Concept>> {
-    let rows: Vec<(String, String, Option<String>, Option<String>, String)> = if let Some(scope) = scope_filter {
+    let rows: Vec<(String, String, Option<String>, Option<String>, Option<String>, String)> = if let Some(scope) = scope_filter {
         let prefix = format!("{}%", scope);
         sqlx::query_as(
-            "SELECT id, name, description, scope, created_at
+            "SELECT id, name, description, scope, concept_type, created_at
              FROM ontology_concepts WHERE scope LIKE ?
              ORDER BY name ASC LIMIT ?"
         )
@@ -192,7 +195,7 @@ pub async fn list_concepts(
         .await?
     } else {
         sqlx::query_as(
-            "SELECT id, name, description, scope, created_at
+            "SELECT id, name, description, scope, concept_type, created_at
              FROM ontology_concepts ORDER BY name ASC LIMIT ?"
         )
         .bind(limit as i64)
@@ -200,7 +203,7 @@ pub async fn list_concepts(
         .await?
     };
 
-    Ok(rows.into_iter().map(|(id, name, description, scope, created_at)| Concept { id, name, description, scope, created_at }).collect())
+    Ok(rows.into_iter().map(|(id, name, description, scope, concept_type, created_at)| Concept { id, name, description, scope, concept_type, created_at }).collect())
 }
 
 /// Delete a concept (and its ontology edges via CASCADE).
@@ -690,7 +693,7 @@ pub async fn enrich_memories(
                     concepts_created.push(entity.text.clone());
                     None
                 } else {
-                    match add_concept(pool, &entity.text, None, None).await {
+                    match add_concept(pool, &entity.text, None, None, None).await {
                         Ok(c) => {
                             concepts_created.push(c.name.clone());
                             // Check for similar concepts (dedup detection)

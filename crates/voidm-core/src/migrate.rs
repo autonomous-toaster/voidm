@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 pub async fn run(pool: &SqlitePool) -> Result<()> {
     sqlx::query(SCHEMA).execute(pool).await?;
     upgrade_add_quality_score(pool).await?;
+    upgrade_add_concept_type(pool).await?;
     Ok(())
 }
 
@@ -24,6 +25,28 @@ async fn upgrade_add_quality_score(pool: &SqlitePool) -> Result<()> {
             .execute(pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_quality_score ON memories(quality_score DESC)")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Add concept_type column to ontology_concepts table
+/// Safe to run multiple times (idempotent)
+async fn upgrade_add_concept_type(pool: &SqlitePool) -> Result<()> {
+    // Check if concept_type column already exists
+    let column_exists: (bool,) = sqlx::query_as(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('ontology_concepts') WHERE name = 'concept_type'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !column_exists.0 {
+        sqlx::query("ALTER TABLE ontology_concepts ADD COLUMN concept_type TEXT")
+            .execute(pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_ontology_concepts_type ON ontology_concepts(concept_type)")
             .execute(pool)
             .await?;
     }

@@ -29,6 +29,7 @@ pub struct UserPreferences {
     pub avg_interaction_duration_ms: i64,
     pub peak_activity_hours: Vec<u32>,            // 0-23
     pub typical_workflow: Vec<String>,            // [search, view, enrich, feedback]
+    pub avg_concept_quality: f32,                 // Average quality of viewed concepts (0.0-1.0)
 }
 
 #[derive(Debug, Clone)]
@@ -241,6 +242,18 @@ pub async fn infer_user_preferences(pool: &SqlitePool, user_id: &str) -> Result<
         ("PRINCIPLE".to_string(), 0.2),
     ];
 
+    // Calculate average quality of concepts the user has interacted with
+    let avg_concept_quality: f32 = sqlx::query_scalar(
+        "SELECT COALESCE(AVG(m.quality_score), 0.5)
+         FROM user_interactions ui
+         LEFT JOIN memories m ON ui.target_id = m.id
+         WHERE ui.user_id = ? AND ui.interaction_type IN ('search', 'view')"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0.5);
+
     // Infer typical workflow from interaction sequences (top sequence pattern)
     let typical: Vec<String> = stats
         .as_ref()
@@ -262,6 +275,7 @@ pub async fn infer_user_preferences(pool: &SqlitePool, user_id: &str) -> Result<
         avg_interaction_duration_ms: stats.as_ref().map(|s| s.avg_duration_ms).unwrap_or(0),
         peak_activity_hours: peak_hours,
         typical_workflow: typical,
+        avg_concept_quality,
     }))
 }
 
@@ -307,6 +321,7 @@ mod tests {
             avg_interaction_duration_ms: 500,
             peak_activity_hours: vec![9, 14, 18],
             typical_workflow: vec!["search".to_string(), "view".to_string(), "enrich".to_string()],
+            avg_concept_quality: 0.82,
         };
 
         assert_eq!(prefs.enrichment_acceptance_rate, 0.85);

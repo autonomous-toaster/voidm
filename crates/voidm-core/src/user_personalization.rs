@@ -72,10 +72,12 @@ pub async fn get_personalized_rankings(
 
     for (concept_id, concept_name, base_score) in concepts {
         // Calculate user affinity: how much does user like this concept/type/domain?
-        let affinity = if prefs.favorite_concepts.iter().any(|(name, _)| name == &concept_name) {
+        let affinity = if prefs.favorite_concepts.iter().any(|(name, _)| name == &concept_name) 
+                         && prefs.avg_concept_quality > 0.7 {
+            // Only boost concepts if user's overall concept quality is good
             0.9
         } else {
-            0.5  // Neutral if not in favorites
+            0.5  // Neutral if not in favorites OR user has poor concept quality
         };
 
         let personalized_score = (base_score * 0.6 + affinity * 0.4).min(1.0);

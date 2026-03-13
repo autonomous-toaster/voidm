@@ -104,6 +104,49 @@ pub struct SearchConfig {
     pub default_neighbor_depth: u8,
     /// Edge types to traverse by default for neighbor expansion.
     pub default_edge_types: Vec<String>,
+    /// Reranker configuration (optional).
+    #[serde(default)]
+    pub reranker: Option<RerankerConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RerankerConfig {
+    /// Enable reranking (default: false).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Model name: "ms-marco-TinyBERT" or "bge-reranker-base" (default: "ms-marco-TinyBERT").
+    #[serde(default = "default_reranker_model")]
+    pub model: String,
+    /// Apply reranker to top-k results only (default: 10).
+    #[serde(default = "default_reranker_top_k")]
+    pub apply_to_top_k: usize,
+    /// Blend factor: final_score = rerank_score * blend + original_score * (1 - blend).
+    /// (default: 0.7, meaning 70% reranker, 30% original).
+    #[serde(default = "default_reranker_blend")]
+    pub blend: f32,
+}
+
+impl Default for RerankerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_reranker_model(),
+            apply_to_top_k: default_reranker_top_k(),
+            blend: default_reranker_blend(),
+        }
+    }
+}
+
+fn default_reranker_model() -> String {
+    "ms-marco-TinyBERT".into()
+}
+
+fn default_reranker_top_k() -> usize {
+    10
+}
+
+fn default_reranker_blend() -> f32 {
+    0.7
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +192,7 @@ impl Default for SearchConfig {
                 "DERIVED_FROM".into(),
                 "EXEMPLIFIES".into(),
             ],
+            reranker: None,
         }
     }
 }
@@ -351,5 +395,73 @@ password = "neo4jneo4j"
         // Both are still configured
         assert!(config.database.sqlite.is_some());
         assert!(config.database.neo4j.is_some());
+    }
+
+    #[test]
+    fn test_reranker_config_defaults() {
+        let toml_str = r#"
+[search]
+mode = "hybrid"
+default_limit = 10
+min_score = 0.3
+neighbor_decay = 0.7
+neighbor_min_score = 0.2
+default_neighbor_depth = 1
+default_edge_types = ["PART_OF", "SUPPORTS"]
+"#;
+        let config: Config = toml::from_str(toml_str).expect("Failed to parse");
+        assert!(config.search.reranker.is_none(), "reranker should be absent by default");
+    }
+
+    #[test]
+    fn test_reranker_config_enabled() {
+        let toml_str = r#"
+[search]
+mode = "hybrid"
+default_limit = 10
+min_score = 0.3
+neighbor_decay = 0.7
+neighbor_min_score = 0.2
+default_neighbor_depth = 1
+default_edge_types = ["PART_OF"]
+
+[search.reranker]
+enabled = true
+model = "bge-reranker-base"
+apply_to_top_k = 15
+blend = 0.6
+"#;
+        let config: Config = toml::from_str(toml_str).expect("Failed to parse");
+        assert!(config.search.reranker.is_some(), "reranker config should be parsed");
+        if let Some(r) = &config.search.reranker {
+            assert_eq!(r.enabled, true);
+            assert_eq!(r.model, "bge-reranker-base");
+            assert_eq!(r.apply_to_top_k, 15);
+            assert_eq!(r.blend, 0.6);
+        }
+    }
+
+    #[test]
+    fn test_reranker_config_partial() {
+        let toml_str = r#"
+[search]
+mode = "hybrid"
+default_limit = 10
+min_score = 0.3
+neighbor_decay = 0.7
+neighbor_min_score = 0.2
+default_neighbor_depth = 1
+default_edge_types = ["PART_OF"]
+
+[search.reranker]
+enabled = true
+"#;
+        let config: Config = toml::from_str(toml_str).expect("Failed to parse");
+        if let Some(r) = &config.search.reranker {
+            assert_eq!(r.enabled, true);
+            assert_eq!(r.model, "ms-marco-TinyBERT", "should use default model");
+            assert_eq!(r.apply_to_top_k, 10, "should use default top_k");
+            assert_eq!(r.blend, 0.7, "should use default blend");
+        }
     }
 }

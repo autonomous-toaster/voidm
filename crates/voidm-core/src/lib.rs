@@ -11,6 +11,7 @@ pub mod vector;
 pub mod search;
 pub mod embeddings;
 pub mod migration;
+pub mod concept_extraction;
 
 pub use config::Config;
 pub use config::config_path_display;

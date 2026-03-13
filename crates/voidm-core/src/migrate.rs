@@ -295,4 +295,41 @@ CREATE TABLE IF NOT EXISTS ontology_merge_batch (
 );
 
 CREATE INDEX IF NOT EXISTS idx_merge_batch_created ON ontology_merge_batch(created_at DESC);
+
+-- ── Telemetry and Feedback (Self-Improvement) ────────────────────────────────
+
+-- Concept usage telemetry: tracks how agents use concepts
+CREATE TABLE IF NOT EXISTS concept_telemetry (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    concept_id       TEXT NOT NULL,
+    concept_name     TEXT NOT NULL,
+    event_type       TEXT NOT NULL CHECK (event_type IN ('query', 'instance_fetch', 'edge_traverse', 'feedback')),
+    timestamp        TEXT NOT NULL,
+    agent_id         TEXT,
+    context          TEXT,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_concept_telemetry_id       ON concept_telemetry(concept_id);
+CREATE INDEX IF NOT EXISTS idx_concept_telemetry_event    ON concept_telemetry(event_type);
+CREATE INDEX IF NOT EXISTS idx_concept_telemetry_agent    ON concept_telemetry(agent_id);
+CREATE INDEX IF NOT EXISTS idx_concept_telemetry_time     ON concept_telemetry(timestamp DESC);
+
+-- Agent feedback on concepts: for self-improvement
+CREATE TABLE IF NOT EXISTS agent_feedback (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id         TEXT NOT NULL,
+    feedback_type    TEXT NOT NULL CHECK (feedback_type IN ('helpful', 'duplicate', 'missing', 'contradictory', 'underspecified')),
+    concept_id       TEXT,
+    concept_name     TEXT NOT NULL,
+    message          TEXT,
+    timestamp        TEXT NOT NULL,
+    context          TEXT,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_agent      ON agent_feedback(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_type       ON agent_feedback(feedback_type);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_concept    ON agent_feedback(concept_id);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_timestamp  ON agent_feedback(timestamp DESC);
 "#;

@@ -18,6 +18,9 @@ pub mod concept_linking;
 pub mod concept_hierarchy;
 pub mod concept_ranking;
 pub mod multi_relation_detection;
+pub mod concept_telemetry;
+pub mod improvement_engine;
+pub mod agent_feedback;
 
 pub use config::Config;
 pub use config::config_path_display;

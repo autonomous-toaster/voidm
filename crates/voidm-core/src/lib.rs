@@ -16,6 +16,7 @@ pub mod concept_clustering;
 pub mod concept_deduplication;
 pub mod concept_linking;
 pub mod concept_hierarchy;
+pub mod concept_ranking;
 
 pub use config::Config;
 pub use config::config_path_display;

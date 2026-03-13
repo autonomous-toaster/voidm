@@ -21,6 +21,7 @@ pub mod multi_relation_detection;
 pub mod concept_telemetry;
 pub mod improvement_engine;
 pub mod agent_feedback;
+pub mod ontology_orchestrator;
 
 pub use config::Config;
 pub use config::config_path_display;

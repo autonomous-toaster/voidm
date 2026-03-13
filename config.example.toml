@@ -1,12 +1,11 @@
-# voidm configuration file
-# Place at ~/.config/voidm/config.toml to enable
-# All sections and options are optional and will use sensible defaults
+# voidm Configuration Example
+# Location: ~/.config/voidm/config.toml
 
 [database]
-# SQLite backend (default)
 backend = "sqlite"
-# Path to SQLite database (default: ~/.local/share/voidm/voidm.db)
-sqlite_path = "~/.local/share/voidm/voidm.db"
+
+[database.sqlite]
+path = "~/.local/share/voidm/memories.db"
 
 # Alternatively, use Neo4j
 # backend = "neo4j"
@@ -16,38 +15,61 @@ sqlite_path = "~/.local/share/voidm/voidm.db"
 # password = "password"
 
 [embeddings]
-# Embedding model for semantic search and deduplication
-# Options: "Xenova/all-MiniLM-L6-v2" (default), "BAAI/bge-base-en-v1.5", "BAAI/bge-large-en-v1.5", etc.
 enabled = true
 model = "Xenova/all-MiniLM-L6-v2"
 
 [search]
-# Search configuration
-mode = "hybrid"                          # "bm25" | "semantic" | "hybrid"
-default_limit = 10                       # Default results per query
-min_score = 0.3                          # Min relevance score (0.0-1.0)
-neighbor_decay = 0.7                     # Graph neighbor weight decay
-neighbor_min_score = 0.2                 # Min score for graph neighbors
-default_neighbor_depth = 1               # Max distance in concept graph
-default_edge_types = [
-    "PART_OF",
-    "SUPPORTS",
-    "DERIVED_FROM",
-    "EXEMPLIFIES",
-]
+mode = "hybrid"
+default_limit = 10
+min_score = 0.3
+neighbor_decay = 0.7
+neighbor_min_score = 0.2
+default_neighbor_depth = 1
+default_edge_types = ["PART_OF", "SUPPORTS", "DERIVED_FROM", "EXEMPLIFIES"]
 
-# Reranker configuration (optional, improves search quality)
+# === RERANKER CONFIGURATION ===
+# Optional: Enable cross-encoder reranking for better search quality
+# Two models available:
+#   - ms-marco-TinyBERT    : 11MB, 6-12ms/result, 70-80% accuracy vs bge
+#   - bge-reranker-base    : 278MB, 20-30ms/result, highest accuracy
+# 
+# Recommended: Start with ms-marco-TinyBERT for most use cases
+# Use bge-reranker-base only if maximum accuracy is critical
+
+# Example 1: Enable ms-marco-TinyBERT (lightweight, fast)
 [search.reranker]
-enabled = false                          # Enable cross-encoder reranking
-model = "ms-marco-TinyBERT"             # Options: "ms-marco-TinyBERT", "bge-reranker-base"
-apply_to_top_k = 10                      # Only rerank top-k results
-blend = 0.7                              # BM25 + 0.7×reranker (0-1.0)
+enabled = true
+model = "ms-marco-TinyBERT"
+apply_to_top_k = 10
+blend = 0.7
+
+# Example 2: Enable bge-reranker-base (heavyweight, accurate)
+# [search.reranker]
+# enabled = true
+# model = "bge-reranker-base"
+# apply_to_top_k = 10
+# blend = 0.7
+
+# Example 3: Disabled (default)
+# [search.reranker]
+# enabled = false
 
 [insert]
-# Concept insertion settings for auto-linking and deduplication
-auto_link_threshold = 0.7                # Min similarity to auto-link new concepts
-duplicate_threshold = 0.95               # Min similarity to flag as potential duplicate
-auto_link_limit = 5                      # Max auto-links per new concept
+auto_link_threshold = 0.7
+duplicate_threshold = 0.95
+auto_link_limit = 5
+
+# Reranker parameter guide:
+# - enabled (bool): Turn reranking on/off
+# - model (string): "ms-marco-TinyBERT" or "bge-reranker-base"
+# - apply_to_top_k (usize): Rerank only top-k results (0-100). Higher = more thorough, slower
+# - blend (float 0.0-1.0): Score = rerank_score * blend + orig_score * (1 - blend)
+#   - 0.7 = 70% reranker weight, 30% original RRF score (recommended)
+#   - 1.0 = pure reranker (less stable)
+#   - 0.5 = equal weight (safe middle ground)
+#
+# CLI overrides:
+#   voidm search "query" --reranker --reranker-model bge-reranker-base --reranker-top-k 15
 
 [enrichment]
 # Enrichment pipeline configuration (optional)
@@ -60,7 +82,7 @@ threshold = 0.75                         # Min semantic similarity (0.0-1.0)
 use_onnx = false                         # Use ONNX Runtime (future optimization)
 
 # USAGE:
-# Enable semantic dedup and run: voidm ontology concept automerge --threshold 0.85 --use-semantic
+# Enable semantic dedup and run: voidm ontology concept auto-merge --threshold 0.85 --use-semantic
 # This will:
 # 1. Find fuzzy matches (fast first pass)
 # 2. Compute semantic similarity for fuzzy matches

@@ -57,6 +57,22 @@ pub struct SearchArgs {
     /// Comma-separated edge types to traverse (default: PART_OF,SUPPORTS,DERIVED_FROM,EXEMPLIFIES)
     #[arg(long, value_delimiter = ',')]
     pub edge_types: Option<Vec<String>>,
+
+    /// Enable/disable reranker (overrides config)
+    #[arg(long)]
+    pub reranker: Option<bool>,
+
+    /// Reranker model: ms-marco-TinyBERT or bge-reranker-base (overrides config)
+    #[arg(long)]
+    pub reranker_model: Option<String>,
+
+    /// Apply reranker only to top-k results (overrides config)
+    #[arg(long)]
+    pub reranker_top_k: Option<usize>,
+
+    /// Blend factor for reranker scores [0.0-1.0] (overrides config)
+    #[arg(long)]
+    pub reranker_blend: Option<f32>,
 }
 
 pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
@@ -77,6 +93,25 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         neighbor_limit: args.neighbor_limit,
         edge_types: args.edge_types,
     };
+
+    // Apply CLI reranker overrides to config
+    let mut config = config.clone();
+    if args.reranker.is_some() || args.reranker_model.is_some() || args.reranker_top_k.is_some() || args.reranker_blend.is_some() {
+        let mut reranker_config = config.search.reranker.take().unwrap_or_default();
+        if let Some(enabled) = args.reranker {
+            reranker_config.enabled = enabled;
+        }
+        if let Some(model) = args.reranker_model {
+            reranker_config.model = model;
+        }
+        if let Some(k) = args.reranker_top_k {
+            reranker_config.apply_to_top_k = k;
+        }
+        if let Some(blend) = args.reranker_blend {
+            reranker_config.blend = blend.clamp(0.0, 1.0);
+        }
+        config.search.reranker = Some(reranker_config);
+    }
 
     let resp = search(
         pool,

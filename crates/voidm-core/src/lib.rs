@@ -5,6 +5,7 @@ pub mod migrate;
 pub mod models;
 pub mod ner;
 pub mod nli;
+pub mod reranker;
 pub mod ontology;
 pub mod quality;
 pub mod vector;

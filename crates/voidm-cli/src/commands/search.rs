@@ -158,7 +158,7 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
                 eprintln!("[query-expansion] Expanded: {}", expanded_query);
                 eprintln!("[query-expansion] Model: {}", expansion_config.model);
                 if &expanded_query == &args.query {
-                    eprintln!("[query-expansion] Note: Phase 2b infrastructure - Phase 2c will implement actual model inference");
+                    eprintln!("[query-expansion] Note: Phase 2b with mock expansion - Phase 2c will integrate real ONNX models");
                 }
             }
         }

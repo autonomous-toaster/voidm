@@ -186,15 +186,16 @@ impl QueryExpander {
 
     /// Internal expansion with timeout.
     async fn expand_with_timeout(&self, query: &str) -> Result<String> {
-        // This is a placeholder implementation.
-        // In production, this would use tokio::time::timeout to enforce the timeout_ms limit.
+        // This is a placeholder implementation (Phase 2a infrastructure).
+        // Phase 2b will implement actual model loading and inference.
+        // In production, this will use tokio::time::timeout to enforce the timeout_ms limit.
 
         let template = prompts::get_template(&self.config.model);
         let _prompt = template.replace("{query}", query);
 
-        // Placeholder: would call model here
-        // For now, return original query + a note that this is a placeholder
-        Ok(format!("{} [expansion placeholder]", query))
+        // Placeholder: In Phase 2b, this will call the actual model here
+        // For now, return original query to indicate feature is ready but not yet implemented
+        Ok(query.to_string())
     }
 
     /// Clear the expansion cache.

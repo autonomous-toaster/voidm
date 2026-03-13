@@ -225,6 +225,9 @@ pub struct AutoMergeArgs {
     /// Similarity threshold (0.0-1.0, default 0.90 for high confidence)
     #[arg(long, short, default_value = "0.90")]
     pub threshold: f32,
+    /// Use semantic deduplication (if enabled in config) for better matching
+    #[arg(long)]
+    pub use_semantic: bool,
     /// Dry-run: show what would be merged without making changes
     #[arg(long)]
     pub dry_run: bool,
@@ -468,7 +471,7 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
             handle_merge_history(args.batch.as_deref(), args.status.as_deref(), pool, json).await?;
         }
         ConceptCommands::AutoMerge(args) => {
-            handle_automerge(args.threshold, args.dry_run, args.force, pool, json).await?;
+            handle_automerge(args.threshold, args.use_semantic, args.dry_run, args.force, pool, json).await?;
         }
     }
     Ok(())
@@ -1107,6 +1110,7 @@ async fn handle_merge_history(
 
 async fn handle_automerge(
     threshold: f32,
+    use_semantic: bool,
     dry_run: bool,
     force: bool,
     pool: &SqlitePool,
@@ -1114,8 +1118,14 @@ async fn handle_automerge(
 ) -> Result<()> {
     use voidm_core::models::MergePlan;
 
-    // Find all candidates above threshold
-    let candidates = ontology::find_merge_candidates(pool, threshold).await?;
+    // Find merge candidates, optionally using semantic dedup
+    let candidates = if use_semantic {
+        // Load config to get semantic dedup settings
+        let config = voidm_core::Config::load();
+        ontology::find_merge_candidates_with_semantic(pool, threshold, &config).await?
+    } else {
+        ontology::find_merge_candidates(pool, threshold).await?
+    };
 
     if candidates.is_empty() {
         if !json {
@@ -1142,7 +1152,8 @@ async fn handle_automerge(
         if !json {
             println!("Auto-Merge Preview:");
             println!("───────────────────────────────────────────────────────────");
-            println!("Found {} duplicate concept pairs above {:.0}% similarity", candidates.len(), threshold * 100.0);
+            let dedup_info = if use_semantic { " (semantic dedup enabled)" } else { "" };
+            println!("Found {} duplicate concept pairs above {:.0}% similarity{}", candidates.len(), threshold * 100.0, dedup_info);
             println!();
             for (idx, candidate) in candidates.iter().enumerate() {
                 println!("{}. [{}] {} ({} edges) → [{}] {} ({} edges)",

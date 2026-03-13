@@ -12,6 +12,8 @@ pub struct Config {
     pub search: SearchConfig,
     #[serde(default)]
     pub insert: InsertConfig,
+    #[serde(default)]
+    pub enrichment: EnrichmentConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +158,12 @@ pub struct InsertConfig {
     pub auto_link_limit: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnrichmentConfig {
+    #[serde(default)]
+    pub semantic_dedup: Option<crate::semantic_dedup::SemanticDedupConfig>,
+}
+
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
@@ -207,6 +215,14 @@ impl Default for InsertConfig {
     }
 }
 
+impl Default for EnrichmentConfig {
+    fn default() -> Self {
+        Self {
+            semantic_dedup: Some(crate::semantic_dedup::SemanticDedupConfig::default()),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -214,6 +230,7 @@ impl Default for Config {
             embeddings: Default::default(),
             search: Default::default(),
             insert: Default::default(),
+            enrichment: Default::default(),
         }
     }
 }

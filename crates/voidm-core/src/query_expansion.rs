@@ -1,44 +1,21 @@
-/// Query expansion using small generative LLMs.
-///
-/// This module expands user search queries with synonyms and related concepts
-/// to improve recall in semantic search. Uses a small language model (Phi-2, TinyLLama, or GPT-2)
-/// with few-shot prompting for consistent, high-quality expansions.
-///
-/// Features:
-/// - Config-driven (no code changes to enable)
-/// - Graceful fallback on timeout/error
-/// - LRU caching for repeated queries
-/// - Optional feature (disabled by default)
-/// - Zero new dependencies (uses transformers if available)
+//! Query expansion using small generative LLMs.
+//!
+//! This module expands user search queries with synonyms and related concepts
+//! to improve recall in semantic search. Uses a small language model (Phi-2, TinyLLama, or GPT-2)
+//! with few-shot prompting for consistent, high-quality expansions.
+//!
+//! Features:
+//! - Config-driven (no code changes to enable)
+//! - Graceful fallback on timeout/error
+//! - LRU caching for repeated queries
+//! - Optional feature (disabled by default)
+//! - Zero new dependencies (uses transformers if available)
 
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
-/// Query expansion configuration.
-#[derive(Debug, Clone)]
-pub struct QueryExpansionConfig {
-    /// Enable query expansion (default: false)
-    pub enabled: bool,
-    /// Model name: "phi-2", "tinyllama", or "gpt2-small" (default: "phi-2")
-    pub model: String,
-    /// LRU cache size (default: 1000)
-    pub cache_size: usize,
-    /// Maximum time to wait for expansion in milliseconds (default: 300)
-    pub timeout_ms: u64,
-}
-
-impl Default for QueryExpansionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model: "phi-2".to_string(),
-            cache_size: 1000,
-            timeout_ms: 300,
-        }
-    }
-}
+use crate::config::QueryExpansionConfig;
 
 /// A simple LRU cache for query expansions.
 struct LRUCache {

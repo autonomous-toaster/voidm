@@ -5,7 +5,8 @@
 
 #[cfg(test)]
 mod query_expansion_benchmark {
-    use voidm_core::query_expansion::{QueryExpander, QueryExpansionConfig};
+    use voidm_core::query_expansion::QueryExpander;
+    use voidm_core::config::QueryExpansionConfig;
 
     /// Test dataset: representative voidm queries.
     fn get_test_queries() -> Vec<(&'static str, &'static str)> {

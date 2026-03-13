@@ -22,6 +22,9 @@ pub mod concept_telemetry;
 pub mod improvement_engine;
 pub mod agent_feedback;
 pub mod ontology_orchestrator;
+pub mod user_interactions;
+pub mod user_workflow;
+pub mod user_personalization;
 
 pub use config::Config;
 pub use config::config_path_display;

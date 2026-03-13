@@ -332,4 +332,43 @@ CREATE INDEX IF NOT EXISTS idx_agent_feedback_agent      ON agent_feedback(agent
 CREATE INDEX IF NOT EXISTS idx_agent_feedback_type       ON agent_feedback(feedback_type);
 CREATE INDEX IF NOT EXISTS idx_agent_feedback_concept    ON agent_feedback(concept_id);
 CREATE INDEX IF NOT EXISTS idx_agent_feedback_timestamp  ON agent_feedback(timestamp DESC);
+
+-- ── User Behavior & Interaction Tracking ────────────────────────────────────
+
+-- Track every user interaction with voidm
+CREATE TABLE IF NOT EXISTS user_interactions (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          TEXT NOT NULL,
+    interaction_type TEXT NOT NULL CHECK (interaction_type IN ('search', 'view', 'enrich', 'feedback', 'merge', 'create', 'explore', 'export')),
+    target_id        TEXT,
+    target_name      TEXT NOT NULL,
+    result           TEXT NOT NULL CHECK (result IN ('success', 'skip', 'cancel', 'error')),
+    duration_ms      INTEGER DEFAULT 0,
+    timestamp        TEXT NOT NULL,
+    context          TEXT,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_interactions_user_id      ON user_interactions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_interactions_type         ON user_interactions(interaction_type);
+CREATE INDEX IF NOT EXISTS idx_user_interactions_target       ON user_interactions(target_id);
+CREATE INDEX IF NOT EXISTS idx_user_interactions_timestamp    ON user_interactions(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_user_interactions_result      ON user_interactions(result);
+
+-- User preferences and behavior patterns (computed, not inserted directly)
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          TEXT NOT NULL UNIQUE,
+    favorite_scopes  TEXT,                          -- JSON: [{"scope": "auth", "count": 15}]
+    favorite_concepts TEXT,                         -- JSON: [{"name": "JWT", "count": 10}]
+    enrichment_rate  REAL DEFAULT 0.5,
+    preferred_types  TEXT,                          -- JSON: [{"type": "TECHNIQUE", "freq": 0.6}]
+    avg_duration_ms  INTEGER DEFAULT 500,
+    peak_hours       TEXT,                          -- JSON: [9, 14, 18]
+    work_style       TEXT,                          -- JSON: detailed work style
+    last_updated     TEXT NOT NULL,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_preferences_user_id ON user_preferences(user_id);
 "#;

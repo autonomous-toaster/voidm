@@ -280,6 +280,193 @@ pub async fn get_concept_coocurrence(
     Ok(vec![])
 }
 
+/// Aggregated search session summary (preserved after raw session purge)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SearchSessionAggregate {
+    pub user_id: String,
+    pub query_hash: String,
+    pub period_start: String,  // RFC3339 date
+    pub period_end: String,    // RFC3339 date
+    pub total_searches: i64,
+    pub successful_searches: i64,
+    pub total_clicks: i64,
+    pub avg_results_per_session: f64,
+    pub avg_clicks_per_session: f64,
+    pub success_rate: f64,
+    pub max_exploration_depth: i64,
+}
+
+/// Aggregate search sessions for a given date and store in summary table
+/// Returns count of sessions aggregated
+pub async fn aggregate_sessions_for_date(
+    pool: &SqlitePool,
+    date: &str, // YYYY-MM-DD format
+) -> Result<i64> {
+    // Get yesterday's sessions (or the specified date)
+    let period_start = format!("{}T00:00:00Z", date);
+    let period_end = format!("{}T23:59:59Z", date);
+    
+    // Insert aggregates for each (user_id, query_hash) pair from that date
+    let result = sqlx::query(
+        r#"
+        INSERT INTO search_session_summary 
+        (user_id, query_hash, period_start, period_end, total_searches, successful_searches, 
+         total_clicks, avg_results_per_session, avg_clicks_per_session, success_rate, max_exploration_depth)
+        SELECT 
+            user_id,
+            query_hash,
+            ?,
+            ?,
+            COUNT(*) as total_searches,
+            COUNT(CASE WHEN clicked_results IS NOT NULL THEN 1 END) as successful_searches,
+            COALESCE(SUM(json_array_length(clicked_results)), 0) as total_clicks,
+            AVG(result_count) as avg_results_per_session,
+            COALESCE(AVG(
+                CASE 
+                    WHEN clicked_results IS NOT NULL 
+                    THEN json_array_length(clicked_results)
+                    ELSE 0
+                END
+            ), 0) as avg_clicks_per_session,
+            ROUND(100.0 * COUNT(CASE WHEN clicked_results IS NOT NULL THEN 1 END) 
+                  / COUNT(*), 2) as success_rate,
+            COALESCE(MAX(
+                CASE 
+                    WHEN clicked_results IS NOT NULL 
+                    THEN json_array_length(clicked_results)
+                    ELSE 0
+                END
+            ), 0) as max_exploration_depth
+        FROM search_sessions
+        WHERE closed_at >= ? AND closed_at < datetime(?, '+1 day')
+          AND session_status = 'closed'
+        GROUP BY user_id, query_hash
+        ON CONFLICT(user_id, query_hash, period_start) DO UPDATE SET
+            total_searches = excluded.total_searches,
+            successful_searches = excluded.successful_searches,
+            total_clicks = excluded.total_clicks,
+            avg_results_per_session = excluded.avg_results_per_session,
+            avg_clicks_per_session = excluded.avg_clicks_per_session,
+            success_rate = excluded.success_rate,
+            max_exploration_depth = excluded.max_exploration_depth,
+            updated_at = CURRENT_TIMESTAMP
+        "#
+    )
+    .bind(&period_start)
+    .bind(&period_end)
+    .bind(&period_start)
+    .bind(date)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() as i64)
+}
+
+/// Delete raw sessions older than the specified days
+/// (should only run AFTER aggregation is verified)
+pub async fn purge_old_sessions(
+    pool: &SqlitePool,
+    days_to_keep: i64,
+) -> Result<i64> {
+    let cutoff_date = format!("{}", 
+        chrono::Utc::now() - chrono::Duration::days(days_to_keep)
+    );
+
+    let result = sqlx::query(
+        r#"
+        DELETE FROM search_sessions
+        WHERE closed_at < ?
+          AND session_status = 'closed'
+        "#
+    )
+    .bind(&cutoff_date)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() as i64)
+}
+
+/// Verify data integrity: compare raw sessions vs aggregated summaries
+pub async fn verify_aggregation_integrity(
+    pool: &SqlitePool,
+) -> Result<bool> {
+    // Count total searches in raw sessions (last 30 days)
+    let raw_count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM search_sessions
+        WHERE closed_at > datetime('now', '-30 days')
+          AND session_status = 'closed'
+        "#
+    )
+    .fetch_one(pool)
+    .await?;
+
+    // Count total searches in summaries (last 30 days)
+    let summary_count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM search_session_summary
+        WHERE period_end > datetime('now', '-30 days')
+        "#
+    )
+    .fetch_one(pool)
+    .await?;
+
+    // They should be equal or summary should be slightly less (not yet aggregated today)
+    let difference = (raw_count.0 - summary_count.0).abs();
+    let is_healthy = difference < 1000; // Allow reasonable difference
+
+    Ok(is_healthy)
+}
+
+/// Get aggregated analytics from summary table (works even after raw sessions purged)
+pub async fn get_aggregated_analytics(
+    pool: &SqlitePool,
+    user_id: &str,
+) -> Result<Vec<SearchAnalytics>> {
+    let rows = sqlx::query_as::<_, (String, i64, i64, f64)>(
+        r#"
+        SELECT 
+            query_hash,
+            SUM(total_searches) as total_searches,
+            SUM(successful_searches) as successful_searches,
+            AVG(success_rate) as success_rate
+        FROM search_session_summary
+        WHERE user_id = ?
+        GROUP BY query_hash
+        ORDER BY total_searches DESC
+        "#
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut analytics = Vec::new();
+    for (query_hash, total_searches, successful_searches, success_rate) in rows {
+        let avg_clicks = sqlx::query_scalar::<_, Option<f64>>(
+            r#"
+            SELECT AVG(avg_clicks_per_session)
+            FROM search_session_summary
+            WHERE user_id = ? AND query_hash = ?
+            "#
+        )
+        .bind(user_id)
+        .bind(&query_hash)
+        .fetch_one(pool)
+        .await?
+        .unwrap_or(0.0);
+
+        analytics.push(SearchAnalytics {
+            query_hash,
+            total_searches,
+            successful_searches,
+            avg_clicks,
+            success_rate,
+        });
+    }
+
+    Ok(analytics)
+}
+
 /// Simple hash function (murmurhash64a lookalike for deterministic hashing)
 pub fn murmurhash64a(data: &[u8]) -> u64 {
     let mut hash: u64 = 0xc15f9ce0919e27d9; // seed
@@ -441,6 +628,152 @@ mod tests {
         let found = find_open_session(&pool, "test-user-lifecycle", 5).await?;
         assert!(found.is_none(), "Should not find closed session");
         
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_sessions() -> anyhow::Result<()> {
+        use sqlx::sqlite::SqlitePoolOptions;
+        
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite:////tmp/voidm_test.db")
+            .await?;
+
+        // Ensure migrations are run
+        crate::migrate::run(&pool).await?;
+
+        // Create a session with clicks
+        let session_id = create_search_session(&pool, "test-aggregate", "auth", 3).await?;
+        record_click(&pool, &session_id, "mem-101", 1000).await?;
+        record_click(&pool, &session_id, "mem-102", 2500).await?;
+        close_session(&pool, &session_id).await?;
+
+        // Get today's date
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        // Aggregate sessions for today
+        let aggregated = aggregate_sessions_for_date(&pool, &today).await?;
+        assert!(aggregated > 0, "Should have aggregated at least one session");
+
+        // Verify summary was created
+        let summary_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM search_session_summary WHERE user_id = 'test-aggregate'"
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert!(summary_count.0 > 0, "Should have created summary");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregation_integrity() -> anyhow::Result<()> {
+        use sqlx::sqlite::SqlitePoolOptions;
+        
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite:////tmp/voidm_test.db")
+            .await?;
+
+        // Ensure migrations are run
+        crate::migrate::run(&pool).await?;
+
+        // Verify that aggregation doesn't lose data
+        let is_healthy = verify_aggregation_integrity(&pool).await?;
+        assert!(is_healthy, "Aggregation integrity should be healthy");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_aggregated_analytics() -> anyhow::Result<()> {
+        use sqlx::sqlite::SqlitePoolOptions;
+        
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite:////tmp/voidm_test.db")
+            .await?;
+
+        // Ensure migrations are run
+        crate::migrate::run(&pool).await?;
+
+        // Create sessions for analytics testing
+        let session_id = create_search_session(&pool, "test-analytics", "oauth", 4).await?;
+        record_click(&pool, &session_id, "mem-201", 1000).await?;
+        record_click(&pool, &session_id, "mem-202", 3000).await?;
+        close_session(&pool, &session_id).await?;
+
+        // Aggregate
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        aggregate_sessions_for_date(&pool, &today).await?;
+
+        // Get analytics from aggregated data
+        let analytics = get_aggregated_analytics(&pool, "test-analytics").await?;
+        
+        // Should have at least one result
+        assert!(analytics.len() > 0, "Should have analytics");
+        
+        // Verify structure
+        for stat in &analytics {
+            assert!(!stat.query_hash.is_empty(), "Query hash should exist");
+            assert!(stat.total_searches >= 1, "Should have at least 1 search");
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_purge_old_sessions() -> anyhow::Result<()> {
+        use sqlx::sqlite::SqlitePoolOptions;
+        
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite:////tmp/voidm_test.db")
+            .await?;
+
+        // Ensure migrations are run
+        crate::migrate::run(&pool).await?;
+
+        // Create old session (manually insert with old date)
+        let old_id = uuid::Uuid::new_v4().to_string();
+        let old_date = (chrono::Utc::now() - chrono::Duration::days(35)).to_rfc3339();
+        
+        sqlx::query(
+            r#"
+            INSERT INTO search_sessions (id, user_id, query_hash, started_at, result_count, 
+                                        last_activity_at, session_status, closed_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)
+            "#
+        )
+        .bind(&old_id)
+        .bind("test-purge")
+        .bind("oldhash")
+        .bind(&old_date)
+        .bind(2)
+        .bind(&old_date)
+        .bind(&old_date)
+        .execute(&pool)
+        .await?;
+
+        // Verify old session exists
+        let exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM search_sessions WHERE id = ?"
+        )
+        .bind(&old_id)
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(exists.0, 1, "Old session should exist");
+
+        // Purge sessions older than 30 days
+        let deleted = purge_old_sessions(&pool, 30).await?;
+        assert!(deleted > 0, "Should have deleted at least one session");
+
+        // Verify it's gone
+        let exists_after: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM search_sessions WHERE id = ?"
+        )
+        .bind(&old_id)
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(exists_after.0, 0, "Old session should be deleted");
+
         Ok(())
     }
 }

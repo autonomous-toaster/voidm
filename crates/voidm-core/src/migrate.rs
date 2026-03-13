@@ -8,6 +8,7 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
     upgrade_add_quality_score(pool).await?;
     upgrade_add_concept_type(pool).await?;
     upgrade_add_search_sessions(pool).await?;
+    upgrade_add_search_session_summary(pool).await?;
     Ok(())
 }
 
@@ -95,6 +96,58 @@ async fn upgrade_add_search_sessions(pool: &SqlitePool) -> Result<()> {
             .await?;
         
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_search_sessions_query_hash ON search_sessions(query_hash)")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Create search_session_summary table for aggregated session analytics
+/// Idempotent — safe to run multiple times
+async fn upgrade_add_search_session_summary(pool: &SqlitePool) -> Result<()> {
+    // Check if search_session_summary table already exists
+    let table_exists: (bool,) = sqlx::query_as(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='search_session_summary'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !table_exists.0 {
+        sqlx::query(
+            r#"
+            CREATE TABLE search_session_summary (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id                 TEXT NOT NULL,
+                query_hash              TEXT NOT NULL,
+                period_start            TEXT NOT NULL,
+                period_end              TEXT NOT NULL,
+                total_searches          INTEGER NOT NULL,
+                successful_searches     INTEGER NOT NULL,
+                total_clicks            INTEGER NOT NULL,
+                avg_results_per_session REAL NOT NULL,
+                avg_clicks_per_session  REAL NOT NULL,
+                success_rate            REAL NOT NULL,
+                max_exploration_depth   INTEGER NOT NULL,
+                created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, query_hash, period_start)
+            )
+            "#
+        )
+        .execute(pool)
+        .await?;
+
+        // Create indexes for efficient queries
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_summary_user_query ON search_session_summary(user_id, query_hash)")
+            .execute(pool)
+            .await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_summary_period ON search_session_summary(period_start DESC, period_end DESC)")
+            .execute(pool)
+            .await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_summary_success_rate ON search_session_summary(success_rate DESC)")
             .execute(pool)
             .await?;
     }

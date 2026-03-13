@@ -230,6 +230,15 @@ pub async fn search(
     }
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
+    // Apply reranker if enabled (before quality/threshold filters)
+    if let Some(reranker_config) = &config_search.reranker {
+        if reranker_config.enabled && !results.is_empty() {
+            if let Err(e) = apply_reranker(reranker_config, &opts.query, &mut results).await {
+                tracing::warn!("Reranking failed, using original scores: {}", e);
+            }
+        }
+    }
+
     // Apply quality filter if specified
     if let Some(min_quality) = opts.min_quality {
         results.retain(|r| r.quality_score.unwrap_or(0.0) >= min_quality);
@@ -441,4 +450,48 @@ pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
         boundary -= 1;
     }
     &s[..boundary]
+}
+
+/// Apply reranker to top-k results and blend scores.
+async fn apply_reranker(
+    config: &crate::config::RerankerConfig,
+    query: &str,
+    results: &mut Vec<SearchResult>,
+) -> anyhow::Result<()> {
+    let apply_to_k = config.apply_to_top_k.min(results.len());
+    if apply_to_k == 0 {
+        return Ok(());
+    }
+
+    let reranker = crate::reranker::CrossEncoderReranker::load(&config.model).await?;
+    
+    // Extract documents to rerank (only top-k)
+    let docs_to_rerank: Vec<&str> = results[..apply_to_k]
+        .iter()
+        .map(|r| r.content.as_str())
+        .collect();
+
+    let reranked = reranker.rerank(query, &docs_to_rerank)?;
+
+    // Create a mapping of original_index -> new_score
+    let mut rerank_scores: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+    for rerank_result in reranked {
+        rerank_scores.insert(rerank_result.index, rerank_result.score);
+    }
+
+    // Update scores for reranked results (blend original + reranker score)
+    for (idx, result) in results[..apply_to_k].iter_mut().enumerate() {
+        if let Some(rerank_score) = rerank_scores.get(&idx) {
+            let original_score = result.score;
+            let blended = rerank_score * config.blend + original_score * (1.0 - config.blend);
+            result.score = blended;
+            tracing::debug!("Reranked [{}]: {:.3} (orig) + {:.3} (reranker) -> {:.3}", 
+                            idx, original_score, rerank_score, blended);
+        }
+    }
+
+    // Re-sort by blended scores
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+    Ok(())
 }

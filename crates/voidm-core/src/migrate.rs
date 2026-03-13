@@ -7,6 +7,7 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
     sqlx::query(SCHEMA).execute(pool).await?;
     upgrade_add_quality_score(pool).await?;
     upgrade_add_concept_type(pool).await?;
+    upgrade_add_search_sessions(pool).await?;
     Ok(())
 }
 
@@ -47,6 +48,53 @@ async fn upgrade_add_concept_type(pool: &SqlitePool) -> Result<()> {
             .execute(pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_ontology_concepts_type ON ontology_concepts(concept_type)")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Create search_sessions table for tracking search → get behavior
+/// Idempotent — safe to run multiple times
+async fn upgrade_add_search_sessions(pool: &SqlitePool) -> Result<()> {
+    // Check if search_sessions table already exists
+    let table_exists: (bool,) = sqlx::query_as(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='search_sessions'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !table_exists.0 {
+        sqlx::query(
+            r#"
+            CREATE TABLE search_sessions (
+                id                TEXT PRIMARY KEY,
+                user_id           TEXT NOT NULL,
+                query_hash        TEXT NOT NULL,
+                started_at        TEXT NOT NULL,
+                result_count      INTEGER NOT NULL,
+                clicked_results   TEXT,
+                last_activity_at  TEXT NOT NULL,
+                session_status    TEXT NOT NULL DEFAULT 'open' CHECK (session_status IN ('open', 'closed')),
+                closed_at         TEXT,
+                created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            "#
+        )
+        .execute(pool)
+        .await?;
+
+        // Create indexes for efficient queries
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_search_sessions_user_id_status ON search_sessions(user_id, session_status)")
+            .execute(pool)
+            .await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_search_sessions_last_activity ON search_sessions(last_activity_at DESC)")
+            .execute(pool)
+            .await?;
+        
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_search_sessions_query_hash ON search_sessions(query_hash)")
             .execute(pool)
             .await?;
     }

@@ -4,7 +4,6 @@
 //! Preferences: quick-access vs deep-dive, collaborative vs solo
 
 use anyhow::Result;
-use chrono::Utc;
 use sqlx::SqlitePool;
 
 #[derive(Debug, Clone)]
@@ -305,7 +304,7 @@ async fn determine_preferred_pace(pool: &SqlitePool, user_id: &str) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
+    use chrono::{Duration, Utc};
 
     #[test]
     fn test_workflow_pattern_creation() {

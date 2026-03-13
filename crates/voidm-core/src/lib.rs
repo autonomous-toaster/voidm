@@ -26,6 +26,7 @@ pub mod user_interactions;
 pub mod user_workflow;
 pub mod user_personalization;
 pub mod user_adaptive_system;
+pub mod search_sessions;
 
 pub use config::Config;
 pub use config::config_path_display;

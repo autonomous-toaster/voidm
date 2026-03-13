@@ -362,61 +362,119 @@ impl QueryExpander {
         }
     }
     
-    /// Perform ONNX inference to expand query.
+    /// Perform ONNX inference to expand query with greedy text generation.
     fn infer_expansion(model: &Arc<LLMModel>, prompt: &str) -> Result<String> {
         // Tokenize the prompt
         let encoding = model.tokenizer
             .encode(prompt, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
         
-        let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
-        let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&x| x as i64).collect();
+        let mut input_ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
         
         if input_ids.is_empty() {
             return Err(anyhow::anyhow!("Empty input after tokenization"));
         }
         
-        let seq_len = input_ids.len();
+        // Constants for generation
+        const MAX_NEW_TOKENS: usize = 30;  // Max tokens to generate
+        const MAX_SEQ_LEN: usize = 512;    // Sequence length limit
+        const EOS_TOKEN: i64 = 2;          // End-of-sequence token ID
         
-        // Create input tensors
-        let input_ids_tensor = Tensor::<i64>::from_array(
-            ([1usize, seq_len], input_ids.into_boxed_slice())
-        ).context("Failed to create input_ids tensor")?;
+        let mut generated_tokens = Vec::new();
         
-        let attention_mask_tensor = Tensor::<i64>::from_array(
-            ([1usize, seq_len], attention_mask.into_boxed_slice())
-        ).context("Failed to create attention_mask tensor")?;
-        
-        // Run inference
-        let mut session = model.session.lock().unwrap();
-        
-        let outputs = session.run(
-            ort::inputs![
-                "input_ids" => input_ids_tensor,
-                "attention_mask" => attention_mask_tensor
-            ]
-        ).context("LLM inference failed")?;
-        
-        // Extract logits (shape: [1, seq_len, vocab_size])
-        let logits_value = outputs.get("logits")
-            .or_else(|| outputs.get("last_hidden_state"))
-            .context("No logits output from LLM model")?;
-        
-        let logits = logits_value
-            .try_extract_tensor::<f32>()
-            .context("Failed to extract logits as f32")?;
-        
-        let (_shape, logits_data) = logits;
-        
-        // Simplified decoding: return placeholder indicating inference succeeded
-        // Full implementation would use proper text generation (beam search, etc)
-        if !logits_data.is_empty() {
-            tracing::debug!("LLM inference completed successfully");
-            // Return the prompt's trailing text (in real impl, this would be generated tokens)
-            return Ok("(model-expansion)".to_string());
+        // Autoregressive text generation (greedy decoding)
+        for _ in 0..MAX_NEW_TOKENS {
+            if input_ids.len() >= MAX_SEQ_LEN {
+                break;
+            }
+            
+            // Create attention mask
+            let attention_mask: Vec<i64> = (0..input_ids.len()).map(|_| 1i64).collect();
+            let seq_len = input_ids.len();
+            
+            // Create input tensors
+            let input_ids_tensor = Tensor::<i64>::from_array(
+                ([1usize, seq_len], input_ids.clone().into_boxed_slice())
+            ).context("Failed to create input_ids tensor")?;
+            
+            let attention_mask_tensor = Tensor::<i64>::from_array(
+                ([1usize, seq_len], attention_mask.into_boxed_slice())
+            ).context("Failed to create attention_mask tensor")?;
+            
+            // Run inference to get logits for next token
+            let mut session = model.session.lock().unwrap();
+            
+            let outputs = session.run(
+                ort::inputs![
+                    "input_ids" => input_ids_tensor,
+                    "attention_mask" => attention_mask_tensor
+                ]
+            ).context("LLM inference failed")?;
+            
+            // Extract logits from last position
+            let logits_value = outputs.get("logits")
+                .or_else(|| outputs.get("last_hidden_state"))
+                .context("No logits output from LLM model")?;
+            
+            let logits = logits_value
+                .try_extract_tensor::<f32>()
+                .context("Failed to extract logits as f32")?;
+            
+            let (_shape, logits_data) = logits;
+            
+            if logits_data.len() < 32000 {
+                // Not enough logits for vocab (usually ~32k or more for LLMs)
+                // This might be hidden states instead of logits
+                break;
+            }
+            
+            // Get logits for last token position
+            // Shape is [batch_size=1, seq_len, vocab_size]
+            // We want the last token's logits
+            let vocab_size = logits_data.len() / seq_len;
+            let last_token_logits_start = (seq_len - 1) * vocab_size;
+            let last_token_logits = &logits_data[last_token_logits_start..];
+            
+            // Find token with highest logit (greedy decoding)
+            let mut next_token: i64 = 0;
+            let mut max_logit = f32::NEG_INFINITY;
+            
+            for (idx, &logit) in last_token_logits.iter().enumerate() {
+                if logit > max_logit {
+                    max_logit = logit;
+                    next_token = idx as i64;
+                }
+            }
+            
+            // Stop if we generated end-of-sequence token
+            if next_token == EOS_TOKEN {
+                break;
+            }
+            
+            // Add to generated tokens
+            generated_tokens.push(next_token);
+            input_ids.push(next_token);
         }
         
-        Err(anyhow::anyhow!("Could not extract logits from output"))
+        drop(model.session.lock());
+        
+        // Decode generated tokens to text
+        let generated_ids: Vec<u32> = generated_tokens.iter().map(|&id| id as u32).collect();
+        
+        let decoded = model.tokenizer
+            .decode(&generated_ids, true)
+            .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
+        
+        // Clean up the decoded text
+        let expanded = format!("{}", decoded.trim());
+        
+        if expanded.is_empty() {
+            tracing::warn!("Generated empty expansion");
+            return Err(anyhow::anyhow!("Generated empty expansion"));
+        }
+        
+        tracing::debug!("LLM generated expansion: {}", expanded);
+        Ok(expanded)
     }
     
     /// Mock expansion for fallback when model unavailable (Phase 2b demo).

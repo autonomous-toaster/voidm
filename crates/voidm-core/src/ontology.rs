@@ -1257,6 +1257,98 @@ pub async fn find_merge_candidates(
     Ok(candidates)
 }
 
+
+/// Find merge candidates using both fuzzy matching and optional semantic similarity.
+/// 
+/// When semantic_dedup config is enabled:
+/// 1. Uses fuzzy Jaro-Winkler as first filter (fast)
+/// 2. For fuzzy matches, computes semantic similarity
+/// 3. Filters based on semantic threshold if configured
+/// 
+/// Fallback to fuzzy-only if semantic model fails to load.
+pub async fn find_merge_candidates_with_semantic(
+    pool: &SqlitePool,
+    fuzzy_threshold: f32,
+    config: &crate::config::Config,
+) -> Result<Vec<MergeCandidate>> {
+    // Get semantic config if enabled
+    let semantic_config = config.enrichment.semantic_dedup.as_ref()
+        .filter(|c| c.enabled);
+    
+    let candidates = find_merge_candidates(pool, fuzzy_threshold).await?;
+    
+    // If semantic dedup is disabled, return fuzzy-based candidates
+    let Some(sem_cfg) = semantic_config else {
+        return Ok(candidates);
+    };
+    
+    // Try to compute semantic similarities for fuzzy matches
+    let embeddings_model = &config.embeddings.model;
+    
+    // Get all concept names for batch embedding
+    let concept_ids: Vec<String> = candidates.iter()
+        .flat_map(|c| vec![c.source_id.clone(), c.target_id.clone()])
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    
+    let mut id_to_name: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for id in &concept_ids {
+        if let Ok(Some(name)) = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM ontology_concepts WHERE id = ?"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await {
+            id_to_name.insert(id.clone(), name);
+        }
+    }
+    
+    // Try to compute semantic similarities
+    // Non-blocking: if this fails, fall back to fuzzy scores
+    let mut enhanced_candidates = Vec::new();
+    
+    for mut candidate in candidates {
+        let source_name = id_to_name.get(&candidate.source_id)
+            .map(|n| n.as_str())
+            .unwrap_or(&candidate.source_name);
+        let target_name = id_to_name.get(&candidate.target_id)
+            .map(|n| n.as_str())
+            .unwrap_or(&candidate.target_name);
+        
+        match crate::semantic_dedup::similarity(
+            source_name,
+            target_name,
+            embeddings_model
+        ) {
+            Ok(semantic_sim) => {
+                // Filter by semantic threshold if configured
+                if semantic_sim >= sem_cfg.threshold {
+                    // Optionally blend fuzzy and semantic scores
+                    // For now: use semantic as the primary score
+                    candidate.similarity = semantic_sim;
+                    enhanced_candidates.push(candidate);
+                }
+            }
+            Err(e) => {
+                // Log but don't fail - semantic similarity is optional
+                tracing::warn!("Semantic similarity computation failed: {}, falling back to fuzzy", e);
+                // Keep the candidate with fuzzy score
+                if candidate.similarity >= sem_cfg.threshold {
+                    enhanced_candidates.push(candidate);
+                }
+            }
+        }
+    }
+    
+    // Re-sort by similarity (now potentially semantic-based)
+    enhanced_candidates.sort_by(|a, b| 
+        b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal)
+    );
+    
+    Ok(enhanced_candidates)
+}
+
 /// Merge source_concept into target_concept: retarget all edges, preserve all memories, delete source.
 /// Transaction: all-or-nothing.
 pub async fn merge_concepts(

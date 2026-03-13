@@ -94,22 +94,6 @@ pub struct SearchArgs {
 pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
     let mode: SearchMode = args.mode.parse()?;
 
-    let opts = SearchOptions {
-        query: args.query.clone(),
-        mode,
-        limit: args.limit,
-        scope_filter: args.scope,
-        type_filter: args.r#type,
-        min_score: args.min_score,
-        min_quality: args.min_quality,
-        include_neighbors: args.include_neighbors,
-        neighbor_depth: args.neighbor_depth,
-        neighbor_decay: args.neighbor_decay,
-        neighbor_min_score: args.neighbor_min_score,
-        neighbor_limit: args.neighbor_limit,
-        edge_types: args.edge_types,
-    };
-
     // Apply CLI reranker overrides to config
     let mut config = config.clone();
     if args.reranker.is_some() || args.reranker_model.is_some() || args.reranker_top_k.is_some() || args.reranker_blend.is_some() {

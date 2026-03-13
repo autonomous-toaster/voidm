@@ -144,8 +144,10 @@ mod query_expansion_benchmark {
 
         let result = expander.expand("Docker").await;
         
-        // Phase 2a: Placeholder returns original query unchanged
-        // Phase 2b will implement actual model inference
-        assert_eq!(result, "Docker", "Placeholder should return original query unchanged");
+        // Phase 2b: Mock expansion returns expanded query with related terms
+        // Phase 2c will integrate actual ONNX model inference
+        assert!(result.contains("Docker"), "Result should contain original query");
+        assert!(result.contains("containerization") || result.contains("Kubernetes"), "Result should contain related terms");
+        assert!(result.contains(","), "Result should have multiple terms");
     }
 }

@@ -186,16 +186,84 @@ impl QueryExpander {
 
     /// Internal expansion with timeout.
     async fn expand_with_timeout(&self, query: &str) -> Result<String> {
-        // This is a placeholder implementation (Phase 2a infrastructure).
-        // Phase 2b will implement actual model loading and inference.
-        // In production, this will use tokio::time::timeout to enforce the timeout_ms limit.
-
-        let template = prompts::get_template(&self.config.model);
-        let _prompt = template.replace("{query}", query);
-
-        // Placeholder: In Phase 2b, this will call the actual model here
-        // For now, return original query to indicate feature is ready but not yet implemented
-        Ok(query.to_string())
+        // Phase 2b: Implement actual model inference with timeout
+        // For now, using a simulated expansion to demonstrate timeout mechanism
+        // Phase 2c will integrate actual ONNX model (Phi-2, TinyLLama, or GPT-2)
+        
+        use tokio::time::{timeout, Duration};
+        
+        let timeout_duration = Duration::from_millis(self.config.timeout_ms);
+        let query_str = query.to_string();
+        let model = self.config.model.clone();
+        
+        // Simulate model inference with timeout
+        let result = timeout(timeout_duration, async {
+            self.simulate_expansion(&query_str, &model).await
+        })
+        .await;
+        
+        match result {
+            Ok(Ok(expanded)) => Ok(expanded),
+            Ok(Err(e)) => {
+                tracing::warn!("Query expansion error: {}", e);
+                Err(e)
+            }
+            Err(_) => {
+                tracing::warn!("Query expansion timed out ({}ms)", self.config.timeout_ms);
+                Err(anyhow::anyhow!("Query expansion timed out"))
+            }
+        }
+    }
+    
+    /// Simulate query expansion (Phase 2b).
+    /// In Phase 2c, this will be replaced with actual ONNX model inference.
+    async fn simulate_expansion(&self, query: &str, model: &str) -> Result<String> {
+        // Get the appropriate prompt template
+        let template = prompts::get_template(model);
+        let prompt = template.replace("{query}", query);
+        
+        // Log the prompt for debugging
+        tracing::debug!("Expansion prompt for model '{}': {}", model, prompt);
+        
+        // Phase 2c: Replace this with actual model inference
+        // For now, simulate some expansion based on the query
+        let expanded = self.mock_expand(query);
+        
+        Ok(expanded)
+    }
+    
+    /// Mock expansion for demonstration (Phase 2b).
+    /// This simulates what the actual model will do.
+    /// Phase 2c replaces this with real inference.
+    fn mock_expand(&self, query: &str) -> String {
+        // Simple mock: add related terms based on common patterns
+        // In production (Phase 2c), the model will generate these automatically
+        
+        let lower = query.to_lowercase();
+        
+        // Common expansion patterns for demo
+        let expansions = if lower.contains("docker") {
+            format!("{}, containerization, container images, Docker Compose, Kubernetes", query)
+        } else if lower.contains("kubernetes") || lower.contains("k8s") {
+            format!("{}, container orchestration, pods, services, deployments", query)
+        } else if lower.contains("python") {
+            format!("{}, Python programming, Django, Flask, data science", query)
+        } else if lower.contains("api") {
+            format!("{}, REST, web services, HTTP endpoints, API design", query)
+        } else if lower.contains("rust") {
+            format!("{}, Rust programming, systems programming, performance", query)
+        } else if lower.contains("database") || lower.contains("sql") {
+            format!("{}, relational database, queries, schema design", query)
+        } else if lower.contains("aws") {
+            format!("{}, Amazon Web Services, cloud computing, S3, EC2", query)
+        } else if lower.contains("git") || lower.contains("github") {
+            format!("{}, version control, branches, commits, repositories", query)
+        } else {
+            // Default: return query as-is for unknown terms
+            query.to_string()
+        };
+        
+        expansions
     }
 
     /// Clear the expansion cache.

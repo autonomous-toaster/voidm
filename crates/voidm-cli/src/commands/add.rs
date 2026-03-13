@@ -2,7 +2,11 @@ use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
 use std::time::Instant;
-use voidm_core::{Config, crud, models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType}, user_interactions::track_interaction};
+use voidm_core::{
+    Config, crud, models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType}, 
+    user_interactions::track_interaction,
+    user_adaptive_system::{UserAdaptiveConfig, get_adaptive_response},
+};
 
 #[derive(Args)]
 pub struct AddArgs {
@@ -109,6 +113,22 @@ pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) 
         if let Some(ref dup) = resp.duplicate_warning {
             eprintln!("\nWarning: {}", dup.message);
             eprintln!("  Existing: {} [{:.2}]", dup.id, dup.score);
+        }
+
+        // Show personalization hint
+        let adaptive_config = UserAdaptiveConfig::default();
+        if let Ok(adaptive) = get_adaptive_response(pool, &user_id, &adaptive_config).await {
+            if adaptive.confidence > 0.5 {
+                if let Some(defaults) = adaptive.defaults {
+                    eprintln!("\n💡 Next time try:");
+                    if let Some(scope) = defaults.preferred_scope {
+                        eprintln!("  --scope {} (your favorite scope)", scope);
+                    }
+                    if let Some(concept_type) = defaults.preferred_concept_type {
+                        eprintln!("  --type {} (your preferred concept type)", concept_type);
+                    }
+                }
+            }
         }
     }
 

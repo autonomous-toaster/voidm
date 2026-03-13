@@ -2,7 +2,11 @@ use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
 use std::time::Instant;
-use voidm_core::{Config, search::{SearchOptions, SearchMode, search}, user_interactions::track_interaction};
+use voidm_core::{
+    Config, search::{SearchOptions, SearchMode, search}, user_interactions::track_interaction,
+    user_adaptive_system::{UserAdaptiveConfig, get_adaptive_response},
+    user_personalization::get_personalized_rankings,
+};
 
 #[derive(Args)]
 pub struct SearchArgs {
@@ -85,7 +89,7 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         edge_types: args.edge_types,
     };
 
-    let resp = search(
+    let mut resp = search(
         pool,
         &opts,
         &config.embeddings.model,
@@ -93,6 +97,42 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         config.search.min_score,
         &config.search,
     ).await?;
+
+    // Apply personalization if user has enough interactions
+    let adaptive_config = UserAdaptiveConfig::default();
+    
+    if !resp.results.is_empty() {
+        // Try to get adaptive response for this user
+        if let Ok(adaptive) = get_adaptive_response(pool, &user_id, &adaptive_config).await {
+            // If user has learned history, apply personalization to rankings
+            if adaptive.confidence > 0.5 {
+                // Build a personalization boost map
+                let mut boost_map: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+                
+                // Get personalized rankings for this user
+                if let Ok(personalized_rankings) = get_personalized_rankings(pool, &user_id, 100).await {
+                    for ranking in personalized_rankings {
+                        boost_map.insert(ranking.concept_id, ranking.personalized_score);
+                    }
+                }
+                
+                // Rerank results using the boost map
+                if !boost_map.is_empty() {
+                    for result in resp.results.iter_mut() {
+                        if let Some(boost) = boost_map.get(&result.id) {
+                            // Blend original score with personalized boost
+                            let original = result.score;
+                            result.score = original * 0.6 + boost * 0.4;
+                        }
+                    }
+                    // Re-sort by personalized scores
+                    resp.results.sort_by(|a, b| {
+                        b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+            }
+        }
+    }
 
     // Track the search interaction
     let duration_ms = start.elapsed().as_millis() as i64;
@@ -159,6 +199,14 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
             return Ok(());
         }
 
+        // Check if personalization was applied
+        let adaptive_config_check = UserAdaptiveConfig::default();
+        let personalization_active = if let Ok(adaptive) = get_adaptive_response(pool, &user_id, &adaptive_config_check).await {
+            adaptive.confidence > 0.5
+        } else {
+            false
+        };
+
         for r in &resp.results {
             if r.source == "graph" {
                 let rel = r.rel_type.as_deref().unwrap_or("?");
@@ -183,6 +231,11 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
                 println!("  Scopes: {}", r.scopes.join(", "));
             }
             println!();
+        }
+
+        // Show personalization status
+        if personalization_active {
+            eprintln!("💡 Results are personalized by user preferences (confidence: {}+)", "high");
         }
     }
     Ok(())

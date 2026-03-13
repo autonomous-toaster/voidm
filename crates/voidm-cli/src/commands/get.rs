@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{crud, resolve_id};
+use std::time::Instant;
+use voidm_core::{crud, resolve_id, user_interactions::track_interaction};
 
 #[derive(Args)]
 pub struct GetArgs {
@@ -10,6 +11,9 @@ pub struct GetArgs {
 }
 
 pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
+    let start = Instant::now();
+    let user_id = std::env::var("VOIDM_USER").unwrap_or_else(|_| "agent-cli".to_string());
+    
     let id = match resolve_id(pool, &args.id).await {
         Ok(id) => id,
         Err(e) => {
@@ -21,6 +25,7 @@ pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
             std::process::exit(1);
         }
     };
+    
     match crud::get_memory(pool, &id).await? {
         None => {
             if json {
@@ -31,6 +36,20 @@ pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
             std::process::exit(1);
         }
         Some(m) => {
+            // Track the view interaction
+            let duration_ms = start.elapsed().as_millis() as i64;
+            let context = format!("view:{}", m.memory_type);
+            let _ = track_interaction(
+                pool,
+                &user_id,
+                "view",
+                &m.id,
+                &m.id,
+                "success",
+                duration_ms,
+                Some(&context),
+            ).await;
+            
             if json {
                 println!("{}", serde_json::to_string_pretty(&m)?);
             } else {

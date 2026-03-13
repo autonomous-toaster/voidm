@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{Config, crud};
+use std::time::Instant;
+use voidm_core::{Config, crud, user_interactions::track_interaction};
 
 #[derive(Args)]
 pub struct ExportArgs {
@@ -22,6 +23,9 @@ pub struct ExportArgs {
 }
 
 pub async fn run(args: ExportArgs, pool: &SqlitePool, _config: &Config, _json: bool) -> Result<()> {
+    let start = Instant::now();
+    let user_id = std::env::var("VOIDM_USER").unwrap_or_else(|_| "agent-cli".to_string());
+    
     let memories = crud::list_memories(pool, args.scope.as_deref(), None, args.limit).await?;
 
     let content = match args.format.as_str() {
@@ -47,6 +51,20 @@ pub async fn run(args: ExportArgs, pool: &SqlitePool, _config: &Config, _json: b
         }
         other => anyhow::bail!("Unknown export format: '{}'. Valid: json, markdown", other),
     };
+
+    // Track the export interaction
+    let duration_ms = start.elapsed().as_millis() as i64;
+    let context = format!("export:{}", args.format);
+    let _ = track_interaction(
+        pool,
+        &user_id,
+        "export",
+        "bulk_export",
+        &format!("{} memories", memories.len()),
+        "success",
+        duration_ms,
+        Some(&context),
+    ).await;
 
     if let Some(path) = args.output {
         std::fs::write(&path, &content)?;

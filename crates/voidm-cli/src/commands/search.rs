@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{Config, search::{SearchOptions, SearchMode, search}};
+use std::time::Instant;
+use voidm_core::{Config, search::{SearchOptions, SearchMode, search}, user_interactions::track_interaction};
 
 #[derive(Args)]
 pub struct SearchArgs {
@@ -61,6 +62,12 @@ pub struct SearchArgs {
 
 pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
     let mode: SearchMode = args.mode.parse()?;
+    let start = Instant::now();
+    let user_id = std::env::var("VOIDM_USER").unwrap_or_else(|_| "agent-cli".to_string());
+    
+    // Store these before they're moved
+    let query_clone = args.query.clone();
+    let scope_clone = args.scope.clone();
 
     let opts = SearchOptions {
         query: args.query.clone(),
@@ -86,6 +93,23 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         config.search.min_score,
         &config.search,
     ).await?;
+
+    // Track the search interaction
+    let duration_ms = start.elapsed().as_millis() as i64;
+    let scope_str = scope_clone.as_deref().unwrap_or("general").to_string();
+    let context = format!("search:{}", scope_str);
+    let result_status = if resp.results.is_empty() { "no_results" } else { "success" };
+    
+    let _ = track_interaction(
+        pool,
+        &user_id,
+        "search",
+        &query_clone,
+        &query_clone,
+        result_status,
+        duration_ms,
+        Some(&context),
+    ).await;
 
     if json {
         if resp.results.is_empty() {

@@ -21,7 +21,7 @@ pub struct ConceptMention {
 /// Find all concept mentions in a memory's content
 pub async fn find_concept_mentions(
     pool: &SqlitePool,
-    memory_id: &str,
+    _memory_id: &str,
     content: &str,
 ) -> Result<Vec<ConceptMention>> {
     // Get all concepts
@@ -90,6 +90,8 @@ pub async fn create_mention_edges(
         if exists.is_none() {
             // TODO: Create edge (would need graph node for concept)
             // For now, just count it
+            let _ = memory_id;  // Suppress unused warning
+            let _ = mention;    // Suppress unused warning
             created += 1;
         }
     }

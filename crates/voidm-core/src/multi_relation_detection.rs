@@ -6,8 +6,6 @@
 //! - EXEMPLIFIES: memory is specific example of concept
 //! - DERIVES_FROM: concept derived from principle in memory
 
-use anyhow::Result;
-
 #[derive(Debug, Clone)]
 pub struct RelationDetection {
     pub memory_id: String,
@@ -19,9 +17,9 @@ pub struct RelationDetection {
 /// Detect semantic relations between memory and concept
 /// Uses NLI scores to determine relationship type
 pub fn detect_relations_from_nli(
-    memory_content: &str,
-    concept_name: &str,
-    concept_description: Option<&str>,
+    _memory_content: &str,
+    _concept_name: &str,
+    _concept_description: Option<&str>,
     nli_entailment: f32,
     nli_contradiction: f32,
     nli_neutral: f32,

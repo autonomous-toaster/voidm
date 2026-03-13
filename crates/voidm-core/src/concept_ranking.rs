@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use sqlx::SqlitePool;
-use chrono::{DateTime, Utc, Duration};
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
 pub struct RankedConcept {
@@ -112,6 +112,7 @@ pub async fn rank_concepts(pool: &SqlitePool, limit: usize) -> Result<Vec<Ranked
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     #[test]
     fn test_compute_score_new_popular() {

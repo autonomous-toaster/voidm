@@ -4,7 +4,7 @@
 //! Preferences: quick-access vs deep-dive, collaborative vs solo
 
 use anyhow::Result;
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use sqlx::SqlitePool;
 
 #[derive(Debug, Clone)]
@@ -44,38 +44,73 @@ pub struct SessionPattern {
 }
 
 /// Detect workflow patterns in user interactions
-pub async fn detect_workflow_patterns(_pool: &SqlitePool, user_id: &str) -> Result<Vec<WorkflowPattern>> {
-    // Common patterns to look for
-    let patterns = vec![
-        ("quick-search", vec!["search", "view"]),  // Fast lookup
-        ("deep-dive", vec!["search", "view", "view", "enrich"]),  // Detailed exploration
-        ("enrichment", vec!["view", "enrich", "feedback"]),  // Focused enrichment
-        ("collaborative", vec!["search", "feedback", "merge"]),  // Community work
-        ("batch", vec!["create", "create", "enrich", "enrich"]),  // Bulk operations
+pub async fn detect_workflow_patterns(pool: &SqlitePool, user_id: &str) -> Result<Vec<WorkflowPattern>> {
+    // Get all interactions for this user
+    let interactions: Vec<(String, String)> = sqlx::query_as(
+        "SELECT interaction_type, result FROM user_interactions WHERE user_id = ? ORDER BY timestamp"
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    if interactions.len() < 2 {
+        return Ok(vec![]);
+    }
+
+    // Define pattern templates to match against
+    let patterns_to_detect = vec![
+        ("quick-search", vec!["search", "view"]),
+        ("deep-dive", vec!["search", "view", "view", "enrich"]),
+        ("enrichment", vec!["view", "enrich", "feedback"]),
+        ("collaborative", vec!["search", "feedback", "merge"]),
+        ("batch", vec!["create", "create", "enrich", "enrich"]),
     ];
 
     let mut detected = Vec::new();
 
-    for (pattern_name, _expected_sequence) in patterns {
-        // TODO: Detect actual sequences in interaction history
-        // This is a placeholder implementation
+    for (pattern_name, expected_sequence) in patterns_to_detect {
+        let seq_len = expected_sequence.len();
+        let mut matches = 0;
+        let mut success_count = 0;
 
-        let pattern = WorkflowPattern {
-            user_id: user_id.to_string(),
-            pattern_name: pattern_name.to_string(),
-            sequence: vec![],
-            frequency: 0,
-            success_rate: 0.0,
-            avg_cycle_time_ms: 0,
-            confidence: 0.0,
-        };
+        // Slide a window across interactions looking for pattern matches
+        for window in interactions.windows(seq_len) {
+            let window_types: Vec<&str> = window.iter().map(|(t, _)| t.as_str()).collect();
+            
+            if window_types == expected_sequence {
+                matches += 1;
+                
+                // Check if all in window succeeded
+                let all_success = window.iter().all(|(_, r)| r == "success");
+                if all_success {
+                    success_count += 1;
+                }
+            }
+        }
 
-        if pattern.frequency > 0 {
+        if matches > 0 {
+            let success_rate = success_count as f32 / matches as f32;
+            
+            // Estimate cycle time (rough estimate: 500ms per interaction in pattern)
+            let avg_ms = (seq_len as i64) * 500;
+
+            let confidence = (matches as f32 / interactions.len() as f32).min(1.0);
+
+            let pattern = WorkflowPattern {
+                user_id: user_id.to_string(),
+                pattern_name: pattern_name.to_string(),
+                sequence: expected_sequence.iter().map(|s| s.to_string()).collect(),
+                frequency: matches,
+                success_rate,
+                avg_cycle_time_ms: avg_ms,
+                confidence,
+            };
+
             detected.push(pattern);
         }
     }
 
-    // Sort by frequency
+    // Sort by frequency (descending)
     detected.sort_by(|a, b| b.frequency.cmp(&a.frequency));
 
     Ok(detected)
@@ -197,17 +232,57 @@ pub async fn analyze_session(
 // Helper functions
 
 async fn determine_work_rhythm(pool: &SqlitePool, user_id: &str) -> Result<String> {
-    // Check inter-action time deltas
-    let _interactions: Vec<(String,)> = sqlx::query_as(
+    // Get inter-action time deltas (seconds between interactions)
+    let interactions: Vec<(String,)> = sqlx::query_as(
         "SELECT timestamp FROM user_interactions WHERE user_id = ? ORDER BY timestamp"
     )
     .bind(user_id)
     .fetch_all(pool)
     .await?;
 
-    // TODO: Calculate variance in time deltas to determine "steady", "bursty", or "async"
-    // For now, return placeholder
-    Ok("steady".to_string())
+    if interactions.len() < 2 {
+        return Ok("unknown".to_string());
+    }
+
+    // Calculate time deltas between consecutive interactions
+    let mut deltas = Vec::new();
+    for i in 1..interactions.len() {
+        if let (Ok(t1), Ok(t2)) = (
+            chrono::DateTime::parse_from_rfc3339(&interactions[i-1].0),
+            chrono::DateTime::parse_from_rfc3339(&interactions[i].0),
+        ) {
+            let delta_secs = (t2.timestamp() - t1.timestamp()).max(1);  // Minimum 1 second
+            deltas.push(delta_secs);
+        }
+    }
+
+    if deltas.is_empty() {
+        return Ok("unknown".to_string());
+    }
+
+    // Calculate variance in deltas
+    let mean = deltas.iter().sum::<i64>() as f32 / deltas.len() as f32;
+    let variance = deltas.iter()
+        .map(|d| {
+            let diff = *d as f32 - mean;
+            diff * diff
+        })
+        .sum::<f32>() / deltas.len() as f32;
+
+    let std_dev = variance.sqrt();
+    let cv = std_dev / mean;  // Coefficient of variation
+
+    // Classify work rhythm:
+    // - steady: low variance (cv < 0.5)
+    // - bursty: medium variance (cv 0.5-2.0)
+    // - async: high variance (cv > 2.0)
+    let rhythm = match cv {
+        cv if cv < 0.5 => "steady",
+        cv if cv < 2.0 => "bursty",
+        _ => "async",
+    };
+
+    Ok(rhythm.to_string())
 }
 
 async fn determine_preferred_pace(pool: &SqlitePool, user_id: &str) -> Result<String> {
@@ -230,6 +305,7 @@ async fn determine_preferred_pace(pool: &SqlitePool, user_id: &str) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     #[test]
     fn test_workflow_pattern_creation() {

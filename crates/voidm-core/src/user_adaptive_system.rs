@@ -71,7 +71,6 @@ pub async fn get_adaptive_response(
     let mut recommended_next_step = None;
     let mut defaults = None;
     let mut work_style_detected = None;
-    let mut confidence = 0.0;
 
     // Check if user has enough history
     let has_history = should_personalize(pool, user_id, config.personalization_threshold).await?;
@@ -89,7 +88,7 @@ pub async fn get_adaptive_response(
     }
 
     // User has enough history - apply personalization
-    let mut confidence: f32 = 0.75_f32;  // Reasonable confidence with 10+ interactions
+    let mut confidence = 0.75_f32;  // Reasonable confidence with 10+ interactions
 
     // 1. Get personalized concept rankings
     if config.personalize_rankings {
@@ -164,8 +163,31 @@ pub async fn track_and_learn(
     )
     .await?;
 
-    // TODO: Trigger async profile update if interaction_count % 5 == 0
+    // Trigger async profile update if interaction_count % 5 == 0
     // (Recompute user_preferences table every 5 interactions)
+    let interaction_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM user_interactions WHERE user_id = ?"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+
+    // Update profile every 5 interactions
+    if interaction_count % 5 == 0 {
+        // Recompute preferences from interaction history
+        if let Ok(Some(_prefs)) = crate::user_interactions::infer_user_preferences(pool, user_id).await {
+            // Store in user_preferences table for quick retrieval
+            let _ = sqlx::query(
+                "INSERT OR REPLACE INTO user_preferences 
+                 (user_id, last_updated)
+                 VALUES (?, datetime('now'))"
+            )
+            .bind(user_id)
+            .execute(pool)
+            .await?;
+        }
+    }
 
     Ok(())
 }

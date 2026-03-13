@@ -2,7 +2,7 @@
 # Location: ~/.config/voidm/config.toml
 
 [database]
-backend = "sqlite"
+backend = "sqlite"  # "sqlite" (default) or "neo4j"
 
 [database.sqlite]
 path = "~/.local/share/voidm/memories.db"
@@ -53,6 +53,25 @@ blend = 0.7
 # Example 3: Disabled (default)
 # [search.reranker]
 # enabled = false
+
+# === QUERY EXPANSION CONFIGURATION ===
+# Optional: Expand queries with synonyms and related terms using small LLMs
+# Models available:
+#   - phi-2         : 2.7B, 150-250ms latency, excellent quality (recommended)
+#   - tinyllama     : 1.1B, 100-150ms latency, good quality (fallback)
+#   - gpt2-small    : 124M, 50-100ms latency, acceptable quality (baseline)
+#
+# Recommended: Start with phi-2 for best quality
+# Use tinyllama or gpt2-small if latency is critical
+
+[search.query_expansion]
+enabled = false                       # Enable/disable query expansion
+model = "phi-2"                       # Model: phi-2 (recommended), tinyllama, gpt2-small
+cache_size = 1000                     # LRU cache entries for expansions
+timeout_ms = 300                      # Max time to wait for expansion (milliseconds)
+
+# CLI overrides:
+#   voidm search "query" --query-expand true --query-expand-model phi-2 --verbose
 
 [insert]
 auto_link_threshold = 0.7

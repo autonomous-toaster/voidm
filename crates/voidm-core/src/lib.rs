@@ -25,6 +25,7 @@ pub mod ontology_orchestrator;
 pub mod user_interactions;
 pub mod user_workflow;
 pub mod user_personalization;
+pub mod user_adaptive_system;
 
 pub use config::Config;
 pub use config::config_path_display;

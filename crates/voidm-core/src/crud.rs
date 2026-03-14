@@ -7,7 +7,7 @@ use crate::models::{
     AddMemoryRequest, AddMemoryResponse, DuplicateWarning, EdgeType, LinkResponse,
     ConflictWarning, Memory,
 };
-use crate::{embeddings, search, vector, quality, auto_tagger};
+use crate::{embeddings, search, vector, quality, auto_tagger, redactor};
 use crate::config::Config;
 
 /// Resolve a full or short (prefix) ID to a full memory ID.
@@ -56,6 +56,20 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     // Auto-enrich tags BEFORE creating tags_json (moved to beginning)
     if let Err(e) = auto_tagger::enrich_memory_tags(&mut req, config) {
         tracing::warn!("Failed to auto-enrich tags: {}. Using user-provided tags only.", e);
+    }
+    
+    // Redact secrets from memory content and metadata BEFORE insertion
+    let mut redaction_warnings = Vec::new();
+    if let Err(e) = redact_memory(&mut req, config, &mut redaction_warnings) {
+        tracing::warn!("Failed to redact secrets: {}. Continuing without redaction.", e);
+    }
+    
+    // Log any redacted secrets to inform user
+    for warning in &redaction_warnings {
+        tracing::warn!(
+            "Redacted {} {}(s) in memory.{}: {}",
+            warning.count, warning.pattern_type, warning.field, warning.count
+        );
     }
     
     let id = req.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -626,4 +640,46 @@ pub async fn list_ontology_edges(pool: &SqlitePool) -> Result<Vec<crate::models:
     }).collect();
 
     Ok(edges)
+}
+
+/// Redact secrets from memory content, tags, and metadata in-place.
+/// Returns list of redaction warnings.
+fn redact_memory(
+    req: &mut AddMemoryRequest,
+    config: &Config,
+    warnings: &mut Vec<redactor::RedactionWarning>,
+) -> Result<()> {
+    // Redact content
+    let (redacted_content, content_warnings) = redactor::redact_text(&req.content, &config.redaction);
+    for mut w in content_warnings {
+        w.field = "content".to_string();
+        warnings.push(w);
+    }
+    req.content = redacted_content;
+
+    // Redact tags
+    let mut redacted_tags = Vec::new();
+    for tag in &req.tags {
+        let (redacted_tag, tag_warnings) = redactor::redact_text(tag, &config.redaction);
+        for mut w in tag_warnings {
+            w.field = "tags".to_string();
+            warnings.push(w);
+        }
+        redacted_tags.push(redacted_tag);
+    }
+    req.tags = redacted_tags;
+
+    // Redact metadata
+    if let Ok(metadata_str) = serde_json::to_string(&req.metadata) {
+        let (redacted_metadata_str, metadata_warnings) = redactor::redact_text(&metadata_str, &config.redaction);
+        for mut w in metadata_warnings {
+            w.field = "metadata".to_string();
+            warnings.push(w);
+        }
+        if let Ok(redacted_metadata) = serde_json::from_str(&redacted_metadata_str) {
+            req.metadata = redacted_metadata;
+        }
+    }
+
+    Ok(())
 }

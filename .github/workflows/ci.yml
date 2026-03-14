@@ -23,7 +23,7 @@ jobs:
         run: cargo build --release
 
       - name: Initialize models
-        run: cargo run --release -- init
+        run: cargo run --release --bin voidm -- init
 
       - name: Test
         run: cargo test --release -- --test-threads=4

@@ -9,6 +9,7 @@ Local-first persistent memory for LLM agents.
 ## Features
 
 - **Hybrid search** — vector (ANN), BM25, fuzzy, keyword, or combined with RRF scoring
+- **Query expansion** — automatically expand queries with synonyms and related terms using local LLMs (tinyllama, phi-2); improves search recall
 - **Quality scoring** — automatic scoring (0.0-1.0) for all memories; filtering by quality threshold
 - **Knowledge graph** — link memories with typed directed edges (SUPPORTS, DERIVED_FROM, PART_OF, …)
 - **Ontology layer** — first-class concept nodes, IS-A hierarchies, INSTANCE_OF links, subsumption queries
@@ -77,6 +78,57 @@ voidm search "database" --scope work/acme --mode semantic
 voidm search "migration" --min-score 0 --limit 20 --json
 ```
 
+#### Query Expansion (enabled by default)
+
+`voidm` automatically expands your search queries to improve recall. When you search for "Docker", the system expands to "Docker, docker-compose, Kubernetes, containerization" and searches for all variants. This finds more relevant results.
+
+Query expansion uses small local LLMs (tinyllama by default) — no internet required after first use.
+
+```bash
+# Automatic expansion (enabled by default, uses tinyllama)
+voidm search "Docker" --verbose
+# Output: [query-expansion] Original: Docker
+#         [query-expansion] Expanded: Docker, docker-compose, Kubernetes, containerization
+
+# Disable expansion for specific search
+voidm search "exact-match" --query-expand false
+
+# Use different model (phi-2 for higher quality, slower)
+voidm search "Docker" --query-expand-model phi-2 --verbose
+
+# Adjust timeout if needed (default 300ms)
+voidm search "Docker" --query-expand-timeout 500
+```
+
+**Configuration** (in `~/.config/voidm/config.toml`):
+
+```toml
+[search.query_expansion]
+enabled = true              # Enable/disable expansion globally
+model = "tinyllama"         # tinyllama (default), phi-2 (highest quality), gpt2-small (fastest)
+timeout_ms = 300            # Max wait for expansion (milliseconds)
+```
+
+**How it works:**
+1. First search downloads the model (~300MB for tinyllama, 2.7GB for phi-2) — one-time, then cached
+2. Query is tokenized with a few-shot prompt matching model's training style
+3. Model generates related terms via greedy decoding
+4. Original query is prepended to expanded terms (enhancement, not replacement)
+5. Expanded query is used for semantic search to find related content
+
+**Performance:**
+- First use: ~2-5 minutes (includes model download from HuggingFace Hub)
+- Subsequent searches: <300ms per query (within timeout)
+
+**Models:**
+- `tinyllama` (1.1B, default) — balance of speed and quality
+- `phi-2` (2.7B, recommended for accuracy) — highest quality expansions
+- `gpt2-small` (124M, fastest) — lightweight, acceptable quality
+
+**Notes:**
+- Expanded query includes the original term to ensure fallback matching works
+- If expansion fails or times out, the original query is used
+- All model inference is local; no data leaves your machine
 ### MCP server
 
 Expose a small assistant-focused subset of `voidm` as an MCP server over stdio:

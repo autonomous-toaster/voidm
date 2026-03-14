@@ -73,26 +73,26 @@ pub struct SearchArgs {
     /// Blend factor for reranker scores [0.0-1.0] (overrides config)
     #[arg(long)]
     pub reranker_blend: Option<f32>,
+
+    /// Enable/disable query expansion (overrides config)
+    #[arg(long)]
+    pub query_expand: Option<bool>,
+
+    /// Query expansion model: phi-2, tinyllama, or gpt2-small (overrides config)
+    #[arg(long)]
+    pub query_expand_model: Option<String>,
+
+    /// Clear query expansion cache
+    #[arg(long)]
+    pub clear_expansion_cache: bool,
+
+    /// Verbose output: show query expansion details
+    #[arg(short, long)]
+    pub verbose: bool,
 }
 
 pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
     let mode: SearchMode = args.mode.parse()?;
-
-    let opts = SearchOptions {
-        query: args.query.clone(),
-        mode,
-        limit: args.limit,
-        scope_filter: args.scope,
-        type_filter: args.r#type,
-        min_score: args.min_score,
-        min_quality: args.min_quality,
-        include_neighbors: args.include_neighbors,
-        neighbor_depth: args.neighbor_depth,
-        neighbor_decay: args.neighbor_decay,
-        neighbor_min_score: args.neighbor_min_score,
-        neighbor_limit: args.neighbor_limit,
-        edge_types: args.edge_types,
-    };
 
     // Apply CLI reranker overrides to config
     let mut config = config.clone();
@@ -112,6 +112,66 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         }
         config.search.reranker = Some(reranker_config);
     }
+
+    // Apply CLI query expansion overrides to config
+    if args.query_expand.is_some() || args.query_expand_model.is_some() {
+        let mut expansion_config = config.search.query_expansion.take().unwrap_or_default();
+        if let Some(enabled) = args.query_expand {
+            expansion_config.enabled = enabled;
+        }
+        if let Some(model) = args.query_expand_model {
+            expansion_config.model = model;
+        }
+        config.search.query_expansion = Some(expansion_config);
+    }
+
+    // Handle cache clearing
+    if args.clear_expansion_cache {
+        eprintln!("Query expansion cache clearing requested (feature in development)");
+        return Ok(());
+    }
+
+    // Handle query expansion if enabled
+    let mut expanded_query = args.query.clone();
+    if let Some(expansion_config) = &config.search.query_expansion {
+        if expansion_config.enabled {
+            let expander = voidm_core::query_expansion::QueryExpander::new(expansion_config.clone());
+            match expander.expand(&args.query).await {
+                Ok(expanded) => {
+                    expanded_query = expanded;
+                    if args.verbose {
+                        eprintln!("[query-expansion] Original: {}", args.query);
+                        eprintln!("[query-expansion] Expanded: {}", expanded_query);
+                        eprintln!("[query-expansion] Model: {}", expansion_config.model);
+                    }
+                }
+                Err(e) => {
+                    // Query expansion failed - no fallback, use original query
+                    tracing::warn!("Query expansion failed: {}", e);
+                    if args.verbose {
+                        eprintln!("[query-expansion] Failed: {} (using original query)", e);
+                    }
+                }
+            }
+        }
+    }
+
+    // Create search options with expanded query (or original if expansion failed)
+    let opts = SearchOptions {
+        query: expanded_query,
+        mode,
+        limit: args.limit,
+        scope_filter: args.scope,
+        type_filter: args.r#type,
+        min_score: args.min_score,
+        min_quality: args.min_quality,
+        include_neighbors: args.include_neighbors,
+        neighbor_depth: args.neighbor_depth,
+        neighbor_decay: args.neighbor_decay,
+        neighbor_min_score: args.neighbor_min_score,
+        neighbor_limit: args.neighbor_limit,
+        edge_types: args.edge_types,
+    };
 
     let resp = search(
         pool,

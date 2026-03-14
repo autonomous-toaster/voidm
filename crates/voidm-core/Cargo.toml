@@ -25,6 +25,8 @@ dirs             = { workspace = true }
 tracing          = { workspace = true }
 once_cell        = { workspace = true }
 strsim           = { workspace = true }
+regex            = { workspace = true }
+lazy_static      = { workspace = true }
 voidm-graph      = { path = "../voidm-graph" }
 ort              = { version = "2.0.0-rc.10" }
 hf-hub           = { version = "0.5", features = ["tokio"] }

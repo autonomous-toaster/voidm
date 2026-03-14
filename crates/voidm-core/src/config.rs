@@ -125,8 +125,11 @@ pub struct RerankerConfig {
     /// Apply reranker to top-k results only (default: 10).
     #[serde(default = "default_reranker_top_k")]
     pub apply_to_top_k: usize,
-    /// Blend factor: final_score = rerank_score * blend + original_score * (1 - blend).
-    /// (default: 0.7, meaning 70% reranker, 30% original).
+    /// DEPRECATED: Blend factor (no longer used).
+    /// Previous behavior: final_score = rerank_score * blend + original_score * (1 - blend).
+    /// New behavior: Uses pure reranker scores (blend=1.0 semantics).
+    /// Kept for backward compatibility; setting this will trigger a deprecation warning.
+    /// (default: 0.7 for backward compatibility, but effectively ignored).
     #[serde(default = "default_reranker_blend")]
     pub blend: f32,
 }

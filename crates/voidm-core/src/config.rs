@@ -114,6 +114,9 @@ pub struct SearchConfig {
     /// Query expansion configuration (optional).
     #[serde(default)]
     pub query_expansion: Option<QueryExpansionConfig>,
+    /// Graph-aware retrieval configuration (optional).
+    #[serde(default)]
+    pub graph_retrieval: Option<crate::graph_retrieval::GraphRetrievalConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,6 +280,7 @@ impl Default for SearchConfig {
             ],
             reranker: None,
             query_expansion: None,
+            graph_retrieval: None,
         }
     }
 }

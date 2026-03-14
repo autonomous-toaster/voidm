@@ -452,7 +452,9 @@ pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     &s[..boundary]
 }
 
-/// Apply reranker to top-k results and blend scores.
+/// Apply reranker to top-k results using pure reranker-guided scoring.
+/// Uses only reranker scores for reranked results (no blending with original scores).
+/// This aligns with the reranker's intent as an expert ranking override.
 async fn apply_reranker(
     config: &crate::config::RerankerConfig,
     query: &str,
@@ -461,6 +463,15 @@ async fn apply_reranker(
     let apply_to_k = config.apply_to_top_k.min(results.len());
     if apply_to_k == 0 {
         return Ok(());
+    }
+
+    // Warn if blend factor is not 1.0 (deprecated behavior)
+    if (config.blend - 1.0).abs() > 0.01 {
+        tracing::warn!(
+            "Reranker blend factor {} is deprecated. Using pure reranker scores (blend=1.0) instead. \
+             Remove 'blend' from config to suppress this warning.",
+            config.blend
+        );
     }
 
     let reranker = crate::reranker::CrossEncoderReranker::load(&config.model).await?;
@@ -473,24 +484,23 @@ async fn apply_reranker(
 
     let reranked = reranker.rerank(query, &docs_to_rerank)?;
 
-    // Create a mapping of original_index -> new_score
+    // Create a mapping of original_index -> reranker_score
     let mut rerank_scores: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
     for rerank_result in reranked {
         rerank_scores.insert(rerank_result.index, rerank_result.score);
     }
 
-    // Update scores for reranked results (blend original + reranker score)
+    // Update scores with pure reranker scores (no blending)
     for (idx, result) in results[..apply_to_k].iter_mut().enumerate() {
         if let Some(rerank_score) = rerank_scores.get(&idx) {
             let original_score = result.score;
-            let blended = rerank_score * config.blend + original_score * (1.0 - config.blend);
-            result.score = blended;
-            tracing::debug!("Reranked [{}]: {:.3} (orig) + {:.3} (reranker) -> {:.3}", 
-                            idx, original_score, rerank_score, blended);
+            result.score = *rerank_score;  // Use pure reranker score
+            tracing::debug!("Reranked [{}]: {:.3} (original) → {:.3} (reranker)", 
+                            idx, original_score, rerank_score);
         }
     }
 
-    // Re-sort by blended scores
+    // Re-sort by reranker scores
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
     Ok(())

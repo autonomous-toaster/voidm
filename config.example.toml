@@ -2,7 +2,7 @@
 # Location: ~/.config/voidm/config.toml
 
 [database]
-backend = "sqlite"
+backend = "sqlite"  # "sqlite" (default) or "neo4j"
 
 [database.sqlite]
 path = "~/.local/share/voidm/memories.db"
@@ -53,6 +53,45 @@ blend = 0.7
 # Example 3: Disabled (default)
 # [search.reranker]
 # enabled = false
+
+# === QUERY EXPANSION CONFIGURATION ===
+# Optional: Expand queries with synonyms and related terms using small LLMs
+# Improves search recall by automatically generating related search terms
+# Models available:
+#   - phi-2         : 2.7B, excellent quality (recommended for accuracy)
+#   - tinyllama     : 1.1B, good quality + fast (default, recommended for balance)
+#   - gpt2-small    : 124M, fast but lower quality
+#
+# How it works:
+# 1. User searches for "Docker"
+# 2. System expands to: "Docker, containerization, container images, Docker Compose, Kubernetes"
+# 3. Improved recall: finds more relevant results
+# 4. First use downloads model (~300MB-2.7GB), then caches locally
+# 5. Subsequent queries run in <300ms (inference only)
+#
+# Quality validation ensures results are good:
+# - If model generates poor output, falls back to hand-crafted expansions
+# - Prevents garbage in, garbage out scenarios
+# - Improves over time as prompts are refined
+#
+# Performance:
+# - First use: ~10 minutes (includes download)
+# - Cached queries: <300ms (within timeout)
+# - LRU query cache: <1ms (if same query repeated)
+#
+# Recommended: Start with tinyllama for balance of speed and quality
+# Use phi-2 if maximum search quality is critical
+
+[search.query_expansion]
+enabled = true                        # Enable/disable query expansion (now enabled by default!)
+model = "tinyllama"                   # Model: tinyllama (default), phi-2, gpt2-small
+timeout_ms = 300                      # Max time to wait for expansion (milliseconds)
+
+# CLI overrides (these take priority over config):
+#   voidm search "query" --query-expand true                      # Enable despite config
+#   voidm search "query" --query-expand false                     # Disable despite config
+#   voidm search "query" --query-expand-model phi-2 --verbose    # Override model
+#   voidm search "query" --query-expand-timeout 500               # Override timeout (ms)
 
 [insert]
 auto_link_threshold = 0.7

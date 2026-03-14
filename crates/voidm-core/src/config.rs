@@ -109,6 +109,9 @@ pub struct SearchConfig {
     /// Reranker configuration (optional).
     #[serde(default)]
     pub reranker: Option<RerankerConfig>,
+    /// Query expansion configuration (optional).
+    #[serde(default)]
+    pub query_expansion: Option<QueryExpansionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +152,37 @@ fn default_reranker_top_k() -> usize {
 
 fn default_reranker_blend() -> f32 {
     0.7
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryExpansionConfig {
+    /// Enable query expansion (default: false).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Model name: "phi-2", "tinyllama", or "gpt2-small" (default: "phi-2").
+    #[serde(default = "default_query_expansion_model")]
+    pub model: String,
+    /// Maximum time to wait for expansion in milliseconds (default: 300).
+    #[serde(default = "default_query_expansion_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl Default for QueryExpansionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_query_expansion_model(),
+            timeout_ms: default_query_expansion_timeout_ms(),
+        }
+    }
+}
+
+fn default_query_expansion_model() -> String {
+    "tinyllama".into()
+}
+
+fn default_query_expansion_timeout_ms() -> u64 {
+    300
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +235,7 @@ impl Default for SearchConfig {
                 "EXEMPLIFIES".into(),
             ],
             reranker: None,
+            query_expansion: None,
         }
     }
 }

@@ -270,42 +270,65 @@ default_intent = null       # Optional default intent (e.g., "general", "technic
 For high-recall searches, enable reranking to improve result ordering. Reranking uses a cross-encoder model to re-score results based on relevance to the query.
 
 ```bash
-# Enable reranking with the recommended model
+# Enable reranking with the fast, recommended model
 voidm search "docker" --reranker true
 
-# Custom reranker model (if supported)
-voidm search "docker" --reranker true --reranker-model "bge-reranker-base"
+# Or disable if latency matters more than ranking precision
+voidm search "docker" --reranker false  # Default
 ```
 
 **Configuration** (in `~/.config/voidm/config.toml`):
 
 ```toml
 [search.reranker]
-enabled = false                # Disabled by default (adds ~5s latency per search)
-model = "bge-reranker-base"    # Recommended: improves recall by +5.67%
-apply_to_top_k = 15            # Rerank top-15 results (default: 10)
+enabled = false                    # Disabled by default (adds ~0.27s latency when enabled)
+model = "bge-small-reranker-v2"   # Fast: 0.27s latency, maintains baseline quality
+apply_to_top_k = 15               # Rerank top-15 results
 ```
 
-**Supported Models**:
-- `bge-reranker-base` (BAAI/bge-reranker-base, 278MB) - **RECOMMENDED**
-  - Improves mean score by +5.67%
-  - Better score spread and maximum scores
-  - Latency: ~5s per query
-  - Best for: precision-focused searches
+**Supported Models** (with benchmark results for query "voidm", 16 results):
 
-- `ms-marco-TinyBERT` (cross-encoder/ms-marco-TinyBERT-L-2, 11MB) - **NOT RECOMMENDED**
-  - Degrades score quality (-38%)
-  - Collapses scores too conservatively
-  - Latency: ~1s per query
-  - Not recommended despite being faster
+**FAST (<1s) - RECOMMENDED**:
+- `bge-small-reranker-v2` (130MB) - **RECOMMENDED**
+  - Latency: 0.274s (meets sub-1s target)
+  - Mean score: 0.476 (baseline equivalent, no change)
+  - Max score: 0.710 (baseline equivalent)
+  - Best for: Speed-critical applications with acceptable ranking
+
+**SLOW (>1s) - For Reference**:
+- `qnli-distilroberta-base` (250MB) - **Best Quality but Too Slow**
+  - Latency: 29.7s ❌
+  - Mean score: 0.649 (+17.3% improvement)
+  - Max score: 0.993 (highest max score)
+  - Use case: Only if quality matters more than speed
+
+- `bge-reranker-base` (278MB)
+  - Latency: 5.4s ❌
+  - Mean score: 0.533 (+5.67% improvement)
+  - Max score: 0.934
+  - Use case: Better quality but slower than bge-small
+
+- `ms-marco-MiniLM-L-6-v2` (100MB)
+  - Latency: 9.7s ❌
+  - Mean score: 0.509 (+0.32% improvement)
+  - Max score: 0.904
+  - Use case: Between bge-small and bge-reranker
+
+- `ms-marco-TinyBERT-L-2` (11MB) - **Smallest but Poor Quality**
+  - Latency: 0.592s
+  - Mean score: 0.096 (-80% quality loss) ❌
+  - Max score: 0.550
+  - NOT RECOMMENDED: Fast but destroys result quality
 
 **When to Use Reranking**:
-- High-precision searches where result ordering matters
+- Precision-focused searches where result ordering matters more than speed
 - When you need top-k results to be most relevant
-- Not recommended for keyword or fuzzy searches
-- Keep disabled for speed-critical applications
+- Use `bge-small-reranker-v2` for sub-1s latency requirement
+- Use `qnli-distilroberta-base` only if quality is more important than speed (30s acceptable)
+- Keep disabled by default for speed-critical applications
 
 **Note**: Reranking works on the initial search results. For low initial scores, improve query expansion instead.
+
 
 ### MCP server
 

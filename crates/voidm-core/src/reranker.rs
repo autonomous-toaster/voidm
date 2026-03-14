@@ -316,18 +316,46 @@ impl CrossEncoderReranker {
 /// Model metadata: (hf_model_id, onnx_file, tokenizer_file)
 fn get_model_metadata(name: &str) -> Result<(&'static str, &'static str, &'static str)> {
     match name {
+        // Lightweight models (< 1s per query)
+        "ms-marco-TinyBERT-L-2" => Ok((
+            "cross-encoder/ms-marco-TinyBERT-L-2",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
         "ms-marco-TinyBERT" => Ok((
             "cross-encoder/ms-marco-TinyBERT-L-2",
             "onnx/model.onnx",
             "tokenizer.json",
         )),
+        "mmarco-mMiniLMv2-L12-H384-v1" => Ok((
+            "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        "qnli-distilroberta-base" => Ok((
+            "cross-encoder/qnli-distilroberta-base",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        // Standard models (1-5s per query)
+        "ms-marco-MiniLM-L-6-v2" => Ok((
+            "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        "bge-small-reranker-v2" => Ok((
+            "BAAI/bge-small-reranker-v2",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        // Heavy models (5s+ per query)
         "bge-reranker-base" => Ok((
             "BAAI/bge-reranker-base",
             "onnx/model.onnx",
             "tokenizer.json",
         )),
         other => Err(anyhow::anyhow!(
-            "Unknown reranker model '{}'. Supported: ms-marco-TinyBERT, bge-reranker-base",
+            "Unknown reranker model '{}'. Supported: ms-marco-TinyBERT-L-2, mmarco-mMiniLMv2-L12-H384-v1, qnli-distilroberta-base, ms-marco-MiniLM-L-6-v2, bge-small-reranker-v2, bge-reranker-base",
             other
         )),
     }
@@ -346,9 +374,13 @@ async fn ensure_model_files(model_name: &str) -> Result<(PathBuf, PathBuf)> {
     // Download if missing
     if !onnx_path.exists() || !tokenizer_path.exists() {
         let size_hint = match model_name {
-            "ms-marco-TinyBERT" => "~11MB",
+            "ms-marco-TinyBERT-L-2" | "ms-marco-TinyBERT" => "~11MB",
+            "mmarco-mMiniLMv2-L12-H384-v1" => "~110MB",
+            "qnli-distilroberta-base" => "~250MB",
+            "ms-marco-MiniLM-L-6-v2" => "~100MB",
+            "bge-small-reranker-v2" => "~130MB",
             "bge-reranker-base" => "~278MB",
-            _ => "~100MB",
+            _ => "~150MB",
         };
         tracing::info!("Downloading reranker model '{}' ({}) to {}", hf_model_id, size_hint, cache_dir.display());
         eprintln!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

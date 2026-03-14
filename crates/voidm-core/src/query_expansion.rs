@@ -79,28 +79,25 @@ impl LRUCache {
 
 /// Prompt templates for query expansion.
 mod prompts {
-    /// Instruction-tuned format for models like Mistral
-    pub const FEW_SHOT_STRUCTURED: &str = r#"[INST] You are a search query expansion assistant. Your task is to expand search queries with related terms to improve search recall.
+    /// Continuation-style template - works with base models like GPT-2
+    /// Mimics the format of lists/catalogs that GPT-2 was trained on
+    pub const FEW_SHOT_STRUCTURED: &str = r#"Common search terms and related queries:
 
-Examples:
-- Expand "web development" to: web development, frontend, backend, HTML, CSS, JavaScript, React, Vue, web frameworks
-- Expand "Python" to: Python, Django, Flask, programming, machine learning, data science, pandas
-- Expand "Docker" to: Docker, containers, Kubernetes, microservices, deployment, orchestration
-- Expand "REST API" to: REST API, HTTP, endpoints, JSON, web services, microservices
+web development: frontend, backend, HTML, CSS, JavaScript, React, frameworks
+Python programming: Django, Flask, NumPy, machine learning, data science
+Docker containers: Kubernetes, orchestration, deployment, microservices
+REST API: HTTP, endpoints, JSON, web services, microservices
+Database: SQL, queries, indexing, schema, transactions
 
-Now expand "{query}": [/INST]"#;
+{query}:"#;
 
     /// Zero-shot minimal template.
-    pub const ZERO_SHOT_MINIMAL: &str = r#"Expand search query "{query}":"#;
+    pub const ZERO_SHOT_MINIMAL: &str = r#"Related to {query}:"#;
 
     /// Get the appropriate prompt template for the model.
-    pub fn get_template(model: &str) -> &'static str {
-        match model {
-            "phi-2" => FEW_SHOT_STRUCTURED,
-            "tinyllama" => FEW_SHOT_STRUCTURED,
-            "gpt2-small" => ZERO_SHOT_MINIMAL,
-            _ => FEW_SHOT_STRUCTURED,
-        }
+    pub fn get_template(_model: &str) -> &'static str {
+        // Use few-shot structured prompt for all models - it works best with GPT-2
+        FEW_SHOT_STRUCTURED
     }
 }
 
@@ -149,9 +146,9 @@ static LLM_CACHE: OnceCell<LLMModelCache> = OnceCell::new();
 static LLM_INIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const MODEL_SPECS: &[(&str, &str)] = &[
-    ("phi-2", "Xenova/Mistral-7B-Instruct-v0.1"),  // Instruction-tuned
-    ("tinyllama", "Xenova/Phi-2"),  // Also available as ONNX
-    ("gpt2-small", "Xenova/gpt2"),  // Fallback to GPT-2
+    ("phi-2", "gpt2-medium"),
+    ("tinyllama", "gpt2"),
+    ("gpt2-small", "gpt2"),
 ];
 
 fn get_model_spec(name: &str) -> Option<&'static str> {
@@ -474,16 +471,75 @@ impl QueryExpander {
             .decode(&generated_ids, true)
             .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
         
-        // Clean up the decoded text
-        let expanded = format!("{}", decoded.trim());
+        // Clean up the decoded text - extract meaningful terms
+        let expanded = decoded.trim();
         
-        if expanded.is_empty() {
-            tracing::warn!("Generated empty expansion");
+        // The prompt ends with "query:" so we expect output after that
+        // Extract text after the last colon if there is one
+        let terms = if expanded.contains(':') {
+            // Get everything after the last colon
+            expanded.rsplit(':').next().unwrap_or(expanded).trim().to_string()
+        } else {
+            expanded.to_string()
+        };
+        
+        if terms.is_empty() {
+            tracing::warn!("Generated empty expansion from: {}", expanded);
             return Err(anyhow::anyhow!("Generated empty expansion"));
         }
         
-        tracing::debug!("LLM generated expansion: {}", expanded);
-        Ok(expanded)
+        // Truncate at sentence boundaries (period, newline) to avoid rambling
+        let truncated = if let Some(period_idx) = terms.find('.') {
+            &terms[..period_idx]
+        } else if let Some(newline_idx) = terms.find('\n') {
+            &terms[..newline_idx]
+        } else if terms.len() > 80 {
+            // Truncate long outputs early to avoid repetition
+            &terms[..80]
+        } else {
+            &terms
+        };
+        
+        // Remove excessive repetition - if we see the same word repeated 3+ times, keep only first
+        let deduped = if let Some(first_comma_idx) = truncated.find(',') {
+            let first_term = &truncated[..first_comma_idx].trim();
+            let rest = &truncated[first_comma_idx..];
+            
+            // Count occurrences of the first term in the rest
+            let count = rest.matches(first_term).count();
+            if count >= 2 {
+                // Too much repetition, truncate at first occurrence of repetition
+                if let Some(rep_pos) = rest[1..].find(&format!("{},", first_term)) {
+                    &truncated[..first_comma_idx + rep_pos + 1]
+                } else {
+                    truncated
+                }
+            } else {
+                truncated
+            }
+        } else {
+            truncated
+        };
+        // Remove excessive repetition
+        let final_expansion = {
+            let parts: Vec<&str> = deduped.split(',').map(|s| s.trim()).collect();
+            let mut seen = std::collections::HashSet::new();
+            let mut unique_parts = Vec::new();
+            
+            for part in parts {
+                if !part.is_empty() && !seen.contains(part) {
+                    unique_parts.push(part);
+                    seen.insert(part);
+                }
+            }
+            
+            // Limit to reasonable number of terms (10 max)
+            unique_parts.truncate(10);
+            unique_parts.join(", ")
+        };
+        
+        tracing::debug!("LLM generated expansion: {}", final_expansion);
+        Ok(final_expansion)
     }
     
     /// Mock expansion for fallback when model unavailable (Phase 2b demo).

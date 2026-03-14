@@ -79,19 +79,19 @@ impl LRUCache {
 
 /// Prompt templates for query expansion.
 mod prompts {
-    /// Few-shot - use natural text continuation that GPT-2 understands
-    pub const FEW_SHOT_STRUCTURED: &str = r#"Relevant topics and keywords for these search queries:
+    /// Instruction-tuned format for models like Mistral
+    pub const FEW_SHOT_STRUCTURED: &str = r#"[INST] You are a search query expansion assistant. Your task is to expand search queries with related terms to improve search recall.
 
-For "web development": JavaScript, HTML, CSS, frontend, backend, frameworks like React and Vue
-For "Python": programming language, Django, Flask, data science, machine learning
-For "Docker": containers, Kubernetes, microservices, deployment, orchestration
-For "REST API": HTTP protocol, JSON, endpoints, web services, microservices
-For "database": SQL, queries, indexing, schema design, transactions, ACID properties
+Examples:
+- Expand "web development" to: web development, frontend, backend, HTML, CSS, JavaScript, React, Vue, web frameworks
+- Expand "Python" to: Python, Django, Flask, programming, machine learning, data science, pandas
+- Expand "Docker" to: Docker, containers, Kubernetes, microservices, deployment, orchestration
+- Expand "REST API" to: REST API, HTTP, endpoints, JSON, web services, microservices
 
-For "{query}":"#;
+Now expand "{query}": [/INST]"#;
 
     /// Zero-shot minimal template.
-    pub const ZERO_SHOT_MINIMAL: &str = r#"Keywords for "{query}":"#;
+    pub const ZERO_SHOT_MINIMAL: &str = r#"Expand search query "{query}":"#;
 
     /// Get the appropriate prompt template for the model.
     pub fn get_template(model: &str) -> &'static str {
@@ -149,9 +149,9 @@ static LLM_CACHE: OnceCell<LLMModelCache> = OnceCell::new();
 static LLM_INIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const MODEL_SPECS: &[(&str, &str)] = &[
-    ("phi-2", "gpt2-medium"),  // Use gpt2-medium as alternative
-    ("tinyllama", "distilgpt2"),  // DistilGPT-2 is lightweight and proven to work
-    ("gpt2-small", "gpt2"),  // Standard GPT-2
+    ("phi-2", "Xenova/Mistral-7B-Instruct-v0.1"),  // Instruction-tuned
+    ("tinyllama", "Xenova/Phi-2"),  // Also available as ONNX
+    ("gpt2-small", "Xenova/gpt2"),  // Fallback to GPT-2
 ];
 
 fn get_model_spec(name: &str) -> Option<&'static str> {

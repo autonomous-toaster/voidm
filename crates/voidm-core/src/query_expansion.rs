@@ -28,15 +28,25 @@ use crate::config::QueryExpansionConfig;
 mod prompts {
     /// Continuation-style template - works with base models like GPT-2
     /// Mimics the format of lists/catalogs that GPT-2 was trained on
-    pub const FEW_SHOT_STRUCTURED: &str = r#"Common search terms and related queries:
+    pub const FEW_SHOT_STRUCTURED: &str = r#"Expand search queries with related terms and synonyms:
 
-web development: frontend, backend, HTML, CSS, JavaScript, React, frameworks
-Python programming: Django, Flask, NumPy, machine learning, data science
-Docker containers: Kubernetes, orchestration, deployment, microservices
-REST API: HTTP, endpoints, JSON, web services, microservices
-Database: SQL, queries, indexing, schema, transactions
+Query: web development
+Synonyms: frontend, backend, HTML, CSS, JavaScript, React, frameworks, UI
 
-{query}:"#;
+Query: Python programming
+Synonyms: Django, Flask, NumPy, machine learning, data science, pandas, scripting
+
+Query: Docker containers
+Synonyms: Kubernetes, orchestration, deployment, microservices, images, registry
+
+Query: REST API
+Synonyms: HTTP, endpoints, JSON, web services, microservices, OpenAPI
+
+Query: Database
+Synonyms: SQL, queries, indexing, schema, transactions, relational, NoSQL
+
+Query: {query}
+Synonyms:"#;
 
     /// Improved domain-aware template with clearer structure
     pub const FEW_SHOT_IMPROVED: &str = r#"Expand search queries with related terms:

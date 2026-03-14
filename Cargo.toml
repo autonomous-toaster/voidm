@@ -15,6 +15,10 @@ libsqlite3-sys   = { version = "0.30", features = ["bundled"] }
 # Embeddings + reranker
 fastembed        = "5"
 
+# Pattern matching & caching
+regex            = "1"
+lazy_static      = "1"
+
 # CLI
 clap             = { version = "4", features = ["derive", "env"] }
 comfy-table      = "7"

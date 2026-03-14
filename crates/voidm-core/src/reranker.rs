@@ -371,6 +371,12 @@ async fn ensure_model_files(model_name: &str) -> Result<(PathBuf, PathBuf)> {
     let onnx_path = cache_dir.join("model.onnx");
     let tokenizer_path = cache_dir.join("tokenizer.json");
 
+    // Check if both files exist
+    if onnx_path.exists() && tokenizer_path.exists() {
+        tracing::debug!("Reranker model '{}' found in cache: {}", model_name, cache_dir.display());
+        return Ok((onnx_path, tokenizer_path));
+    }
+
     // Download if missing
     if !onnx_path.exists() || !tokenizer_path.exists() {
         let size_hint = match model_name {
@@ -409,6 +415,8 @@ async fn download_model_files(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| cache_dir.clone());
 
+    tracing::debug!("Attempting to download from HuggingFace with cache: {}", hf_cache.display());
+    
     let api = hf_hub::api::tokio::ApiBuilder::new()
         .with_cache_dir(hf_cache)
         .build()
@@ -416,13 +424,39 @@ async fn download_model_files(
 
     let repo = api.model(hf_model_id.to_string());
 
+    tracing::debug!("Downloading ONNX file: {} from {}", onnx_file, hf_model_id);
     let onnx_src = repo.get(onnx_file).await
-        .with_context(|| format!("Failed to download {} from {}", onnx_file, hf_model_id))?;
+        .with_context(|| {
+            format!(
+                "Failed to download {} from {} (HuggingFace API error)\n\
+                 This may be due to:\n\
+                 - Network/proxy issues\n\
+                 - HuggingFace API unavailable\n\
+                 - Authentication required\n\
+                 Try: voidm init --update  to retry with fresh download",
+                onnx_file, hf_model_id
+            )
+        })?;
+    
+    tracing::debug!("Copying ONNX file to cache: {}", cache_dir.join("model.onnx").display());
     std::fs::copy(&onnx_src, cache_dir.join("model.onnx"))
         .context("Failed to copy ONNX model to cache")?;
 
+    tracing::debug!("Downloading tokenizer file: {} from {}", tokenizer_file, hf_model_id);
     let tok_src = repo.get(tokenizer_file).await
-        .with_context(|| format!("Failed to download {} from {}", tokenizer_file, hf_model_id))?;
+        .with_context(|| {
+            format!(
+                "Failed to download {} from {} (HuggingFace API error)\n\
+                 This may be due to:\n\
+                 - Network/proxy issues\n\
+                 - HuggingFace API unavailable\n\
+                 - Authentication required\n\
+                 Try: voidm init --update  to retry with fresh download",
+                tokenizer_file, hf_model_id
+            )
+        })?;
+    
+    tracing::debug!("Copying tokenizer file to cache: {}", cache_dir.join("tokenizer.json").display());
     std::fs::copy(&tok_src, cache_dir.join("tokenizer.json"))
         .context("Failed to copy tokenizer to cache")?;
 
@@ -447,6 +481,26 @@ pub fn get_reranker_cache_path(model_name: &str) -> PathBuf {
 pub fn is_model_cached(model_name: &str) -> bool {
     let dir = reranker_cache_dir(model_name);
     dir.join("model.onnx").exists() && dir.join("tokenizer.json").exists()
+}
+
+/// Load reranker with cache awareness. Used by `voidm init`.
+/// If update=true, forces re-download even if cached.
+pub async fn load_reranker_cached(model_name: &str, force_update: bool) -> Result<CrossEncoderReranker> {
+    let is_cached = is_model_cached(model_name);
+    
+    if is_cached && !force_update {
+        tracing::debug!("Reranker '{}' is cached, using cached version", model_name);
+    } else if force_update && is_cached {
+        tracing::info!("Force update requested, re-downloading reranker: {}", model_name);
+        let cache_dir = reranker_cache_dir(model_name);
+        if cache_dir.exists() {
+            std::fs::remove_dir_all(&cache_dir)
+                .with_context(|| format!("Failed to remove old cache: {}", cache_dir.display()))?;
+            tracing::debug!("Removed old cache directory: {}", cache_dir.display());
+        }
+    }
+    
+    CrossEncoderReranker::load(model_name).await
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

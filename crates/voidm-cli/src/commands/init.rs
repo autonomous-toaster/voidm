@@ -34,7 +34,7 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
     let reranker_model = reranker_config
         .as_ref()
         .map(|r| r.model.clone())
-        .unwrap_or_else(|| "bge-small-reranker-v2".to_string());
+        .unwrap_or_else(|| "ms-marco-TinyBERT".to_string());
     let reranker_enabled = reranker_config
         .as_ref()
         .map(|r| r.enabled)

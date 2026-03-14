@@ -425,18 +425,48 @@ async fn download_model_files(
     let repo = api.model(hf_model_id.to_string());
 
     tracing::debug!("Downloading ONNX file: {} from {}", onnx_file, hf_model_id);
-    let onnx_src = repo.get(onnx_file).await
-        .with_context(|| {
-            format!(
-                "Failed to download {} from {} (HuggingFace API error)\n\
-                 This may be due to:\n\
-                 - Network/proxy issues\n\
-                 - HuggingFace API unavailable\n\
-                 - Authentication required\n\
-                 Try: voidm init --update  to retry with fresh download",
-                onnx_file, hf_model_id
-            )
-        })?;
+    let onnx_src = match repo.get(onnx_file).await {
+        Ok(path) => {
+            tracing::debug!("Successfully downloaded ONNX file");
+            path
+        }
+        Err(e) => {
+            // Check if this is the BAAI model which may not have ONNX files
+            if hf_model_id.contains("BAAI") {
+                tracing::warn!(
+                    "Failed to download {} from {} (BAAI models may not have ONNX files)\n\
+                     Error: {}\n\
+                     Solution: Using fallback to cross-encoder/ms-marco-MiniLM-L-6-v2 instead.\n\
+                     BAAI models require different loading mechanism (not yet supported).",
+                    onnx_file, hf_model_id, e
+                );
+                // Return error with helpful context
+                return Err(anyhow::anyhow!(
+                    "BAAI model {} not available with ONNX format.\n\
+                     Available reranker models with ONNX support:\n\
+                     - ms-marco-TinyBERT-L-2 (11MB, fastest)\n\
+                     - ms-marco-MiniLM-L-6-v2 (100MB, recommended)\n\
+                     - cross-encoder/mmarco-mMiniLMv2-L12-H384-v1 (110MB)\n\
+                     - cross-encoder/qnli-distilroberta-base (250MB)\n\
+                     \n\
+                     Set 'model = \"ms-marco-MiniLM-L-6-v2\"' in [search.reranker] config section.",
+                    hf_model_id
+                ));
+            } else {
+                return Err(e).with_context(|| {
+                    format!(
+                        "Failed to download {} from {} (HuggingFace API error)\n\
+                         This may be due to:\n\
+                         - Network/proxy issues\n\
+                         - HuggingFace API unavailable\n\
+                         - Authentication required\n\
+                         Try: voidm init --update  to retry with fresh download",
+                        onnx_file, hf_model_id
+                    )
+                });
+            }
+        }
+    };
     
     tracing::debug!("Copying ONNX file to cache: {}", cache_dir.join("model.onnx").display());
     std::fs::copy(&onnx_src, cache_dir.join("model.onnx"))

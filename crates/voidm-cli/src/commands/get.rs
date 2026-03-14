@@ -43,6 +43,18 @@ pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
                 println!("Created:    {}", m.created_at);
                 if !m.scopes.is_empty() { println!("Scopes:     {}", m.scopes.join(", ")); }
                 if !m.tags.is_empty()   { println!("Tags:       {}", m.tags.join(", ")); }
+                
+                // Display auto-generated tags if present
+                if let Some(serde_json::Value::Array(auto_tags)) = m.metadata.get("auto_generated_tags") {
+                    let auto_tag_strs: Vec<String> = auto_tags
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                    if !auto_tag_strs.is_empty() {
+                        println!("Auto-Tags:  {}", auto_tag_strs.join(", "));
+                    }
+                }
+                
                 println!();
                 println!("{}", m.content);
             }

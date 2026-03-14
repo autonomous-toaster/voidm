@@ -7,7 +7,6 @@
 //! Features:
 //! - Config-driven (no code changes to enable)
 //! - Real ONNX inference with no fallback
-//! - LRU caching for repeated queries
 //! - Optional feature (disabled by default)
 //! - ONNX model inference with auto-download from HuggingFace
 //!
@@ -20,67 +19,10 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use ort::session::Session;
 use ort::value::Tensor;
 use once_cell::sync::OnceCell;
 use crate::config::QueryExpansionConfig;
-
-/// A simple LRU cache for query expansions.
-struct LRUCache {
-    cache: HashMap<String, String>,
-    order: Vec<String>,
-    max_size: usize,
-}
-
-impl LRUCache {
-    fn new(max_size: usize) -> Self {
-        Self {
-            cache: HashMap::new(),
-            order: Vec::new(),
-            max_size,
-        }
-    }
-
-    fn get(&mut self, key: &str) -> Option<String> {
-        if let Some(value) = self.cache.get(key) {
-            // Move to end (most recently used)
-            self.order.retain(|k| k != key);
-            self.order.push(key.to_string());
-            Some(value.clone())
-        } else {
-            None
-        }
-    }
-
-    fn insert(&mut self, key: String, value: String) {
-        // If already exists, remove old entry
-        if self.cache.contains_key(&key) {
-            self.order.retain(|k| k != &key);
-        }
-
-        // If at capacity, remove least recently used
-        if self.cache.len() >= self.max_size && !self.cache.contains_key(&key) {
-            if let Some(lru_key) = self.order.first() {
-                let lru_key = lru_key.clone();
-                self.cache.remove(&lru_key);
-                self.order.remove(0);
-            }
-        }
-
-        self.cache.insert(key.clone(), value);
-        self.order.push(key);
-    }
-
-    fn clear(&mut self) {
-        self.cache.clear();
-        self.order.clear();
-    }
-
-    fn size(&self) -> usize {
-        self.cache.len()
-    }
-}
 
 /// Prompt templates for query expansion.
 mod prompts {
@@ -272,7 +214,6 @@ async fn download_llm_files(hf_id: &str, model_dir: &PathBuf) -> Result<()> {
 
 /// Global query expansion state (model, cache).
 pub struct QueryExpander {
-    cache: Arc<Mutex<LRUCache>>,
     config: QueryExpansionConfig,
 }
 
@@ -280,7 +221,6 @@ impl QueryExpander {
     /// Create a new query expander with the given configuration.
     pub fn new(config: QueryExpansionConfig) -> Self {
         Self {
-            cache: Arc::new(Mutex::new(LRUCache::new(config.cache_size))),
             config,
         }
     }
@@ -296,22 +236,8 @@ impl QueryExpander {
             return Err(anyhow::anyhow!("Query expansion disabled"));
         }
 
-        // Check cache
-        let mut cache = self.cache.lock().await;
-        if let Some(expanded) = cache.get(query) {
-            tracing::debug!("Query expansion cache hit for: {}", query);
-            return Ok(expanded);
-        }
-        drop(cache);
-
         // Generate expansion - no fallback, propagate errors
-        let expanded = self.expand_with_timeout(query).await?;
-
-        // Cache the result
-        let mut cache = self.cache.lock().await;
-        cache.insert(query.to_string(), expanded.clone());
-
-        Ok(expanded)
+        self.expand_with_timeout(query).await
     }
 
     /// Internal expansion with timeout.
@@ -359,7 +285,17 @@ impl QueryExpander {
         // Get model from cache and run inference
         let cache = get_llm_cache();
         if let Some(SendLLM(model_arc)) = cache.get(model_name) {
-            Self::infer_expansion(&model_arc, &prompt)
+            let expanded_terms = Self::infer_expansion(&model_arc, &prompt)?;
+            
+            // Prepend original query to the expansion (enhancement, not replacement)
+            // Format: "original_query, expanded_term1, expanded_term2, ..."
+            let result = if expanded_terms.is_empty() {
+                query.to_string()
+            } else {
+                format!("{}, {}", query, expanded_terms)
+            };
+            
+            Ok(result)
         } else {
             Err(anyhow::anyhow!("Model not loaded: {}", model_name))
         }
@@ -538,61 +474,11 @@ impl QueryExpander {
         tracing::debug!("LLM generated expansion: {}", final_expansion);
         Ok(final_expansion)
     }
-    
-    /// Clear the expansion cache.
-    pub async fn clear_cache(&self) {
-        let mut cache = self.cache.lock().await;
-        cache.clear();
-        tracing::info!("Query expansion cache cleared");
-    }
-
-    /// Get cache statistics.
-    pub async fn cache_stats(&self) -> CacheStats {
-        let cache = self.cache.lock().await;
-        CacheStats {
-            size: cache.size(),
-            max_size: self.config.cache_size,
-        }
-    }
-}
-
-/// Cache statistics.
-#[derive(Debug, Clone)]
-pub struct CacheStats {
-    pub size: usize,
-    pub max_size: usize,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_lru_cache_basic() {
-        let mut cache = LRUCache::new(3);
-
-        // Insert items
-        cache.insert("a".to_string(), "expansion_a".to_string());
-        cache.insert("b".to_string(), "expansion_b".to_string());
-        cache.insert("c".to_string(), "expansion_c".to_string());
-
-        assert_eq!(cache.size(), 3);
-        assert_eq!(cache.get("a"), Some("expansion_a".to_string()));
-    }
-
-    #[test]
-    fn test_lru_cache_eviction() {
-        let mut cache = LRUCache::new(2);
-
-        cache.insert("a".to_string(), "expansion_a".to_string());
-        cache.insert("b".to_string(), "expansion_b".to_string());
-        cache.insert("c".to_string(), "expansion_c".to_string()); // 'a' should be evicted
-
-        assert_eq!(cache.size(), 2);
-        assert_eq!(cache.get("a"), None); // 'a' was evicted
-        assert_eq!(cache.get("b"), Some("expansion_b".to_string()));
-        assert_eq!(cache.get("c"), Some("expansion_c".to_string()));
-    }
 
     #[test]
     fn test_prompt_templates() {
@@ -615,33 +501,5 @@ mod tests {
         let result = expander.expand("Docker").await;
         // When disabled, should return error
         assert!(result.is_err(), "Expansion should fail when disabled");
-    }
-
-    #[tokio::test]
-    async fn test_query_expander_cache() {
-        let config = QueryExpansionConfig {
-            enabled: true,
-            cache_size: 10,
-            ..Default::default()
-        };
-        let expander = QueryExpander::new(config);
-
-        let result1 = expander.expand("API").await;
-        let result2 = expander.expand("API").await;
-
-        // Both should be either Ok or Err (consistent)
-        match (&result1, &result2) {
-            (Ok(exp1), Ok(exp2)) => assert_eq!(exp1, exp2),
-            (Err(_), Err(_)) => {
-                // Both failed - that's consistent
-            }
-            _ => panic!("Results should be consistent"),
-        }
-
-        let stats = expander.cache_stats().await;
-        // Only cache hits on successful expansions
-        if result1.is_ok() {
-            assert_eq!(stats.size, 1);
-        }
     }
 }

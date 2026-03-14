@@ -85,7 +85,6 @@ blend = 0.7
 [search.query_expansion]
 enabled = true                        # Enable/disable query expansion (now enabled by default!)
 model = "tinyllama"                   # Model: tinyllama (default), phi-2, gpt2-small
-cache_size = 1000                     # LRU cache entries for expansions
 timeout_ms = 300                      # Max time to wait for expansion (milliseconds)
 
 # CLI overrides (these take priority over config):

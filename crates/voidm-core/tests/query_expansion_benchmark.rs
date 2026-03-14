@@ -44,7 +44,6 @@ mod query_expansion_benchmark {
         let config = QueryExpansionConfig {
             enabled: false,
             model: "phi-2".to_string(),
-            cache_size: 100,
             timeout_ms: 300,
         };
         let expander = QueryExpander::new(config);
@@ -58,66 +57,6 @@ mod query_expansion_benchmark {
 
     #[tokio::test]
     #[ignore]
-    async fn benchmark_query_expansion_cache_hits() {
-        // Test cache performance: repeated queries should use cache
-        let config = QueryExpansionConfig {
-            enabled: true,
-            model: "phi-2".to_string(),
-            cache_size: 1000,
-            timeout_ms: 300,
-        };
-        let expander = QueryExpander::new(config);
-
-        let queries = vec!["Docker", "Python", "API"];
-
-        // First pass: populate cache (failures also cached as errors)
-        for query in &queries {
-            let _result = expander.expand(query).await;
-        }
-
-        // Check cache stats (successful expansions only)
-        let stats = expander.cache_stats().await;
-        // Cache may have 0-3 entries depending on if model is available
-        assert!(stats.size <= 3, "Cache size should not exceed queries");
-
-        // Second pass: should hit cache or fail consistently
-        for query in &queries {
-            let result = expander.expand(query).await;
-            // Either succeeds with expansion or fails consistently
-            // Both are valid - no middle ground
-            match result {
-                Ok(expanded) => assert!(!expanded.is_empty()),
-                Err(_) => {} // Expected if model not available
-            }
-        }
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn benchmark_query_expansion_cache_eviction() {
-        // Test LRU eviction: cache should respect max_size
-        let config = QueryExpansionConfig {
-            enabled: true,
-            model: "phi-2".to_string(),
-            cache_size: 3,  // Small cache
-            timeout_ms: 300,
-        };
-        let expander = QueryExpander::new(config);
-
-        // Add 5 queries to a cache with size 3
-        let queries = vec!["Docker", "Python", "API", "Database", "Testing"];
-        for query in &queries {
-            let _result = expander.expand(query).await;
-        }
-
-        // Check that cache size is limited
-        let stats = expander.cache_stats().await;
-        assert_eq!(stats.size, 3, "Cache should be limited to max_size=3");
-        assert_eq!(stats.max_size, 3);
-    }
-
-    #[tokio::test]
-    #[ignore]
     async fn benchmark_query_expansion_model_config() {
         // Test different model configurations
         let models = vec!["phi-2", "tinyllama", "gpt2-small"];
@@ -126,7 +65,6 @@ mod query_expansion_benchmark {
             let config = QueryExpansionConfig {
                 enabled: true,
                 model: model_name.to_string(),
-                cache_size: 100,
                 timeout_ms: 300,
             };
             let expander = QueryExpander::new(config);
@@ -152,7 +90,6 @@ mod query_expansion_benchmark {
         let config = QueryExpansionConfig {
             enabled: true,
             model: "phi-2".to_string(),
-            cache_size: 100,
             timeout_ms: 300,
         };
         let expander = QueryExpander::new(config);

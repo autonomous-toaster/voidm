@@ -162,9 +162,6 @@ pub struct QueryExpansionConfig {
     /// Model name: "phi-2", "tinyllama", or "gpt2-small" (default: "phi-2").
     #[serde(default = "default_query_expansion_model")]
     pub model: String,
-    /// LRU cache size (default: 1000).
-    #[serde(default = "default_query_expansion_cache_size")]
-    pub cache_size: usize,
     /// Maximum time to wait for expansion in milliseconds (default: 300).
     #[serde(default = "default_query_expansion_timeout_ms")]
     pub timeout_ms: u64,
@@ -175,7 +172,6 @@ impl Default for QueryExpansionConfig {
         Self {
             enabled: false,
             model: default_query_expansion_model(),
-            cache_size: default_query_expansion_cache_size(),
             timeout_ms: default_query_expansion_timeout_ms(),
         }
     }
@@ -183,10 +179,6 @@ impl Default for QueryExpansionConfig {
 
 fn default_query_expansion_model() -> String {
     "phi-2".into()
-}
-
-fn default_query_expansion_cache_size() -> usize {
-    1000
 }
 
 fn default_query_expansion_timeout_ms() -> u64 {

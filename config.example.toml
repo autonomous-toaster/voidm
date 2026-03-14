@@ -100,7 +100,7 @@ apply_to_top_k = 15                  # Rerank top-15 results
 # Use phi-2 if maximum search quality is critical
 
 [search.query_expansion]
-enabled = true                        # Enable/disable query expansion (now enabled by default!)
+enabled = false                       # Disabled by default
 model = "tinyllama"                   # Model: tinyllama (default), phi-2, gpt2-small
 timeout_ms = 300                      # Max time to wait for expansion (milliseconds)
 

@@ -38,13 +38,19 @@ default_edge_types = ["PART_OF", "SUPPORTS", "DERIVED_FROM", "EXEMPLIFIES"]
 
 # Example 1: Enable ms-marco-TinyBERT (lightweight, fast, recommended)
 [search.reranker]
-enabled = true
-model = "ms-marco-TinyBERT"
-apply_to_top_k = 10
+enabled = false                      # Disabled by default
+model = "bge-reranker-base"          # Best quality model (improves recall by +5.67%)
+apply_to_top_k = 15                  # Increased from 10 for better coverage
 # Note: blend parameter is deprecated and no longer used
 # Reranker now uses pure cross-encoder scores
+# 
+# Benchmark results (query: "voidm"):
+# - ms-marco-TinyBERT: 1.1s latency, -38% quality (not recommended)
+# - bge-reranker-base: 5.4s latency, +5.67% quality (recommended)
+# 
+# To enable: set enabled = true, keep model = "bge-reranker-base"
 
-# Example 2: Enable bge-reranker-base (heavyweight, most accurate)
+# Alternative: lightweight ms-marco-TinyBERT (not recommended, poor quality)
 # [search.reranker]
 # enabled = true
 # model = "bge-reranker-base"

@@ -81,14 +81,6 @@ impl CrossEncoderReranker {
         
         let seq_len = input_ids.len();
 
-        let ids_tensor = Tensor::<i64>::from_array(
-            ([1usize, seq_len], input_ids.into_boxed_slice())
-        ).context("Failed to create input_ids tensor")?;
-
-        let mask_tensor = Tensor::<i64>::from_array(
-            ([1usize, seq_len], attention_mask.into_boxed_slice())
-        ).context("Failed to create attention_mask tensor")?;
-
         let logit = {
             let mut session_lock = self.session.lock().unwrap();
             
@@ -98,19 +90,35 @@ impl CrossEncoderReranker {
 
             let outputs = if has_token_type_ids && token_type_ids.is_some() {
                 // Try with token_type_ids (ms-marco models)
+                let ids_tensor = Tensor::<i64>::from_array(
+                    ([1usize, seq_len], input_ids.into_boxed_slice())
+                ).context("Failed to create input_ids tensor")?;
+
+                let mask_tensor = Tensor::<i64>::from_array(
+                    ([1usize, seq_len], attention_mask.into_boxed_slice())
+                ).context("Failed to create attention_mask tensor")?;
+
                 let ttid_tensor = Tensor::<i64>::from_array(
                     ([1usize, seq_len], token_type_ids.unwrap().into_boxed_slice())
                 ).context("Failed to create token_type_ids tensor")?;
                 
                 session_lock.run(
                     ort::inputs![
-                        "input_ids"      => ids_tensor.clone(),
-                        "attention_mask" => mask_tensor.clone(),
+                        "input_ids"      => ids_tensor,
+                        "attention_mask" => mask_tensor,
                         "token_type_ids" => ttid_tensor
                     ]
                 ).context("Reranker inference failed with token_type_ids")?
             } else {
                 // Fall back to inference without token_type_ids (bge models)
+                let ids_tensor = Tensor::<i64>::from_array(
+                    ([1usize, seq_len], input_ids.into_boxed_slice())
+                ).context("Failed to create input_ids tensor")?;
+
+                let mask_tensor = Tensor::<i64>::from_array(
+                    ([1usize, seq_len], attention_mask.into_boxed_slice())
+                ).context("Failed to create attention_mask tensor")?;
+
                 session_lock.run(
                     ort::inputs![
                         "input_ids"      => ids_tensor,

@@ -136,16 +136,27 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
     if let Some(expansion_config) = &config.search.query_expansion {
         if expansion_config.enabled {
             let expander = voidm_core::query_expansion::QueryExpander::new(expansion_config.clone());
-            expanded_query = expander.expand(&args.query).await;
-            if args.verbose {
-                eprintln!("[query-expansion] Original: {}", args.query);
-                eprintln!("[query-expansion] Expanded: {}", expanded_query);
-                eprintln!("[query-expansion] Model: {}", expansion_config.model);
+            match expander.expand(&args.query).await {
+                Ok(expanded) => {
+                    expanded_query = expanded;
+                    if args.verbose {
+                        eprintln!("[query-expansion] Original: {}", args.query);
+                        eprintln!("[query-expansion] Expanded: {}", expanded_query);
+                        eprintln!("[query-expansion] Model: {}", expansion_config.model);
+                    }
+                }
+                Err(e) => {
+                    // Query expansion failed - no fallback, use original query
+                    tracing::warn!("Query expansion failed: {}", e);
+                    if args.verbose {
+                        eprintln!("[query-expansion] Failed: {} (using original query)", e);
+                    }
+                }
             }
         }
     }
 
-    // Create search options with expanded query
+    // Create search options with expanded query (or original if expansion failed)
     let opts = SearchOptions {
         query: expanded_query,
         mode,

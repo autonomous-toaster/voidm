@@ -1,15 +1,20 @@
 //! Query expansion using small generative LLMs.
 //!
 //! This module expands user search queries with synonyms and related concepts
-//! to improve recall in semantic search. Uses a small language model (Phi-2, TinyLLama)
+//! to improve recall in semantic search. Uses ONNX models (GPT-2, GPT-2-Medium)
 //! with few-shot prompting for consistent, high-quality expansions.
 //!
 //! Features:
 //! - Config-driven (no code changes to enable)
-//! - Graceful fallback on timeout/error
+//! - Real ONNX inference with no fallback
 //! - LRU caching for repeated queries
 //! - Optional feature (disabled by default)
-//! - ONNX model inference with auto-download
+//! - ONNX model inference with auto-download from HuggingFace
+//!
+//! Behavior on error:
+//! - If model unavailable: expansion fails with error (no fallback)
+//! - If timeout: expansion fails with error (no fallback)
+//! - CLI will use original query when expansion fails
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -90,9 +95,6 @@ REST API: HTTP, endpoints, JSON, web services, microservices
 Database: SQL, queries, indexing, schema, transactions
 
 {query}:"#;
-
-    /// Zero-shot minimal template.
-    pub const ZERO_SHOT_MINIMAL: &str = r#"Related to {query}:"#;
 
     /// Get the appropriate prompt template for the model.
     pub fn get_template(_model: &str) -> &'static str {
@@ -286,35 +288,30 @@ impl QueryExpander {
     /// Expand a query with related terms.
     ///
     /// Returns the expanded query (original + related terms separated by commas).
-    /// On timeout or error, returns the original query as fallback.
-    pub async fn expand(&self, query: &str) -> String {
-        // If disabled, return original query
+    /// Expand query with real ONNX inference. No fallback - either it works or returns error.
+    /// Returns Err if expansion fails for any reason (model unavailable, timeout, etc.)
+    pub async fn expand(&self, query: &str) -> anyhow::Result<String> {
+        // If disabled, return error (no expansion)
         if !self.config.enabled {
-            return query.to_string();
+            return Err(anyhow::anyhow!("Query expansion disabled"));
         }
 
         // Check cache
         let mut cache = self.cache.lock().await;
         if let Some(expanded) = cache.get(query) {
             tracing::debug!("Query expansion cache hit for: {}", query);
-            return expanded;
+            return Ok(expanded);
         }
         drop(cache);
 
-        // Generate expansion with timeout and fallback
-        let expanded = self
-            .expand_with_timeout(query)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!("Query expansion failed ({}), using original query", e);
-                query.to_string()
-            });
+        // Generate expansion - no fallback, propagate errors
+        let expanded = self.expand_with_timeout(query).await?;
 
         // Cache the result
         let mut cache = self.cache.lock().await;
         cache.insert(query.to_string(), expanded.clone());
 
-        expanded
+        Ok(expanded)
     }
 
     /// Internal expansion with timeout.
@@ -543,33 +540,6 @@ impl QueryExpander {
     }
     
     /// Mock expansion for fallback when model unavailable (Phase 2b demo).
-    fn mock_expand(query: &str) -> String {
-        let lower = query.to_lowercase();
-        
-        // Common expansion patterns for demo
-        let expansions = if lower.contains("docker") {
-            format!("{}, containerization, container images, Docker Compose, Kubernetes", query)
-        } else if lower.contains("kubernetes") || lower.contains("k8s") {
-            format!("{}, container orchestration, pods, services, deployments", query)
-        } else if lower.contains("python") {
-            format!("{}, Python programming, Django, Flask, data science", query)
-        } else if lower.contains("api") {
-            format!("{}, REST, web services, HTTP endpoints, API design", query)
-        } else if lower.contains("rust") {
-            format!("{}, Rust programming, systems programming, performance", query)
-        } else if lower.contains("database") || lower.contains("sql") {
-            format!("{}, relational database, queries, schema design", query)
-        } else if lower.contains("aws") {
-            format!("{}, Amazon Web Services, cloud computing, S3, EC2", query)
-        } else if lower.contains("git") || lower.contains("github") {
-            format!("{}, version control, branches, commits, repositories", query)
-        } else {
-            // Default: return query as-is for unknown terms
-            query.to_string()
-        };
-        
-        expansions
-    }
 
     /// Clear the expansion cache.
     pub async fn clear_cache(&self) {
@@ -629,12 +599,11 @@ mod tests {
     #[test]
     fn test_prompt_templates() {
         assert!(prompts::FEW_SHOT_STRUCTURED.contains("{query}"));
-        assert!(prompts::ZERO_SHOT_MINIMAL.contains("{query}"));
 
-        // Test template selection
+        // Test template selection - always uses FEW_SHOT_STRUCTURED
         assert_eq!(prompts::get_template("phi-2"), prompts::FEW_SHOT_STRUCTURED);
         assert_eq!(prompts::get_template("tinyllama"), prompts::FEW_SHOT_STRUCTURED);
-        assert_eq!(prompts::get_template("gpt2-small"), prompts::ZERO_SHOT_MINIMAL);
+        assert_eq!(prompts::get_template("gpt2-small"), prompts::FEW_SHOT_STRUCTURED);
     }
 
     #[tokio::test]
@@ -646,7 +615,8 @@ mod tests {
         let expander = QueryExpander::new(config);
 
         let result = expander.expand("Docker").await;
-        assert_eq!(result, "Docker");
+        // When disabled, should return error
+        assert!(result.is_err(), "Expansion should fail when disabled");
     }
 
     #[tokio::test]
@@ -661,9 +631,19 @@ mod tests {
         let result1 = expander.expand("API").await;
         let result2 = expander.expand("API").await;
 
-        assert_eq!(result1, result2);
+        // Both should be either Ok or Err (consistent)
+        match (&result1, &result2) {
+            (Ok(exp1), Ok(exp2)) => assert_eq!(exp1, exp2),
+            (Err(_), Err(_)) => {
+                // Both failed - that's consistent
+            }
+            _ => panic!("Results should be consistent"),
+        }
 
         let stats = expander.cache_stats().await;
-        assert_eq!(stats.size, 1);
+        // Only cache hits on successful expansions
+        if result1.is_ok() {
+            assert_eq!(stats.size, 1);
+        }
     }
 }

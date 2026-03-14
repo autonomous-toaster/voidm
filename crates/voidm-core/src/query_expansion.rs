@@ -288,11 +288,24 @@ impl QueryExpander {
             let expanded_terms = Self::infer_expansion(&model_arc, &prompt)?;
             
             // Prepend original query to the expansion (enhancement, not replacement)
-            // Format: "original_query, expanded_term1, expanded_term2, ..."
+            // Avoid duplicates by checking if original query is already the first term
             let result = if expanded_terms.is_empty() {
                 query.to_string()
             } else {
-                format!("{}, {}", query, expanded_terms)
+                // Check if the first term (before first comma) matches the query
+                let first_term = if let Some(comma_idx) = expanded_terms.find(',') {
+                    expanded_terms[..comma_idx].trim()
+                } else {
+                    expanded_terms.as_str()
+                };
+                
+                if first_term.eq_ignore_ascii_case(query) {
+                    // Original query is already first, use as-is to avoid duplicate
+                    expanded_terms
+                } else {
+                    // Original query not the first term, prepend it
+                    format!("{}, {}", query, expanded_terms)
+                }
             };
             
             Ok(result)

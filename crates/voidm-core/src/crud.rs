@@ -7,7 +7,7 @@ use crate::models::{
     AddMemoryRequest, AddMemoryResponse, DuplicateWarning, EdgeType, LinkResponse,
     ConflictWarning, Memory,
 };
-use crate::{embeddings, search, vector, quality};
+use crate::{embeddings, search, vector, quality, auto_tagger};
 use crate::config::Config;
 
 /// Resolve a full or short (prefix) ID to a full memory ID.
@@ -52,9 +52,15 @@ pub async fn resolve_id(pool: &SqlitePool, id: &str) -> Result<String> {
 /// 3. Insert memory + scopes + FTS + vec + graph node + links
 /// 4. COMMIT
 /// Returns AddMemoryResponse with suggested_links and duplicate_warning.
-pub async fn add_memory(pool: &SqlitePool, req: AddMemoryRequest, config: &Config) -> Result<AddMemoryResponse> {
-    let id = req.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &Config) -> Result<AddMemoryResponse> {
+    // Auto-enrich tags BEFORE creating tags_json (moved to beginning)
+    if let Err(e) = auto_tagger::enrich_memory_tags(&mut req, config) {
+        tracing::warn!("Failed to auto-enrich tags: {}. Using user-provided tags only.", e);
+    }
+    
+    let id = req.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
     let now = Utc::now().to_rfc3339();
+    
     let tags_json = serde_json::to_string(&req.tags)?;
     let metadata_json = serde_json::to_string(&req.metadata)?;
     let memory_type_str = req.memory_type.to_string();
@@ -206,6 +212,14 @@ pub async fn add_memory(pool: &SqlitePool, req: AddMemoryRequest, config: &Confi
     }
 
     tx.commit().await.context("Transaction commit failed")?;
+
+    // Post-insert: Auto-link memories with shared tags
+    if !req.tags.is_empty() {
+        let tag_limit = config.insert.auto_link_limit;
+        if let Err(e) = crate::tag_linker::auto_link_by_tags(pool, &id, &req.tags, tag_limit).await {
+            tracing::warn!("Failed to auto-link by tags: {}. Continuing with memory creation.", e);
+        }
+    }
 
     // Post-insert: compute suggested_links and duplicate_warning (outside tx)
     let (suggested_links, duplicate_warning) = if let Some(ref emb) = embedding_result {

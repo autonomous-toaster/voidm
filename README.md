@@ -264,6 +264,49 @@ default_intent = null       # Optional default intent (e.g., "general", "technic
 - If expansion fails or times out, the original query is used
 - All model inference is local; no data leaves your machine
 - Intent parameter is optional; search works fine without it
+
+#### Reranking (Optional, Disabled by Default)
+
+For high-recall searches, enable reranking to improve result ordering. Reranking uses a cross-encoder model to re-score results based on relevance to the query.
+
+```bash
+# Enable reranking with the recommended model
+voidm search "docker" --reranker true
+
+# Custom reranker model (if supported)
+voidm search "docker" --reranker true --reranker-model "bge-reranker-base"
+```
+
+**Configuration** (in `~/.config/voidm/config.toml`):
+
+```toml
+[search.reranker]
+enabled = false                # Disabled by default (adds ~5s latency per search)
+model = "bge-reranker-base"    # Recommended: improves recall by +5.67%
+apply_to_top_k = 15            # Rerank top-15 results (default: 10)
+```
+
+**Supported Models**:
+- `bge-reranker-base` (BAAI/bge-reranker-base, 278MB) - **RECOMMENDED**
+  - Improves mean score by +5.67%
+  - Better score spread and maximum scores
+  - Latency: ~5s per query
+  - Best for: precision-focused searches
+
+- `ms-marco-TinyBERT` (cross-encoder/ms-marco-TinyBERT-L-2, 11MB) - **NOT RECOMMENDED**
+  - Degrades score quality (-38%)
+  - Collapses scores too conservatively
+  - Latency: ~1s per query
+  - Not recommended despite being faster
+
+**When to Use Reranking**:
+- High-precision searches where result ordering matters
+- When you need top-k results to be most relevant
+- Not recommended for keyword or fuzzy searches
+- Keep disabled for speed-critical applications
+
+**Note**: Reranking works on the initial search results. For low initial scores, improve query expansion instead.
+
 ### MCP server
 
 Expose a small assistant-focused subset of `voidm` as an MCP server over stdio:

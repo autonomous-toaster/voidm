@@ -539,8 +539,6 @@ impl QueryExpander {
         Ok(final_expansion)
     }
     
-    /// Mock expansion for fallback when model unavailable (Phase 2b demo).
-
     /// Clear the expansion cache.
     pub async fn clear_cache(&self) {
         let mut cache = self.cache.lock().await;

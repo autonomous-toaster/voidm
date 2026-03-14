@@ -164,12 +164,15 @@ pub struct QueryExpansionConfig {
     /// Enable query expansion (default: false).
     #[serde(default)]
     pub enabled: bool,
-    /// Model name: "phi-2", "tinyllama", or "gpt2-small" (default: "phi-2").
+    /// Model name: "phi-2", "tinyllama", or "gpt2-small" (default: "tinyllama").
     #[serde(default = "default_query_expansion_model")]
     pub model: String,
     /// Maximum time to wait for expansion in milliseconds (default: 300).
     #[serde(default = "default_query_expansion_timeout_ms")]
     pub timeout_ms: u64,
+    /// Intent-aware expansion configuration.
+    #[serde(default)]
+    pub intent: IntentConfig,
 }
 
 impl Default for QueryExpansionConfig {
@@ -178,6 +181,7 @@ impl Default for QueryExpansionConfig {
             enabled: false,
             model: default_query_expansion_model(),
             timeout_ms: default_query_expansion_timeout_ms(),
+            intent: IntentConfig::default(),
         }
     }
 }
@@ -188,6 +192,38 @@ fn default_query_expansion_model() -> String {
 
 fn default_query_expansion_timeout_ms() -> u64 {
     300
+}
+
+/// Intent-aware query expansion configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentConfig {
+    /// Enable intent-aware expansion (default: true).
+    #[serde(default = "default_intent_enabled")]
+    pub enabled: bool,
+    /// Use scope as fallback intent if intent not explicitly provided (default: true).
+    #[serde(default = "default_intent_use_scope_as_fallback")]
+    pub use_scope_as_fallback: bool,
+    /// Optional default intent for all queries (default: null).
+    #[serde(default)]
+    pub default_intent: Option<String>,
+}
+
+fn default_intent_enabled() -> bool {
+    true
+}
+
+fn default_intent_use_scope_as_fallback() -> bool {
+    true
+}
+
+impl Default for IntentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            use_scope_as_fallback: true,
+            default_intent: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

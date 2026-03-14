@@ -56,6 +56,21 @@ Related: JSON-RPC, GraphQL, OpenAPI, API gateway
 Topic: {query}
 Synonyms:"#;
 
+    /// Intent-aware template - uses context/scope to guide expansion
+    pub const FEW_SHOT_INTENT_AWARE: &str = r#"Expand the following search query within the given context:
+
+Context: Docker orchestration
+Query: containers
+Related terms: Kubernetes, orchestration, cluster, deployment, services, swarm
+
+Context: Python backend
+Query: web frameworks
+Related terms: Django, Flask, FastAPI, async, HTTP, REST, endpoints
+
+Context: {intent}
+Query: {query}
+Related terms:"#;
+
     /// GBNF grammar for structured synonym output.
     /// Enforces format: "term1, term2, term3"
     #[allow(dead_code)]
@@ -68,6 +83,7 @@ item   : [a-zA-Z0-9._\-\s]+
         match mode {
             TemplateMode::Structured => FEW_SHOT_STRUCTURED,
             TemplateMode::Improved => FEW_SHOT_IMPROVED,
+            TemplateMode::IntentAware => FEW_SHOT_INTENT_AWARE,
         }
     }
 
@@ -76,6 +92,7 @@ item   : [a-zA-Z0-9._\-\s]+
     pub enum TemplateMode {
         Structured,  // Original few-shot
         Improved,    // Domain-aware structure
+        IntentAware, // Intent-guided structure
     }
 
     /// Get the GBNF grammar
@@ -372,6 +389,25 @@ impl QueryExpander {
         self.expand_with_timeout_and_grammar(query).await
     }
 
+    /// Expand a query using intent-aware generation.
+    ///
+    /// Uses optional intent parameter to guide more focused expansions.
+    /// Gracefully handles missing intent: uses scope if available, else uses original query.
+    /// Returns the expanded query (original + related terms).
+    pub async fn expand_with_intent(&self, query: &str, intent: Option<&str>) -> anyhow::Result<String> {
+        if !self.config.enabled {
+            return Err(anyhow::anyhow!("Query expansion disabled"));
+        }
+
+        // Check if intent-aware expansion is enabled in config
+        if !self.config.intent.enabled {
+            // Fall back to regular expansion if intent-aware is disabled
+            return self.expand(query).await;
+        }
+
+        self.expand_with_timeout_and_intent(query, intent).await
+    }
+
     /// Internal expansion with timeout and grammar guidance.
     async fn expand_with_timeout_and_grammar(&self, query: &str) -> Result<String> {
         use tokio::time::{timeout, Duration};
@@ -419,6 +455,88 @@ impl QueryExpander {
             let expanded_terms = parse_with_fallback(&raw_output)?;
             
             // Prepend original query to avoid duplication
+            let result = if expanded_terms.is_empty() {
+                query.to_string()
+            } else {
+                let first_term = if let Some(comma_idx) = expanded_terms.find(',') {
+                    expanded_terms[..comma_idx].trim()
+                } else {
+                    expanded_terms.as_str()
+                };
+
+                if first_term.eq_ignore_ascii_case(query) {
+                    expanded_terms
+                } else {
+                    format!("{}, {}", query, expanded_terms)
+                }
+            };
+            
+            Ok(result)
+        } else {
+            Err(anyhow::anyhow!("Model not loaded: {}", model_name))
+        }
+    }
+
+    /// Internal expansion with timeout and intent guidance.
+    async fn expand_with_timeout_and_intent(&self, query: &str, intent: Option<&str>) -> Result<String> {
+        use tokio::time::{timeout, Duration};
+        
+        let query_str = query.to_string();
+        let model = self.config.model.clone();
+        
+        // Resolve intent with fallback logic
+        let resolved_intent = intent
+            .or_else(|| self.config.intent.default_intent.as_deref())
+            .map(|i| i.to_string());
+        
+        // Ensure model is loaded
+        ensure_llm_model(&model).await?;
+        
+        // Apply timeout to intent-aware inference
+        let timeout_duration = Duration::from_millis(self.config.timeout_ms);
+        let result = timeout(timeout_duration, async {
+            Self::run_inference_with_intent(&query_str, &model, resolved_intent.as_deref()).await
+        })
+        .await;
+        
+        match result {
+            Ok(Ok(expanded)) => Ok(expanded),
+            Ok(Err(e)) => {
+                tracing::warn!("Intent-aware expansion error: {}", e);
+                Err(e)
+            }
+            Err(_) => {
+                tracing::warn!("Intent-aware expansion timed out ({}ms)", self.config.timeout_ms);
+                Err(anyhow::anyhow!("Intent-aware expansion timed out"))
+            }
+        }
+    }
+
+    /// Run inference with intent-aware prompting.
+    async fn run_inference_with_intent(query: &str, model_name: &str, intent: Option<&str>) -> Result<String> {
+        // Use intent-aware template
+        let template = prompts::get_template(&prompts::TemplateMode::IntentAware);
+        let prompt = if let Some(intent_text) = intent {
+            template
+                .replace("{query}", query)
+                .replace("{intent}", intent_text)
+        } else {
+            // Fallback: use improved template if no intent available
+            prompts::get_template(&prompts::TemplateMode::Improved)
+                .replace("{query}", query)
+        };
+        
+        tracing::debug!("Intent-aware expansion for query: {}", query);
+        
+        // Run inference
+        let cache = get_llm_cache();
+        if let Some(SendLLM(model_arc)) = cache.get(model_name) {
+            let raw_output = Self::infer_expansion(&model_arc, &prompt)?;
+            
+            // Parse with fallback
+            let expanded_terms = parse_with_fallback(&raw_output)?;
+            
+            // Prepend original query
             let result = if expanded_terms.is_empty() {
                 query.to_string()
             } else {
@@ -758,10 +876,13 @@ mod tests {
     fn test_prompt_templates() {
         assert!(prompts::FEW_SHOT_STRUCTURED.contains("{query}"));
         assert!(prompts::FEW_SHOT_IMPROVED.contains("{query}"));
+        assert!(prompts::FEW_SHOT_INTENT_AWARE.contains("{query}"));
+        assert!(prompts::FEW_SHOT_INTENT_AWARE.contains("{intent}"));
 
         // Test template selection
         assert_eq!(prompts::get_template(&prompts::TemplateMode::Structured), prompts::FEW_SHOT_STRUCTURED);
         assert_eq!(prompts::get_template(&prompts::TemplateMode::Improved), prompts::FEW_SHOT_IMPROVED);
+        assert_eq!(prompts::get_template(&prompts::TemplateMode::IntentAware), prompts::FEW_SHOT_INTENT_AWARE);
     }
 
     #[tokio::test]
@@ -775,5 +896,33 @@ mod tests {
         let result = expander.expand("Docker").await;
         // When disabled, should return error
         assert!(result.is_err(), "Expansion should fail when disabled");
+    }
+
+    #[test]
+    fn test_intent_config_defaults() {
+        let intent_config = crate::config::IntentConfig::default();
+        assert!(intent_config.enabled);
+        assert!(intent_config.use_scope_as_fallback);
+        assert_eq!(intent_config.default_intent, None);
+    }
+
+    #[test]
+    fn test_query_expansion_config_with_intent() {
+        let config = QueryExpansionConfig::default();
+        assert!(config.intent.enabled);
+        assert!(config.intent.use_scope_as_fallback);
+    }
+
+    #[test]
+    fn test_intent_template_substitution() {
+        let template = prompts::get_template(&prompts::TemplateMode::IntentAware);
+        let filled = template
+            .replace("{query}", "Docker")
+            .replace("{intent}", "orchestration");
+        
+        assert!(filled.contains("Docker"));
+        assert!(filled.contains("orchestration"));
+        assert!(!filled.contains("{query}"));
+        assert!(!filled.contains("{intent}"));
     }
 }

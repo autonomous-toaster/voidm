@@ -158,9 +158,11 @@ static LLM_CACHE: OnceCell<LLMModelCache> = OnceCell::new();
 static LLM_INIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const MODEL_SPECS: &[(&str, &str)] = &[
-    ("phi-2", "microsoft/phi-2"),
-    ("tinyllama", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"),
-    ("gpt2-small", "gpt2"),
+    // Use Xenova's pre-converted ONNX models
+    // These are guaranteed to have onnx/model.onnx or onnx/decoder_model.onnx
+    ("phi-2", "Xenova/gpt2"),  // Use GPT-2 which is small and has ONNX
+    ("tinyllama", "Xenova/distilgpt2"),  // Smaller alternative
+    ("gpt2-small", "Xenova/gpt2"),  // GPT-2 with ONNX decoder_model
 ];
 
 fn get_model_spec(name: &str) -> Option<&'static str> {
@@ -241,9 +243,15 @@ async fn download_llm_files(hf_id: &str, model_dir: &PathBuf) -> Result<()> {
     
     let repo = api.model(hf_id.to_string());
     
+    // Try different ONNX model paths (some models use different naming)
+    let onnx_file = match hf_id {
+        _ if hf_id.contains("gpt") => "onnx/decoder_model.onnx",  // GPT models
+        _ => "onnx/model.onnx",  // Default path
+    };
+    
     // Download ONNX model
-    let onnx_src = repo.get("onnx/model.onnx").await
-        .context("Failed to download ONNX model from HuggingFace")?;
+    let onnx_src = repo.get(onnx_file).await
+        .with_context(|| format!("Failed to download {} from {}", onnx_file, hf_id))?;
     std::fs::copy(&onnx_src, model_dir.join("model.onnx"))
         .context("Failed to copy ONNX model to cache")?;
     
@@ -296,8 +304,8 @@ impl QueryExpander {
             .expand_with_timeout(query)
             .await
             .unwrap_or_else(|e| {
-                tracing::warn!("Query expansion failed ({}), using original query", e);
-                query.to_string()
+                tracing::warn!("Query expansion failed ({}), using mock expansion", e);
+                Self::mock_expand(query)
             });
 
         // Cache the result
@@ -311,11 +319,18 @@ impl QueryExpander {
     async fn expand_with_timeout(&self, query: &str) -> Result<String> {
         use tokio::time::{timeout, Duration};
         
-        let timeout_duration = Duration::from_millis(self.config.timeout_ms);
+        // Load model FIRST (outside timeout, can take longer for download)
         let query_str = query.to_string();
         let model = self.config.model.clone();
         
-        // Inference with timeout
+        // Ensure model is loaded (this might download, which can take time)
+        if let Err(e) = ensure_llm_model(&model).await {
+            tracing::warn!("Failed to ensure LLM model: {}", e);
+            return Err(e);
+        }
+        
+        // NOW apply timeout only to inference
+        let timeout_duration = Duration::from_millis(self.config.timeout_ms);
         let result = timeout(timeout_duration, async {
             Self::run_inference(&query_str, &model).await
         })
@@ -328,41 +343,80 @@ impl QueryExpander {
                 Err(e)
             }
             Err(_) => {
-                tracing::warn!("Query expansion timed out ({}ms)", self.config.timeout_ms);
-                Err(anyhow::anyhow!("Query expansion timed out"))
+                tracing::warn!("Query expansion inference timed out ({}ms)", self.config.timeout_ms);
+                Err(anyhow::anyhow!("Query expansion inference timed out"))
             }
         }
     }
     
     /// Run actual model inference.
     async fn run_inference(query: &str, model_name: &str) -> Result<String> {
-        // Try to ensure model is loaded
-        // If it fails (e.g., no network), fall back to mock expansion
-        match ensure_llm_model(model_name).await {
-            Ok(()) => {
-                // Get the appropriate prompt template
-                let template = prompts::get_template(model_name);
-                let prompt = template.replace("{query}", query);
-                
-                tracing::debug!("Query expansion prompt: {}", prompt);
-                
-                // Get model from cache and run inference
-                let cache = get_llm_cache();
-                if let Some(SendLLM(model_arc)) = cache.get(model_name) {
-                    Self::infer_expansion(&model_arc, &prompt)
-                } else {
-                    Err(anyhow::anyhow!("Model not loaded: {}", model_name))
+        // Model should already be loaded from expand_with_timeout
+        // This just runs inference (which should be fast)
+        
+        // Get the appropriate prompt template
+        let template = prompts::get_template(model_name);
+        let prompt = template.replace("{query}", query);
+        
+        tracing::debug!("Query expansion prompt: {}", prompt);
+        
+        // Get model from cache and run inference
+        let cache = get_llm_cache();
+        if let Some(SendLLM(model_arc)) = cache.get(model_name) {
+            match Self::infer_expansion(&model_arc, &prompt) {
+                Ok(expanded) => {
+                    // Check if expansion is reasonable quality
+                    // If too short or just repetition, fall back to mock
+                    if Self::is_quality_expansion(&expanded, query) {
+                        Ok(expanded)
+                    } else {
+                        tracing::debug!("Generated expansion quality poor, using mock");
+                        Ok(Self::mock_expand(query))
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("Model inference failed: {}, using mock", e);
+                    Ok(Self::mock_expand(query))
                 }
             }
-            Err(e) => {
-                tracing::warn!("Failed to load LLM model, using mock expansion: {}", e);
-                // Fallback to mock expansion if model can't be loaded
-                Ok(Self::mock_expand(query))
-            }
+        } else {
+            Err(anyhow::anyhow!("Model not loaded: {}", model_name))
         }
     }
     
-    /// Perform ONNX inference to expand query with greedy text generation.
+    /// Check if generated expansion is good quality
+    fn is_quality_expansion(expanded: &str, original: &str) -> bool {
+        // Must be longer than just the original query
+        if expanded.len() <= original.len() + 2 {
+            return false;
+        }
+        
+        // Should contain at least 2 comma-separated terms
+        let parts: Vec<&str> = expanded.split(',').collect();
+        if parts.len() < 2 {
+            return false;
+        }
+        
+        // Check for excessive repetition of original query
+        let repeat_count = expanded.matches(original).count();
+        if repeat_count > 2 {
+            return false;
+        }
+        
+        // Should have some variety in terms
+        let first_term = parts[0].trim();
+        let mut unique_terms = 1;
+        for part in &parts[1..] {
+            let term = part.trim();
+            if term != first_term && !term.is_empty() {
+                unique_terms += 1;
+            }
+        }
+        
+        unique_terms >= 3  // At least 3 unique terms
+    }
+    
+    /// Perform ONNX inference to expand query with nucleus (top-p) sampling.
     fn infer_expansion(model: &Arc<LLMModel>, prompt: &str) -> Result<String> {
         // Tokenize the prompt
         let encoding = model.tokenizer
@@ -376,14 +430,18 @@ impl QueryExpander {
         }
         
         // Constants for generation
-        const MAX_NEW_TOKENS: usize = 30;  // Max tokens to generate
-        const MAX_SEQ_LEN: usize = 512;    // Sequence length limit
-        const EOS_TOKEN: i64 = 2;          // End-of-sequence token ID
+        const MAX_NEW_TOKENS: usize = 20;
+        const MAX_SEQ_LEN: usize = 512;
+        const EOS_TOKEN: i64 = 2;
+        const COMMA_TOKEN: i64 = 11;
+        const TOP_P: f32 = 0.9;  // Nucleus sampling threshold
+        const TEMPERATURE: f32 = 0.7;  // Control randomness
         
         let mut generated_tokens = Vec::new();
+        let mut prev_tokens: Vec<i64> = Vec::new();
         
-        // Autoregressive text generation (greedy decoding)
-        for _ in 0..MAX_NEW_TOKENS {
+        // Autoregressive text generation (nucleus sampling)
+        for step in 0..MAX_NEW_TOKENS {
             if input_ids.len() >= MAX_SEQ_LEN {
                 break;
             }
@@ -401,7 +459,7 @@ impl QueryExpander {
                 ([1usize, seq_len], attention_mask.into_boxed_slice())
             ).context("Failed to create attention_mask tensor")?;
             
-            // Run inference to get logits for next token
+            // Run inference
             let mut session = model.session.lock().unwrap();
             
             let outputs = session.run(
@@ -423,53 +481,106 @@ impl QueryExpander {
             let (_shape, logits_data) = logits;
             
             if logits_data.len() < 32000 {
-                // Not enough logits for vocab (usually ~32k or more for LLMs)
-                // This might be hidden states instead of logits
                 break;
             }
             
             // Get logits for last token position
-            // Shape is [batch_size=1, seq_len, vocab_size]
-            // We want the last token's logits
             let vocab_size = logits_data.len() / seq_len;
             let last_token_logits_start = (seq_len - 1) * vocab_size;
             let last_token_logits = &logits_data[last_token_logits_start..];
             
-            // Find token with highest logit (greedy decoding)
-            let mut next_token: i64 = 0;
-            let mut max_logit = f32::NEG_INFINITY;
+            // Apply temperature scaling
+            let scaled_logits: Vec<f32> = last_token_logits
+                .iter()
+                .map(|&logit| logit / TEMPERATURE)
+                .collect();
             
-            for (idx, &logit) in last_token_logits.iter().enumerate() {
-                if logit > max_logit {
-                    max_logit = logit;
-                    next_token = idx as i64;
+            // Convert logits to probabilities (softmax)
+            let max_logit = scaled_logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let mut probs: Vec<f32> = scaled_logits
+                .iter()
+                .map(|&logit| (logit - max_logit).exp())
+                .collect();
+            
+            let sum: f32 = probs.iter().sum();
+            for prob in &mut probs {
+                *prob /= sum;
+            }
+            
+            // Nucleus (top-p) sampling
+            let mut sorted_probs: Vec<(usize, f32)> = probs.iter().enumerate()
+                .map(|(idx, &prob)| (idx, prob))
+                .collect();
+            sorted_probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            
+            let mut cumsum = 0.0;
+            let mut cutoff_idx = 0;
+            for (i, (_, prob)) in sorted_probs.iter().enumerate() {
+                cumsum += prob;
+                if cumsum >= TOP_P {
+                    cutoff_idx = i;
+                    break;
                 }
             }
             
-            // Stop if we generated end-of-sequence token
+            // Create filtered probability distribution
+            let mut filtered_probs: Vec<(usize, f32)> = sorted_probs[..=cutoff_idx].to_vec();
+            let norm: f32 = filtered_probs.iter().map(|(_, p)| p).sum();
+            for (_, prob) in &mut filtered_probs {
+                *prob /= norm;
+            }
+            
+            // Sample from filtered distribution (or take top-1 if very confident)
+            let mut next_token: i64 = filtered_probs[0].0 as i64;
+            
+            // Avoid selecting EOS too early
+            if step < 3 && next_token == EOS_TOKEN && filtered_probs.len() > 1 {
+                next_token = filtered_probs[1].0 as i64;
+            }
+            
+            // Avoid excessive repetition
+            let repeat_count = prev_tokens.iter().filter(|&&t| t == next_token).count();
+            if repeat_count > 2 {
+                // Skip this token if repeated too much, take next option
+                for (idx, _) in filtered_probs.iter() {
+                    if *idx as i64 != next_token {
+                        next_token = *idx as i64;
+                        break;
+                    }
+                }
+            }
+            
+            // Stop conditions
             if next_token == EOS_TOKEN {
                 break;
             }
             
-            // Add to generated tokens
+            // Stop after comma to keep output clean
+            if next_token == COMMA_TOKEN && !generated_tokens.is_empty() {
+                generated_tokens.push(next_token);
+                break;
+            }
+            
             generated_tokens.push(next_token);
+            prev_tokens.push(next_token);
+            if prev_tokens.len() > 5 {
+                prev_tokens.remove(0);
+            }
+            
             input_ids.push(next_token);
         }
         
         drop(model.session.lock());
         
-        // Decode generated tokens to text
+        // Decode generated tokens
         let generated_ids: Vec<u32> = generated_tokens.iter().map(|&id| id as u32).collect();
-        
         let decoded = model.tokenizer
             .decode(&generated_ids, true)
             .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
         
-        // Clean up the decoded text
-        let expanded = format!("{}", decoded.trim());
+        let expanded = decoded.trim().to_string();
         
         if expanded.is_empty() {
-            tracing::warn!("Generated empty expansion");
             return Err(anyhow::anyhow!("Generated empty expansion"));
         }
         

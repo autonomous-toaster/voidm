@@ -37,7 +37,7 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "10.13"
 
       - name: Initialize models
-        run: cargo run --release --target ${{ matrix.target }} -- init
+        run: cargo run --release --target ${{ matrix.target }} --bin voidm -- init
         env:
           MACOSX_DEPLOYMENT_TARGET: "10.13"
 

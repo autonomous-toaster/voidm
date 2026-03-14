@@ -14,6 +14,8 @@ pub mod embeddings;
 pub mod migration;
 pub mod semantic_dedup;
 pub mod query_expansion;
+pub mod auto_tagger;
+pub mod tag_linker;
 
 pub use config::Config;
 pub use config::config_path_display;

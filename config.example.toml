@@ -36,19 +36,19 @@ default_edge_types = ["PART_OF", "SUPPORTS", "DERIVED_FROM", "EXEMPLIFIES"]
 # Recommended: Start with ms-marco-TinyBERT for most use cases
 # Use bge-reranker-base only if maximum accuracy is critical
 
-# Example 1: Enable ms-marco-TinyBERT (lightweight, fast)
+# Example 1: Enable ms-marco-TinyBERT (lightweight, fast, recommended)
 [search.reranker]
 enabled = true
 model = "ms-marco-TinyBERT"
 apply_to_top_k = 10
-blend = 0.7
+# Note: blend parameter is deprecated and no longer used
+# Reranker now uses pure cross-encoder scores
 
-# Example 2: Enable bge-reranker-base (heavyweight, accurate)
+# Example 2: Enable bge-reranker-base (heavyweight, most accurate)
 # [search.reranker]
 # enabled = true
 # model = "bge-reranker-base"
 # apply_to_top_k = 10
-# blend = 0.7
 
 # Example 3: Disabled (default)
 # [search.reranker]
@@ -102,10 +102,11 @@ auto_link_limit = 5
 # - enabled (bool): Turn reranking on/off
 # - model (string): "ms-marco-TinyBERT" or "bge-reranker-base"
 # - apply_to_top_k (usize): Rerank only top-k results (0-100). Higher = more thorough, slower
-# - blend (float 0.0-1.0): Score = rerank_score * blend + orig_score * (1 - blend)
-#   - 0.7 = 70% reranker weight, 30% original RRF score (recommended)
-#   - 1.0 = pure reranker (less stable)
-#   - 0.5 = equal weight (safe middle ground)
+# - blend (float 0.0-1.0): DEPRECATED - kept for backward compatibility only
+#   - Previous behavior: final_score = rerank_score * blend + orig_score * (1 - blend)
+#   - New behavior: Uses PURE RERANKER SCORES (always blend=1.0 semantics)
+#   - Why: Cross-encoder is SoTA for relevance ranking; blending dilutes its signal
+#   - Recommendation: Remove 'blend' from your config (or set to any value, it's ignored)
 #
 # CLI overrides:
 #   voidm search "query" --reranker --reranker-model bge-reranker-base --reranker-top-k 15

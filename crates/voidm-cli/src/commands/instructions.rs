@@ -68,9 +68,11 @@ voidm add "Deployment takes 15 min" --type episodic --json
 voidm add "Always run tests before deploy" --type procedural \
   --link <prev-id>:DERIVED_FROM:"learned from deployment incident" --json
 
-# Search
+# Search (with optional intent for focused query expansion)
 voidm search "deployment" --json
 voidm search "database" --scope work/acme --mode semantic --json
+voidm search "auth" --intent "oauth2" --json              # Intent-guided expansion
+voidm search "config" --scope work/acme --intent "environment" --json  # Intent overrides scope
 
 # Graph
 voidm graph neighbors <id> --depth 2 --json
@@ -81,6 +83,26 @@ voidm graph pagerank --top 10 --json
 voidm link <id1> SUPPORTS <id2>
 voidm link <id1> RELATES_TO <id2> --note "both concern API design"
 ```
+
+## Search with Intent
+
+The `--intent` parameter guides query expansion toward a specific context:
+
+```bash
+# Without intent (broad expansion)
+voidm search "auth" --json
+# Expands to: auth, authentication, login, access control, identity...
+
+# With intent (focused expansion)
+voidm search "auth" --intent "oauth2" --json
+# Expands to: auth, oauth2, oidc, jwt, bearer token, openid connect...
+
+# Intent falls back to scope if configured
+voidm search "config" --scope work/infra --json
+# Uses "work/infra" as implicit intent if intent.use_scope_as_fallback=true
+```
+
+Intent is optional—all searches work without it. Use it when you need to focus expansion on a specific domain or technology.
 
 ## Scope Conventions
 

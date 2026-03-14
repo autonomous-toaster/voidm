@@ -178,7 +178,7 @@ impl Default for QueryExpansionConfig {
 }
 
 fn default_query_expansion_model() -> String {
-    "phi-2".into()
+    "tinyllama".into()
 }
 
 fn default_query_expansion_timeout_ms() -> u64 {

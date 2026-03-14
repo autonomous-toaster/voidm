@@ -111,7 +111,7 @@ fn get_llm_cache() -> &'static LLMModelCache {
     LLM_CACHE.get_or_init(LLMModelCache::new)
 }
 
-async fn ensure_llm_model(model_name: &str) -> Result<()> {
+pub async fn ensure_llm_model(model_name: &str) -> Result<()> {
     let cache = get_llm_cache();
     
     if cache.contains(model_name) {

@@ -106,6 +106,12 @@ pub async fn search(
 ) -> Result<SearchResponse> {
     use std::collections::HashMap;
 
+    tracing::info!("Search: Starting search request");
+    tracing::debug!("Search: query='{}', mode={:?}, limit={}, min_quality={:?}", 
+                    opts.query, opts.mode, opts.limit, opts.min_quality);
+    tracing::debug!("Search: embeddings_enabled={}, config_min_score={}", 
+                    embeddings_enabled, config_min_score);
+
     let fetch_limit = opts.limit * 3; // over-fetch for merging
     let mut scores: HashMap<String, f32> = HashMap::new();
 
@@ -115,6 +121,7 @@ pub async fn search(
         && crate::vector::vec_table_exists(pool).await.unwrap_or(false);
 
     if use_vector {
+        tracing::debug!("Search: Attempting vector-based search");
         match crate::embeddings::embed_text(model_name, &opts.query) {
             Ok(embedding) => {
                 match crate::vector::ann_search(pool, &embedding, fetch_limit).await {
@@ -234,11 +241,20 @@ pub async fn search(
 
     // Apply reranker if enabled (before quality/threshold filters)
     if let Some(reranker_config) = &config_search.reranker {
-        if reranker_config.enabled && !results.is_empty() {
-            if let Err(e) = apply_reranker(reranker_config, &opts.query, &mut results).await {
-                tracing::warn!("Reranking failed, using original scores: {}", e);
+        if reranker_config.enabled {
+            if !results.is_empty() {
+                tracing::info!("Search: Reranker enabled, applying to {} results", results.len());
+                if let Err(e) = apply_reranker(reranker_config, &opts.query, &mut results).await {
+                    tracing::warn!("Search: Reranking failed, using original scores: {}", e);
+                }
+            } else {
+                tracing::debug!("Search: Reranker enabled but no results to rerank");
             }
+        } else {
+            tracing::debug!("Search: Reranker disabled");
         }
+    } else {
+        tracing::debug!("Search: No reranker config found");
     }
 
     // Apply quality filter if specified
@@ -464,6 +480,7 @@ async fn apply_reranker(
 ) -> anyhow::Result<()> {
     let apply_to_k = config.apply_to_top_k.min(results.len());
     if apply_to_k == 0 {
+        tracing::info!("Reranker: apply_to_top_k=0, skipping reranking");
         return Ok(());
     }
 
@@ -476,7 +493,11 @@ async fn apply_reranker(
         );
     }
 
+    tracing::info!("Reranker: Initializing reranking with model: {}", config.model);
+    tracing::debug!("Reranker config: apply_to_top_k={}, blend={}", config.apply_to_top_k, config.blend);
+    
     let reranker = crate::reranker::CrossEncoderReranker::load(&config.model).await?;
+    tracing::info!("Reranker: Model '{}' loaded successfully", config.model);
     
     // Extract documents to rerank (only top-k)
     let docs_to_rerank: Vec<&str> = results[..apply_to_k]
@@ -484,10 +505,15 @@ async fn apply_reranker(
         .map(|r| r.content.as_str())
         .collect();
 
+    tracing::debug!("Reranker: Starting reranking of top-{} results (from {} total)", apply_to_k, results.len());
+    
     let reranked = reranker.rerank(query, &docs_to_rerank)?;
+    tracing::info!("Reranker: Successfully reranked {} documents", reranked.len());
 
     // Create a mapping of original_index -> reranker_score
     let mut rerank_scores: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+    let mut score_changes = Vec::new();
+    
     for rerank_result in reranked {
         rerank_scores.insert(rerank_result.index, rerank_result.score);
     }
@@ -496,14 +522,39 @@ async fn apply_reranker(
     for (idx, result) in results[..apply_to_k].iter_mut().enumerate() {
         if let Some(rerank_score) = rerank_scores.get(&idx) {
             let original_score = result.score;
+            let score_delta = rerank_score - original_score;
             result.score = *rerank_score;  // Use pure reranker score
-            tracing::debug!("Reranked [{}]: {:.3} (original) → {:.3} (reranker)", 
-                            idx, original_score, rerank_score);
+            
+            tracing::debug!(
+                "Reranked [{}]: {:.4} → {:.4} (Δ {:.4}, {:.1}%) | {}", 
+                idx, 
+                original_score, 
+                rerank_score,
+                score_delta,
+                if original_score > 0.0 { (score_delta / original_score * 100.0) } else { 0.0 },
+                &result.id[..std::cmp::min(12, result.id.len())]
+            );
+            
+            score_changes.push((original_score, *rerank_score));
         }
+    }
+
+    // Calculate statistics
+    if !score_changes.is_empty() {
+        let original_mean = score_changes.iter().map(|(o, _)| o).sum::<f32>() / score_changes.len() as f32;
+        let reranked_mean = score_changes.iter().map(|(_, r)| r).sum::<f32>() / score_changes.len() as f32;
+        let min_original = score_changes.iter().map(|(o, _)| o).copied().fold(f32::INFINITY, f32::min);
+        let max_reranked = score_changes.iter().map(|(_, r)| r).copied().fold(f32::NEG_INFINITY, f32::max);
+        
+        tracing::info!(
+            "Reranker: Score statistics - Original (mean={:.4}, min={:.4}) → Reranked (mean={:.4}, max={:.4})",
+            original_mean, min_original, reranked_mean, max_reranked
+        );
     }
 
     // Re-sort by reranker scores
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    tracing::info!("Reranker: Results re-sorted by reranker scores");
 
     Ok(())
 }

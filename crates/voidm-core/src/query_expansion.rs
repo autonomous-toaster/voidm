@@ -379,11 +379,27 @@ impl QueryExpander {
     pub async fn expand(&self, query: &str) -> anyhow::Result<String> {
         // If disabled, return error (no expansion)
         if !self.config.enabled {
+            tracing::debug!("Query expansion: disabled, skipping");
             return Err(anyhow::anyhow!("Query expansion disabled"));
         }
 
+        tracing::info!("Query expansion: Starting basic expansion for query: '{}'", query);
+        tracing::debug!("Query expansion config: enabled={}, model={}", self.config.enabled, self.config.model);
+        
         // Generate expansion - no fallback, propagate errors
-        self.expand_with_timeout(query).await
+        let result = self.expand_with_timeout(query).await;
+        
+        match &result {
+            Ok(expanded) => {
+                tracing::info!("Query expansion: Successfully expanded query");
+                tracing::debug!("Query expansion: Original='{}' | Expanded='{}'", query, expanded);
+            },
+            Err(e) => {
+                tracing::warn!("Query expansion: Failed to expand query: {}", e);
+            }
+        }
+        
+        result
     }
 
     /// Expand a query using grammar-guided generation.
@@ -393,10 +409,26 @@ impl QueryExpander {
     /// Returns the expanded query (original + related terms).
     pub async fn expand_with_grammar(&self, query: &str) -> anyhow::Result<String> {
         if !self.config.enabled {
+            tracing::debug!("Query expansion: grammar-guided disabled at feature level");
             return Err(anyhow::anyhow!("Query expansion disabled"));
         }
 
-        self.expand_with_timeout_and_grammar(query).await
+        tracing::info!("Query expansion (grammar-guided): Starting for query: '{}'", query);
+        tracing::debug!("Query expansion: Using GBNF grammar for structured output");
+        
+        let result = self.expand_with_timeout_and_grammar(query).await;
+        
+        match &result {
+            Ok(expanded) => {
+                tracing::info!("Query expansion (grammar-guided): Successfully expanded");
+                tracing::debug!("Query expansion (grammar-guided): Result='{}'", expanded);
+            },
+            Err(e) => {
+                tracing::warn!("Query expansion (grammar-guided): Failed: {}", e);
+            }
+        }
+        
+        result
     }
 
     /// Expand a query using intent-aware generation.
@@ -406,16 +438,38 @@ impl QueryExpander {
     /// Returns the expanded query (original + related terms).
     pub async fn expand_with_intent(&self, query: &str, intent: Option<&str>) -> anyhow::Result<String> {
         if !self.config.enabled {
+            tracing::debug!("Query expansion: intent-aware disabled at feature level");
             return Err(anyhow::anyhow!("Query expansion disabled"));
         }
 
         // Check if intent-aware expansion is enabled in config
         if !self.config.intent.enabled {
             // Fall back to regular expansion if intent-aware is disabled
+            tracing::debug!("Query expansion: intent-aware disabled in config, falling back to basic expansion");
             return self.expand(query).await;
         }
 
-        self.expand_with_timeout_and_intent(query, intent).await
+        tracing::info!("Query expansion (intent-aware): Starting for query: '{}' with intent: {:?}", query, intent);
+        tracing::debug!(
+            "Query expansion (intent-aware): use_scope_as_fallback={}, default_intent={:?}",
+            self.config.intent.use_scope_as_fallback,
+            self.config.intent.default_intent
+        );
+
+        let result = self.expand_with_timeout_and_intent(query, intent).await;
+        
+        match &result {
+            Ok(expanded) => {
+                tracing::info!("Query expansion (intent-aware): Successfully expanded");
+                tracing::debug!("Query expansion (intent-aware): Result='{}'", expanded);
+            },
+            Err(e) => {
+                tracing::warn!("Query expansion (intent-aware): Failed: {}", e);
+            }
+        }
+        
+        result
+
     }
 
     /// Internal expansion with timeout and grammar guidance.

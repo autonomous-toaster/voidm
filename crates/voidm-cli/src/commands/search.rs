@@ -103,17 +103,23 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
     let mut config = config.clone();
     if args.reranker.is_some() || args.reranker_model.is_some() || args.reranker_top_k.is_some() || args.reranker_blend.is_some() {
         let mut reranker_config = config.search.reranker.take().unwrap_or_default();
+        tracing::info!("CLI: Applying reranker CLI overrides");
         if let Some(enabled) = args.reranker {
             reranker_config.enabled = enabled;
+            tracing::info!("CLI: Reranker override enabled={}", enabled);
         }
         if let Some(model) = args.reranker_model {
+            tracing::info!("CLI: Reranker model override: {} → {}", reranker_config.model, model);
             reranker_config.model = model;
         }
         if let Some(k) = args.reranker_top_k {
+            tracing::info!("CLI: Reranker apply_to_top_k override: {} → {}", reranker_config.apply_to_top_k, k);
             reranker_config.apply_to_top_k = k;
         }
         if let Some(blend) = args.reranker_blend {
-            reranker_config.blend = blend.clamp(0.0, 1.0);
+            let blend_clamped = blend.clamp(0.0, 1.0);
+            tracing::info!("CLI: Reranker blend override: {} → {} (clamped)", blend, blend_clamped);
+            reranker_config.blend = blend_clamped;
         }
         config.search.reranker = Some(reranker_config);
     }
@@ -121,10 +127,13 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
     // Apply CLI query expansion overrides to config
     if args.query_expand.is_some() || args.query_expand_model.is_some() {
         let mut expansion_config = config.search.query_expansion.take().unwrap_or_default();
+        tracing::info!("CLI: Applying query expansion CLI overrides");
         if let Some(enabled) = args.query_expand {
             expansion_config.enabled = enabled;
+            tracing::info!("CLI: Query expansion override enabled={}", enabled);
         }
         if let Some(model) = args.query_expand_model {
+            tracing::info!("CLI: Query expansion model override: {} → {}", expansion_config.model, model);
             expansion_config.model = model;
         }
         config.search.query_expansion = Some(expansion_config);
@@ -132,6 +141,7 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
 
     // Handle cache clearing
     if args.clear_expansion_cache {
+        tracing::warn!("CLI: Query expansion cache clearing requested (feature in development)");
         eprintln!("Query expansion cache clearing requested (feature in development)");
         return Ok(());
     }
@@ -140,19 +150,25 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
     let mut expanded_query = args.query.clone();
     if let Some(expansion_config) = &config.search.query_expansion {
         if expansion_config.enabled {
+            tracing::debug!("CLI: Query expansion is enabled in config");
             let expander = voidm_core::query_expansion::QueryExpander::new(expansion_config.clone());
             
             // Use intent-aware expansion if intent is provided, otherwise use standard expansion
             let expansion_result = if let Some(ref intent) = args.intent {
+                tracing::info!("CLI: Requesting intent-aware query expansion with intent '{}'", intent);
                 expander.expand_with_intent(&args.query, Some(intent.as_str())).await
             } else {
+                tracing::info!("CLI: Requesting standard query expansion");
                 expander.expand(&args.query).await
             };
             
             match expansion_result {
                 Ok(expanded) => {
                     expanded_query = expanded;
+                    tracing::info!("CLI: Query expansion succeeded");
                     if args.verbose {
+                        tracing::info!("CLI (verbose): Original: '{}' | Expanded: '{}' | Model: {} | Intent: {:?}", 
+                                       args.query, expanded_query, expansion_config.model, args.intent);
                         eprintln!("[query-expansion] Original: {}", args.query);
                         eprintln!("[query-expansion] Expanded: {}", expanded_query);
                         eprintln!("[query-expansion] Model: {}", expansion_config.model);
@@ -163,7 +179,7 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
                 }
                 Err(e) => {
                     // Query expansion failed - no fallback, use original query
-                    tracing::warn!("Query expansion failed: {}", e);
+                    tracing::warn!("CLI: Query expansion failed, using original query: {}", e);
                     if args.verbose {
                         eprintln!("[query-expansion] Failed: {} (using original query)", e);
                     }

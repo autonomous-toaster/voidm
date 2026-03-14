@@ -14,6 +14,8 @@ pub struct Config {
     pub insert: InsertConfig,
     #[serde(default)]
     pub enrichment: EnrichmentConfig,
+    #[serde(default)]
+    pub redaction: crate::redactor::RedactionConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,6 +271,7 @@ impl Default for Config {
             search: Default::default(),
             insert: Default::default(),
             enrichment: Default::default(),
+            redaction: Default::default(),
         }
     }
 }

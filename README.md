@@ -12,6 +12,7 @@ Local-first persistent memory for LLM agents.
 - **Query expansion** — automatically expand queries with synonyms and related terms using local LLMs (tinyllama, phi-2); improves search recall
 - **Auto-tagging** — automatically generate tags from memory content using NER + TF + type-specific rules; ~60-65% quality for suggestions
 - **Auto-linking** — automatically link memories that share tags; creates RELATES_TO edges in the knowledge graph
+- **Secrets redaction** — automatically detect and mask sensitive secrets (API keys, DB credentials, JWT tokens); prevents leakage into vector DB
 - **Quality scoring** — automatic scoring (0.0-1.0) for all memories; filtering by quality threshold
 - **Knowledge graph** — link memories with typed directed edges (SUPPORTS, DERIVED_FROM, PART_OF, …)
 - **Ontology layer** — first-class concept nodes, IS-A hierarchies, INSTANCE_OF links, subsumption queries
@@ -123,6 +124,66 @@ This automatic linking:
 - Uses both user-provided and auto-generated tags
 - Creates bidirectional edges for discovery from either direction
 - Can be configured via `insert.auto_link_limit` (default: 5 links per memory)
+
+#### Secrets Redaction
+
+Sensitive secrets (API keys, database credentials, JWT tokens, etc.) are automatically detected and redacted from memory content **before insertion**. This prevents accidental leakage of credentials into the vector database or search results.
+
+```bash
+# Add memory with embedded secrets (they'll be redacted automatically)
+$ voidm add "API key is sk-1a2b3c4d5e6f7g8h9i0j for OpenAI access" --type procedural
+
+# ⚠️  Redacted 1 secret from memory:
+#     - 1 API key in memory.content
+#
+# Memory is stored with: "API key is sk-...0j for OpenAI access"
+
+# All searches will also show the redacted version
+$ voidm search "openai" 
+# Result: "API key is sk-...0j for OpenAI access"
+```
+
+Redaction features:
+- **Automatic detection** — API keys, database connection strings, JWT tokens, bearer tokens, emails
+- **Masking strategy** — preserves first/last chars (e.g., `sk-...6f`) for context
+- **Non-blocking** — redaction failures log warnings but don't prevent memory creation
+- **Comprehensive scope** — redacts content, tags, metadata, and search results
+- **Configurable** — enable/disable per secret type via config
+- **Performance** — <100ms overhead per memory; gracefully degrades if patterns fail
+
+What gets redacted:
+- OpenAI API keys (`sk-...`)
+- AWS access keys (`AKIA...`)
+- Database connections (`mysql://user:pass@host/db` → `mysql://...@host/db`)
+- JWT tokens (`eyJ...`)
+- Bearer tokens
+- Session tokens
+- Email addresses (loose matching)
+
+What does NOT get redacted (out of scope):
+- Credit card numbers
+- SSN/Tax IDs
+- Phone numbers
+- PII in general (focus is secrets only)
+
+Configuration example:
+
+```toml
+# ~/.config/voidm/config.toml
+
+[redaction]
+enabled = true
+
+[redaction.api_keys]
+enabled = true
+strategy = "mask"      # Preserve start/end: sk-...6f
+prefix_length = 3
+suffix_length = 2
+
+[redaction.db_connections]
+enabled = true
+strategy = "mask"      # Special: hides credentials, shows host/db
+```
 
 ### Search
 

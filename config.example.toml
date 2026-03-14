@@ -56,22 +56,43 @@ blend = 0.7
 
 # === QUERY EXPANSION CONFIGURATION ===
 # Optional: Expand queries with synonyms and related terms using small LLMs
+# Improves search recall by automatically generating related search terms
 # Models available:
-#   - phi-2         : 2.7B, 150-250ms latency, excellent quality (recommended)
-#   - tinyllama     : 1.1B, 100-150ms latency, good quality (fallback)
-#   - gpt2-small    : 124M, 50-100ms latency, acceptable quality (baseline)
+#   - phi-2         : 2.7B, excellent quality (recommended for accuracy)
+#   - tinyllama     : 1.1B, good quality + fast (default, recommended for balance)
+#   - gpt2-small    : 124M, fast but lower quality
 #
-# Recommended: Start with phi-2 for best quality
-# Use tinyllama or gpt2-small if latency is critical
+# How it works:
+# 1. User searches for "Docker"
+# 2. System expands to: "Docker, containerization, container images, Docker Compose, Kubernetes"
+# 3. Improved recall: finds more relevant results
+# 4. First use downloads model (~300MB-2.7GB), then caches locally
+# 5. Subsequent queries run in <300ms (inference only)
+#
+# Quality validation ensures results are good:
+# - If model generates poor output, falls back to hand-crafted expansions
+# - Prevents garbage in, garbage out scenarios
+# - Improves over time as prompts are refined
+#
+# Performance:
+# - First use: ~10 minutes (includes download)
+# - Cached queries: <300ms (within timeout)
+# - LRU query cache: <1ms (if same query repeated)
+#
+# Recommended: Start with tinyllama for balance of speed and quality
+# Use phi-2 if maximum search quality is critical
 
 [search.query_expansion]
-enabled = false                       # Enable/disable query expansion
-model = "phi-2"                       # Model: phi-2 (recommended), tinyllama, gpt2-small
+enabled = true                        # Enable/disable query expansion (now enabled by default!)
+model = "tinyllama"                   # Model: tinyllama (default), phi-2, gpt2-small
 cache_size = 1000                     # LRU cache entries for expansions
 timeout_ms = 300                      # Max time to wait for expansion (milliseconds)
 
-# CLI overrides:
-#   voidm search "query" --query-expand true --query-expand-model phi-2 --verbose
+# CLI overrides (these take priority over config):
+#   voidm search "query" --query-expand true                      # Enable despite config
+#   voidm search "query" --query-expand false                     # Disable despite config
+#   voidm search "query" --query-expand-model phi-2 --verbose    # Override model
+#   voidm search "query" --query-expand-timeout 500               # Override timeout (ms)
 
 [insert]
 auto_link_threshold = 0.7

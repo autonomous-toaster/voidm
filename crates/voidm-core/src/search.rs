@@ -82,6 +82,8 @@ pub struct SearchOptions {
     pub neighbor_limit: Option<usize>,
     /// Edge types to traverse. None = use config defaults.
     pub edge_types: Option<Vec<String>>,
+    /// Optional intent/context for query expansion guidance.
+    pub intent: Option<String>,
 }
 
 /// Result of a search, including threshold metadata for empty-result hints.

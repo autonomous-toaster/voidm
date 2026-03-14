@@ -82,6 +82,11 @@ pub struct SearchArgs {
     #[arg(long)]
     pub query_expand_model: Option<String>,
 
+    /// Intent/context for query expansion (e.g., "oauth2", "database-design")
+    /// When provided, guides expansion toward this context. Falls back to scope if not set.
+    #[arg(long)]
+    pub intent: Option<String>,
+
     /// Clear query expansion cache
     #[arg(long)]
     pub clear_expansion_cache: bool,
@@ -136,13 +141,24 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
     if let Some(expansion_config) = &config.search.query_expansion {
         if expansion_config.enabled {
             let expander = voidm_core::query_expansion::QueryExpander::new(expansion_config.clone());
-            match expander.expand(&args.query).await {
+            
+            // Use intent-aware expansion if intent is provided, otherwise use standard expansion
+            let expansion_result = if let Some(ref intent) = args.intent {
+                expander.expand_with_intent(&args.query, Some(intent.as_str())).await
+            } else {
+                expander.expand(&args.query).await
+            };
+            
+            match expansion_result {
                 Ok(expanded) => {
                     expanded_query = expanded;
                     if args.verbose {
                         eprintln!("[query-expansion] Original: {}", args.query);
                         eprintln!("[query-expansion] Expanded: {}", expanded_query);
                         eprintln!("[query-expansion] Model: {}", expansion_config.model);
+                        if let Some(ref intent) = args.intent {
+                            eprintln!("[query-expansion] Intent: {}", intent);
+                        }
                     }
                 }
                 Err(e) => {
@@ -161,7 +177,7 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         query: expanded_query,
         mode,
         limit: args.limit,
-        scope_filter: args.scope,
+        scope_filter: args.scope.clone(),
         type_filter: args.r#type,
         min_score: args.min_score,
         min_quality: args.min_quality,
@@ -171,6 +187,7 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         neighbor_min_score: args.neighbor_min_score,
         neighbor_limit: args.neighbor_limit,
         edge_types: args.edge_types,
+        intent: args.intent.clone(),
     };
 
     let resp = search(

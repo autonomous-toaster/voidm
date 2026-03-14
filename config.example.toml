@@ -87,11 +87,18 @@ enabled = true                        # Enable/disable query expansion (now enab
 model = "tinyllama"                   # Model: tinyllama (default), phi-2, gpt2-small
 timeout_ms = 300                      # Max time to wait for expansion (milliseconds)
 
+# Intent-aware expansion (guides expansion toward specific context)
+[search.query_expansion.intent]
+enabled = true                        # Enable intent-aware query expansion
+use_scope_as_fallback = true          # Use --scope as fallback intent if not explicitly provided
+default_intent = null                 # Optional default intent (e.g., "general", "technical")
+
 # CLI overrides (these take priority over config):
 #   voidm search "query" --query-expand true                      # Enable despite config
 #   voidm search "query" --query-expand false                     # Disable despite config
 #   voidm search "query" --query-expand-model phi-2 --verbose    # Override model
 #   voidm search "query" --query-expand-timeout 500               # Override timeout (ms)
+#   voidm search "query" --intent "oauth2"                        # Provide explicit intent
 
 [insert]
 auto_link_threshold = 0.7

@@ -211,6 +211,16 @@ voidm search "exact-match" --query-expand false
 # Use different model (phi-2 for higher quality, slower)
 voidm search "Docker" --query-expand-model phi-2 --verbose
 
+# Use intent-aware expansion (guides toward a specific context)
+voidm search "auth" --intent "oauth2"
+# Output: [query-expansion] Original: auth
+#         [query-expansion] Intent: oauth2
+#         [query-expansion] Expanded: auth, OAuth2, OpenID Connect, JWT tokens...
+
+# Intent falls back to scope if not explicitly provided (configured)
+voidm search "deployment" --scope work/infra
+# Uses "work/infra" as fallback intent if intent.use_scope_as_fallback = true
+
 # Adjust timeout if needed (default 300ms)
 voidm search "Docker" --query-expand-timeout 500
 ```
@@ -222,14 +232,22 @@ voidm search "Docker" --query-expand-timeout 500
 enabled = true              # Enable/disable expansion globally
 model = "tinyllama"         # tinyllama (default), phi-2 (highest quality), gpt2-small (fastest)
 timeout_ms = 300            # Max wait for expansion (milliseconds)
+
+[search.query_expansion.intent]
+enabled = true              # Enable intent-aware expansion
+use_scope_as_fallback = true # Use --scope as fallback intent
+default_intent = null       # Optional default intent (e.g., "general", "technical")
 ```
 
 **How it works:**
 1. First search downloads the model (~300MB for tinyllama, 2.7GB for phi-2) — one-time, then cached
-2. Query is tokenized with a few-shot prompt matching model's training style
-3. Model generates related terms via greedy decoding
-4. Original query is prepended to expanded terms (enhancement, not replacement)
-5. Expanded query is used for semantic search to find related content
+2. Query is expanded using appropriate template:
+   - With intent: Uses intent-aware template that guides toward specific context
+   - Without intent: Uses general improvement template for broader expansion
+3. If no explicit intent but scope provided and `use_scope_as_fallback=true`, scope becomes intent
+4. Model generates related terms via greedy decoding
+5. Original query is prepended to expanded terms (enhancement, not replacement)
+6. Expanded query is used for semantic search to find related content
 
 **Performance:**
 - First use: ~2-5 minutes (includes model download from HuggingFace Hub)
@@ -241,9 +259,11 @@ timeout_ms = 300            # Max wait for expansion (milliseconds)
 - `gpt2-small` (124M, fastest) — lightweight, acceptable quality
 
 **Notes:**
+- Intent helps focus expansion on domain-specific terminology (e.g., "oauth2" for auth concepts)
 - Expanded query includes the original term to ensure fallback matching works
 - If expansion fails or times out, the original query is used
 - All model inference is local; no data leaves your machine
+- Intent parameter is optional; search works fine without it
 ### MCP server
 
 Expose a small assistant-focused subset of `voidm` as an MCP server over stdio:
@@ -279,6 +299,32 @@ npx -y mcporter call \
   --stdio-arg stdio \
   search_concepts query=docker --output json
 ```
+
+#### MCP Tool: search_memories
+
+The `search_memories` tool supports the following parameters:
+
+- `query` (string, required) — Search query
+- `mode` (string, optional) — Search mode: `hybrid` (default), `semantic`, `keyword`, `fuzzy`, `bm25`
+- `limit` (number, optional) — Maximum results (default: 10)
+- `scope` (string, optional) — Filter by scope prefix (e.g., `work/acme`)
+- `type` (string, optional) — Filter by memory type
+- `min_score` (number, optional) — Minimum score threshold (0-1)
+- `min_quality` (number, optional) — Minimum quality score (0-1)
+- `intent` (string, optional) — Intent/context for query expansion (e.g., `oauth2`, `database-design`)
+
+Example with intent:
+
+```bash
+npx -y mcporter call \
+  --stdio ./target/debug/voidm \
+  --stdio-arg mcp \
+  --stdio-arg --transport \
+  --stdio-arg stdio \
+  search_memories query=auth intent=oauth2 --output json
+```
+
+The intent parameter guides query expansion toward a specific context, finding more relevant results for focused searches.
 
 Filter by quality score (0.0-1.0, added automatically):
 

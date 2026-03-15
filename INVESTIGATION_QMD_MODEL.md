@@ -848,14 +848,7 @@ voidm search "query" --expansion-model gguf
 voidm search "query" --expansion-model onnx  # default
 ```
 
-**MCP Integration**:
-```
-SearchMemoriesParams {
-  query: "...",
-  expansion_model: "gguf",  # NEW parameter
-  ...
-}
-```
+**Note**: MCP integration will NOT expose model selection parameter (kept internal to CLI/config only)
 
 ### 4.4 Success Criteria
 
@@ -880,8 +873,9 @@ All success criteria from Phase 2-3 are met:
 2. Refactor existing ONNX to trait
 3. Implement GGUF version
 4. Add config selection logic
-5. Update CLI/MCP parameters
+5. Update CLI parameters (--expansion-model flag)
 6. Write tests and documentation
+7. Note: MCP will NOT expose model selection (internal only)
 
 **Phase 4b: Release** (Future milestone - v2.X)
 1. Merge to main

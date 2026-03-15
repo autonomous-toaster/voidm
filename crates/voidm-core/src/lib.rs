@@ -14,6 +14,7 @@ pub mod embeddings;
 pub mod migration;
 pub mod semantic_dedup;
 pub mod query_expansion;
+pub mod gguf_query_expander;
 pub mod auto_tagger;
 pub mod tag_linker;
 pub mod redactor;

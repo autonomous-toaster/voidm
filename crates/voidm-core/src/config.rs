@@ -563,7 +563,6 @@ default_edge_types = ["PART_OF"]
 enabled = true
 model = "bge-reranker-base"
 apply_to_top_k = 15
-blend = 0.6
 "#;
         let config: Config = toml::from_str(toml_str).expect("Failed to parse");
         assert!(config.search.reranker.is_some(), "reranker config should be parsed");
@@ -571,7 +570,6 @@ blend = 0.6
             assert_eq!(r.enabled, true);
             assert_eq!(r.model, "bge-reranker-base");
             assert_eq!(r.apply_to_top_k, 15);
-            assert_eq!(r.blend, 0.6);
         }
     }
 
@@ -593,9 +591,8 @@ enabled = true
         let config: Config = toml::from_str(toml_str).expect("Failed to parse");
         if let Some(r) = &config.search.reranker {
             assert_eq!(r.enabled, true);
-            assert_eq!(r.model, "ms-marco-TinyBERT", "should use default model");
-            assert_eq!(r.apply_to_top_k, 10, "should use default top_k");
-            assert_eq!(r.blend, 0.7, "should use default blend");
+            assert_eq!(r.model, "ms-marco-MiniLM-L-6-v2", "should use default model");
+            assert_eq!(r.apply_to_top_k, 15, "should use default top_k");
         }
     }
 }

@@ -1,14 +1,22 @@
 //! Query expansion using small generative LLMs.
 //!
 //! This module expands user search queries with synonyms and related concepts
-//! to improve recall in semantic search. Uses ONNX models (GPT-2, GPT-2-Medium)
-//! with few-shot prompting for consistent, high-quality expansions.
+//! to improve recall in semantic search. Supports both ONNX and GGUF backends.
 //!
 //! Features:
-//! - Config-driven (no code changes to enable)
-//! - Real ONNX inference with no fallback
-//! - Optional feature (disabled by default)
-//! - ONNX model inference with auto-download from HuggingFace
+//! - Config-driven (explicit model names like "tinyllama" or "tobil/qmd-query-expansion-1.7B")
+//! - Auto backend detection (ONNX or GGUF based on model name)
+//! - Optional GGUF support (feature-gated, requires --features gguf)
+//! - Real inference with no fallback
+//! - Auto-download from HuggingFace
+//!
+//! Supported Models:
+//! - "tinyllama": ONNX backend (default)
+//! - "tobil/qmd-query-expansion-1.7B": GGUF backend (opt-in, better quality)
+//!
+//! Backend Auto-Detection:
+//! - Models containing "tobil" or "qmd" → GGUF backend
+//! - All other models → ONNX backend
 //!
 //! Behavior on error:
 //! - If model unavailable: expansion fails with error (no fallback)
@@ -630,6 +638,37 @@ impl QueryExpander {
         let query_str = query.to_string();
         let model = self.config.model.clone();
         
+        // Check if this is a GGUF model that should use the GGUF backend
+        #[cfg(feature = "gguf")]
+        {
+            use crate::gguf_query_expander::GgufQueryExpander;
+            
+            if GgufQueryExpander::should_use_gguf(&model) {
+                tracing::debug!("Query expansion: Routing to GGUF backend for model: '{}'", model);
+                let expander = GgufQueryExpander::new(model);
+                
+                // Apply timeout
+                let timeout_duration = Duration::from_millis(self.config.timeout_ms);
+                let result = timeout(timeout_duration, expander.expand(&query_str))
+                    .await;
+                
+                return match result {
+                    Ok(Ok(expanded)) => Ok(expanded),
+                    Ok(Err(e)) => {
+                        tracing::warn!("GGUF query expansion error: {}", e);
+                        Err(e)
+                    }
+                    Err(_) => {
+                        tracing::warn!("GGUF query expansion inference timed out ({}ms)", self.config.timeout_ms);
+                        Err(anyhow::anyhow!("GGUF query expansion inference timed out"))
+                    }
+                };
+            }
+        }
+        
+        // Default: Use ONNX backend
+        tracing::debug!("Query expansion: Using ONNX backend for model: '{}'", model);
+        
         // FIRST: Ensure model is loaded (outside timeout, can take time for download)
         ensure_llm_model(&model).await?;
         
@@ -643,12 +682,12 @@ impl QueryExpander {
         match result {
             Ok(Ok(expanded)) => Ok(expanded),
             Ok(Err(e)) => {
-                tracing::warn!("Query expansion error: {}", e);
+                tracing::warn!("ONNX query expansion error: {}", e);
                 Err(e)
             }
             Err(_) => {
-                tracing::warn!("Query expansion inference timed out ({}ms)", self.config.timeout_ms);
-                Err(anyhow::anyhow!("Query expansion inference timed out"))
+                tracing::warn!("ONNX query expansion inference timed out ({}ms)", self.config.timeout_ms);
+                Err(anyhow::anyhow!("ONNX query expansion inference timed out"))
             }
         }
     }

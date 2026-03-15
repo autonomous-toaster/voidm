@@ -14,9 +14,13 @@ use serde_json::{json, Value};
 
 pub mod cypher;
 pub mod translator;
+pub mod sqlite;
+pub mod postgres;
 
 pub use cypher::CypherOperation;
-pub use translator::QueryTranslator;
+pub use translator::{QueryTranslator, Neo4jTranslator};
+pub use sqlite::SqliteTranslator;
+pub use postgres::PostgresTranslator;
 
 /// Parameters for query execution
 #[derive(Debug, Clone)]

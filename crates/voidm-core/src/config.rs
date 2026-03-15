@@ -167,7 +167,8 @@ pub struct QueryExpansionConfig {
     /// Enable query expansion (default: false).
     #[serde(default)]
     pub enabled: bool,
-    /// Model name: "phi-2", "tinyllama", or "gpt2-small" (default: "tinyllama").
+    /// Model name: "tinyllama" (ONNX, default) or "tobil/qmd-query-expansion-1.7B" (GGUF, opt-in).
+    /// App auto-detects backend based on model name (models with "tobil" or "qmd" use GGUF).
     #[serde(default = "default_query_expansion_model")]
     pub model: String,
     /// Maximum time to wait for expansion in milliseconds (default: 300).

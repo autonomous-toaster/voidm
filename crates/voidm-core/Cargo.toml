@@ -32,8 +32,7 @@ ort              = { version = "2.0.0-rc.10" }
 hf-hub           = { version = "0.5", features = ["tokio"] }
 tokenizers       = { version = "0.22", default-features = false, features = ["onig"] }
 neo4rs           = "0.7"
-candle-core      = { version = "0.4", optional = true }
-candle-transformers = { version = "0.4", optional = true }
+llama-gguf       = { version = "0.13", optional = true, features = ["huggingface"] }
 
 [[bin]]
 name = "onnx_debug"
@@ -45,4 +44,4 @@ path = "src/bin/gguf_bench.rs"
 
 [features]
 default = []
-gguf = ["candle-core", "candle-transformers"]
+gguf = ["llama-gguf"]

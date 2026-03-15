@@ -19,10 +19,13 @@ use anyhow::{Context, Result, anyhow};
 #[cfg(feature = "gguf")]
 use std::path::PathBuf;
 
+// Struct definition for both feature and non-feature cases
 /// GGUF-based query expander for qmd model
-#[cfg(feature = "gguf")]
 pub struct GgufQueryExpander {
+    #[cfg(feature = "gguf")]
     model_name: String,
+    #[cfg(not(feature = "gguf"))]
+    _private: (),
 }
 
 #[cfg(feature = "gguf")]

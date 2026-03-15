@@ -318,6 +318,13 @@ apply_to_top_k = 15               # Rerank top-15 results
 - Use `ms-marco-MiniLM-L-6-v2` as default (recommended)
 - Keep disabled by default for speed-critical applications
 
+**Important Limitations**:
+- Cross-encoders are trained on SHORT passages (50-300 chars), not full documents
+- For long memories (1000+ chars), reranking may degrade relevance scores
+- This is a fundamental architectural limitation, not a bug
+- **Recommendation**: Keep reranking disabled if searching on long-form documents
+- If enabled on long documents, expect lower scores but still generally correct ordering
+
 **Note**: Reranking works on the initial search results. For low initial scores, improve query expansion instead.
 
 

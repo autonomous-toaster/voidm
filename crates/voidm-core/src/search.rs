@@ -518,14 +518,21 @@ async fn apply_reranker(
     tracing::info!("Reranker: Model '{}' loaded successfully", config.model);
     
     // Extract documents to rerank (only top-k)
-    let docs_to_rerank: Vec<&str> = results[..apply_to_k]
+    // CRITICAL: Cross-encoders work best on SHORT passages (100-300 chars), not full documents.
+    // Strategy: For long documents, extract the first ~400 chars to preserve context while
+    // avoiding the pathological case of truncating away all query-relevant content.
+    // This is a compromise: cross-encoders aren't designed for full-doc reranking, but this
+    // helps with typical memory content without completely losing relevance signals.
+    const RERANKER_MAX_DOC_LEN: usize = 400;
+    let docs_to_rerank: Vec<String> = results[..apply_to_k]
         .iter()
-        .map(|r| r.content.as_str())
+        .map(|r| safe_truncate(&r.content, RERANKER_MAX_DOC_LEN).to_string())
         .collect();
+    let docs_to_rerank_refs: Vec<&str> = docs_to_rerank.iter().map(|s| s.as_str()).collect();
 
     tracing::debug!("Reranker: Starting reranking of top-{} results (from {} total)", apply_to_k, results.len());
     
-    let reranked = reranker.rerank(query, &docs_to_rerank)?;
+    let reranked = reranker.rerank(query, &docs_to_rerank_refs)?;
     tracing::info!("Reranker: Successfully reranked {} documents", reranked.len());
 
     // Create a mapping of original_index -> reranker_score

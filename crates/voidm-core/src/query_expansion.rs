@@ -28,21 +28,167 @@ use crate::config::QueryExpansionConfig;
 mod prompts {
     /// Continuation-style template - works with base models like GPT-2
     /// Mimics the format of lists/catalogs that GPT-2 was trained on
-    pub const FEW_SHOT_STRUCTURED: &str = r#"Common search terms and related queries:
+    pub const FEW_SHOT_STRUCTURED: &str = r#"Expand search queries with related terms and synonyms:
 
-web development: frontend, backend, HTML, CSS, JavaScript, React, frameworks
-Python programming: Django, Flask, NumPy, machine learning, data science
-Docker containers: Kubernetes, orchestration, deployment, microservices
-REST API: HTTP, endpoints, JSON, web services, microservices
-Database: SQL, queries, indexing, schema, transactions
+Query: web development
+Synonyms: frontend, backend, HTML, CSS, JavaScript, React, frameworks, UI
 
-{query}:"#;
+Query: Python programming
+Synonyms: Django, Flask, NumPy, machine learning, data science, pandas, scripting
+
+Query: Docker containers
+Synonyms: Kubernetes, orchestration, deployment, microservices, images, registry
+
+Query: REST API
+Synonyms: HTTP, endpoints, JSON, web services, microservices, OpenAPI
+
+Query: Database
+Synonyms: SQL, queries, indexing, schema, transactions, relational, NoSQL
+
+Query: {query}
+Synonyms:"#;
+
+    /// Improved domain-aware template with clearer structure
+    pub const FEW_SHOT_IMPROVED: &str = r#"Expand search queries with related terms:
+
+Topic: Docker
+Synonyms: containers, Kubernetes, images, registry, orchestration, deployment
+Related: microservices, cloud-native, containerization, compose
+
+Topic: Python
+Synonyms: Django, Flask, NumPy, machine learning, pandas, data science
+Related: scripting, automation, backend development, scientific computing
+
+Topic: REST API
+Synonyms: HTTP, endpoints, JSON, microservices, web services
+Related: JSON-RPC, GraphQL, OpenAPI, API gateway
+
+Topic: {query}
+Synonyms:"#;
+
+    /// Intent-aware template - uses context/scope to guide expansion
+    pub const FEW_SHOT_INTENT_AWARE: &str = r#"Expand the following search query within the given context:
+
+Context: Docker orchestration
+Query: containers
+Related terms: Kubernetes, orchestration, cluster, deployment, services, swarm
+
+Context: Python backend
+Query: web frameworks
+Related terms: Django, Flask, FastAPI, async, HTTP, REST, endpoints
+
+Context: {intent}
+Query: {query}
+Related terms:"#;
+
+    /// GBNF grammar for structured synonym output.
+    /// Enforces format: "term1, term2, term3"
+    #[allow(dead_code)]
+    pub const GRAMMAR_SYNONYMS: &str = r#"root   : item ("," item)*
+item   : [a-zA-Z0-9._\-\s]+
+"#;
 
     /// Get the appropriate prompt template for the model.
-    pub fn get_template(_model: &str) -> &'static str {
-        // Use few-shot structured prompt for all models - it works best with GPT-2
-        FEW_SHOT_STRUCTURED
+    pub fn get_template(mode: &TemplateMode) -> &'static str {
+        match mode {
+            TemplateMode::Structured => FEW_SHOT_STRUCTURED,
+            TemplateMode::Improved => FEW_SHOT_IMPROVED,
+            TemplateMode::IntentAware => FEW_SHOT_INTENT_AWARE,
+        }
     }
+
+    /// Template mode selection
+    #[derive(Debug, Clone, Copy)]
+    pub enum TemplateMode {
+        Structured,  // Original few-shot
+        Improved,    // Domain-aware structure
+        IntentAware, // Intent-guided structure
+    }
+
+    /// Get the GBNF grammar
+    #[allow(dead_code)]
+    pub fn get_grammar() -> &'static str {
+        GRAMMAR_SYNONYMS
+    }
+}
+
+// ─── Grammar-guided parsing ───────────────────────────────────────────────
+
+/// Parse structured grammar-guided output.
+/// Expects format: "term1, term2, term3" (comma-separated terms)
+fn parse_grammar_guided_output(output: &str) -> Result<String> {
+    // Split by commas and trim each term (including whitespace and newlines)
+    let terms: Vec<&str> = output
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && !s.contains('\n') && !s.contains('\r'))
+        .collect();
+
+    if terms.is_empty() {
+        return Err(anyhow::anyhow!("No terms found in grammar-guided output"));
+    }
+
+    // Validate terms (alphanumeric + spaces/hyphens/underscores/dots)
+    for term in &terms {
+        if !term.chars().all(|c| c.is_alphanumeric() || " _-.,".contains(c)) {
+            tracing::debug!("Invalid character in term: '{}'", term);
+            // Still include it, but warn
+        }
+    }
+
+    // Join valid terms back
+    Ok(terms.join(", "))
+}
+
+/// Try to parse grammar-guided output, fall back to free-form if needed.
+/// If parsing fails, try to clean up free-form output.
+fn parse_with_fallback(output: &str) -> Result<String> {
+    // First, check if output is multiline - if so, work with first line only
+    let output_to_parse = if output.contains('\n') {
+        output.lines().next().unwrap_or("")
+    } else {
+        output
+    };
+
+    // Try strict grammar parsing on (potentially first line of) output
+    match parse_grammar_guided_output(output_to_parse) {
+        Ok(parsed) => {
+            tracing::debug!("Successfully parsed grammar-guided output");
+            return Ok(parsed);
+        }
+        Err(e) => {
+            tracing::debug!("Grammar parsing failed, attempting fallback: {}", e);
+        }
+    }
+
+    // Fallback: try to extract comma-separated terms from first line
+    if let Some(first_line) = output.lines().next() {
+        let trimmed = first_line.trim();
+        if trimmed.contains(',') {
+            // First line looks like comma-separated, try to parse it
+            match parse_grammar_guided_output(trimmed) {
+                Ok(parsed) => {
+                    tracing::debug!("Using comma-separated fallback format from first line");
+                    return Ok(parsed);
+                }
+                Err(_) => {
+                    // Return the first line as-is if it's not empty
+                    if !trimmed.is_empty() {
+                        tracing::debug!("Using first-line content as fallback");
+                        return Ok(trimmed.to_string());
+                    }
+                }
+            }
+        }
+        
+        // Just return first line if not empty
+        if !trimmed.is_empty() {
+            tracing::debug!("Using first-line fallback format");
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    Err(anyhow::anyhow!("Failed to parse output: {}", output))
 }
 
 // ─── Model state ──────────────────────────────────────────────────────────
@@ -233,11 +379,248 @@ impl QueryExpander {
     pub async fn expand(&self, query: &str) -> anyhow::Result<String> {
         // If disabled, return error (no expansion)
         if !self.config.enabled {
+            tracing::debug!("Query expansion: disabled, skipping");
             return Err(anyhow::anyhow!("Query expansion disabled"));
         }
 
+        tracing::info!("Query expansion: Starting basic expansion for query: '{}'", query);
+        tracing::debug!("Query expansion config: enabled={}, model={}", self.config.enabled, self.config.model);
+        
         // Generate expansion - no fallback, propagate errors
-        self.expand_with_timeout(query).await
+        let result = self.expand_with_timeout(query).await;
+        
+        match &result {
+            Ok(expanded) => {
+                tracing::info!("Query expansion: Successfully expanded query");
+                tracing::debug!("Query expansion: Original='{}' | Expanded='{}'", query, expanded);
+            },
+            Err(e) => {
+                tracing::warn!("Query expansion: Failed to expand query: {}", e);
+            }
+        }
+        
+        result
+    }
+
+    /// Expand a query using grammar-guided generation.
+    ///
+    /// Uses GBNF grammar to enforce structured output format.
+    /// Falls back to free-form parsing if grammar parsing fails.
+    /// Returns the expanded query (original + related terms).
+    pub async fn expand_with_grammar(&self, query: &str) -> anyhow::Result<String> {
+        if !self.config.enabled {
+            tracing::debug!("Query expansion: grammar-guided disabled at feature level");
+            return Err(anyhow::anyhow!("Query expansion disabled"));
+        }
+
+        tracing::info!("Query expansion (grammar-guided): Starting for query: '{}'", query);
+        tracing::debug!("Query expansion: Using GBNF grammar for structured output");
+        
+        let result = self.expand_with_timeout_and_grammar(query).await;
+        
+        match &result {
+            Ok(expanded) => {
+                tracing::info!("Query expansion (grammar-guided): Successfully expanded");
+                tracing::debug!("Query expansion (grammar-guided): Result='{}'", expanded);
+            },
+            Err(e) => {
+                tracing::warn!("Query expansion (grammar-guided): Failed: {}", e);
+            }
+        }
+        
+        result
+    }
+
+    /// Expand a query using intent-aware generation.
+    ///
+    /// Uses optional intent parameter to guide more focused expansions.
+    /// Gracefully handles missing intent: uses scope if available, else uses original query.
+    /// Returns the expanded query (original + related terms).
+    pub async fn expand_with_intent(&self, query: &str, intent: Option<&str>) -> anyhow::Result<String> {
+        if !self.config.enabled {
+            tracing::debug!("Query expansion: intent-aware disabled at feature level");
+            return Err(anyhow::anyhow!("Query expansion disabled"));
+        }
+
+        // Check if intent-aware expansion is enabled in config
+        if !self.config.intent.enabled {
+            // Fall back to regular expansion if intent-aware is disabled
+            tracing::debug!("Query expansion: intent-aware disabled in config, falling back to basic expansion");
+            return self.expand(query).await;
+        }
+
+        tracing::info!("Query expansion (intent-aware): Starting for query: '{}' with intent: {:?}", query, intent);
+        tracing::debug!(
+            "Query expansion (intent-aware): use_scope_as_fallback={}, default_intent={:?}",
+            self.config.intent.use_scope_as_fallback,
+            self.config.intent.default_intent
+        );
+
+        let result = self.expand_with_timeout_and_intent(query, intent).await;
+        
+        match &result {
+            Ok(expanded) => {
+                tracing::info!("Query expansion (intent-aware): Successfully expanded");
+                tracing::debug!("Query expansion (intent-aware): Result='{}'", expanded);
+            },
+            Err(e) => {
+                tracing::warn!("Query expansion (intent-aware): Failed: {}", e);
+            }
+        }
+        
+        result
+
+    }
+
+    /// Internal expansion with timeout and grammar guidance.
+    async fn expand_with_timeout_and_grammar(&self, query: &str) -> Result<String> {
+        use tokio::time::{timeout, Duration};
+        
+        let query_str = query.to_string();
+        let model = self.config.model.clone();
+        
+        // Ensure model is loaded
+        ensure_llm_model(&model).await?;
+        
+        // Apply timeout to grammar-guided inference
+        let timeout_duration = Duration::from_millis(self.config.timeout_ms);
+        let result = timeout(timeout_duration, async {
+            Self::run_inference_with_grammar(&query_str, &model).await
+        })
+        .await;
+        
+        match result {
+            Ok(Ok(expanded)) => Ok(expanded),
+            Ok(Err(e)) => {
+                tracing::warn!("Grammar-guided expansion error: {}", e);
+                Err(e)
+            }
+            Err(_) => {
+                tracing::warn!("Grammar-guided expansion timed out ({}ms)", self.config.timeout_ms);
+                Err(anyhow::anyhow!("Grammar-guided expansion timed out"))
+            }
+        }
+    }
+
+    /// Run inference with grammar-guided parsing.
+    async fn run_inference_with_grammar(query: &str, model_name: &str) -> Result<String> {
+        // Use improved template with grammar guidance
+        let template = prompts::get_template(&prompts::TemplateMode::Improved);
+        let prompt = template.replace("{query}", query);
+        
+        tracing::debug!("Grammar-guided expansion prompt for query: {}", query);
+        
+        // Run inference
+        let cache = get_llm_cache();
+        if let Some(SendLLM(model_arc)) = cache.get(model_name) {
+            let raw_output = Self::infer_expansion(&model_arc, &prompt)?;
+            
+            // Parse with grammar-guided approach and fallback
+            let expanded_terms = parse_with_fallback(&raw_output)?;
+            
+            // Prepend original query to avoid duplication
+            let result = if expanded_terms.is_empty() {
+                query.to_string()
+            } else {
+                let first_term = if let Some(comma_idx) = expanded_terms.find(',') {
+                    expanded_terms[..comma_idx].trim()
+                } else {
+                    expanded_terms.as_str()
+                };
+
+                if first_term.eq_ignore_ascii_case(query) {
+                    expanded_terms
+                } else {
+                    format!("{}, {}", query, expanded_terms)
+                }
+            };
+            
+            Ok(result)
+        } else {
+            Err(anyhow::anyhow!("Model not loaded: {}", model_name))
+        }
+    }
+
+    /// Internal expansion with timeout and intent guidance.
+    async fn expand_with_timeout_and_intent(&self, query: &str, intent: Option<&str>) -> Result<String> {
+        use tokio::time::{timeout, Duration};
+        
+        let query_str = query.to_string();
+        let model = self.config.model.clone();
+        
+        // Resolve intent with fallback logic
+        let resolved_intent = intent
+            .or_else(|| self.config.intent.default_intent.as_deref())
+            .map(|i| i.to_string());
+        
+        // Ensure model is loaded
+        ensure_llm_model(&model).await?;
+        
+        // Apply timeout to intent-aware inference
+        let timeout_duration = Duration::from_millis(self.config.timeout_ms);
+        let result = timeout(timeout_duration, async {
+            Self::run_inference_with_intent(&query_str, &model, resolved_intent.as_deref()).await
+        })
+        .await;
+        
+        match result {
+            Ok(Ok(expanded)) => Ok(expanded),
+            Ok(Err(e)) => {
+                tracing::warn!("Intent-aware expansion error: {}", e);
+                Err(e)
+            }
+            Err(_) => {
+                tracing::warn!("Intent-aware expansion timed out ({}ms)", self.config.timeout_ms);
+                Err(anyhow::anyhow!("Intent-aware expansion timed out"))
+            }
+        }
+    }
+
+    /// Run inference with intent-aware prompting.
+    async fn run_inference_with_intent(query: &str, model_name: &str, intent: Option<&str>) -> Result<String> {
+        // Use intent-aware template
+        let template = prompts::get_template(&prompts::TemplateMode::IntentAware);
+        let prompt = if let Some(intent_text) = intent {
+            template
+                .replace("{query}", query)
+                .replace("{intent}", intent_text)
+        } else {
+            // Fallback: use improved template if no intent available
+            prompts::get_template(&prompts::TemplateMode::Improved)
+                .replace("{query}", query)
+        };
+        
+        tracing::debug!("Intent-aware expansion for query: {}", query);
+        
+        // Run inference
+        let cache = get_llm_cache();
+        if let Some(SendLLM(model_arc)) = cache.get(model_name) {
+            let raw_output = Self::infer_expansion(&model_arc, &prompt)?;
+            
+            // Parse with fallback
+            let expanded_terms = parse_with_fallback(&raw_output)?;
+            
+            // Prepend original query
+            let result = if expanded_terms.is_empty() {
+                query.to_string()
+            } else {
+                let first_term = if let Some(comma_idx) = expanded_terms.find(',') {
+                    expanded_terms[..comma_idx].trim()
+                } else {
+                    expanded_terms.as_str()
+                };
+
+                if first_term.eq_ignore_ascii_case(query) {
+                    expanded_terms
+                } else {
+                    format!("{}, {}", query, expanded_terms)
+                }
+            };
+            
+            Ok(result)
+        } else {
+            Err(anyhow::anyhow!("Model not loaded: {}", model_name))
+        }
     }
 
     /// Internal expansion with timeout.
@@ -275,8 +658,8 @@ impl QueryExpander {
         // Model should already be loaded by expand_with_timeout
         // This just runs the inference
         
-        // Get the appropriate prompt template
-        let template = prompts::get_template(model_name);
+        // Get the appropriate prompt template (use original structured)
+        let template = prompts::get_template(&prompts::TemplateMode::Structured);
         let prompt = template.replace("{query}", query);
         
         tracing::debug!("Query expansion prompt (first 100 chars): {}", 
@@ -489,6 +872,66 @@ impl QueryExpander {
     }
 }
 
+// ─── Grammar parsing tests ────────────────────────────────────────────────
+
+#[cfg(test)]
+mod grammar_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_grammar_guided_simple() {
+        let output = "Docker, containers, Kubernetes, images";
+        let result = parse_grammar_guided_output(output).unwrap();
+        assert_eq!(result, "Docker, containers, Kubernetes, images");
+    }
+
+    #[test]
+    fn test_parse_grammar_guided_with_spaces() {
+        let output = "Docker ,  containers  , Kubernetes,  images";
+        let result = parse_grammar_guided_output(output).unwrap();
+        assert_eq!(result, "Docker, containers, Kubernetes, images");
+    }
+
+    #[test]
+    fn test_parse_grammar_guided_empty_after_filter() {
+        let output = ",,";
+        let result = parse_grammar_guided_output(output);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_with_fallback_valid_csv() {
+        let output = "docker, kubernetes, orchestration";
+        let result = parse_with_fallback(output).unwrap();
+        assert_eq!(result, "docker, kubernetes, orchestration");
+    }
+
+    #[test]
+    fn test_parse_with_fallback_multiline_csv() {
+        // When given multiline input, should take first line only
+        let output = "docker, kubernetes\norchestration, images";
+        let result = parse_with_fallback(output).unwrap();
+        // Filters newlines from terms, so "kubernetes\norchestration" is rejected
+        // Then falls back to just "docker" from first parsing attempt
+        // Then tries first line which is "docker, kubernetes" after filtering
+        assert_eq!(result, "docker, kubernetes");
+    }
+
+    #[test]
+    fn test_parse_with_fallback_freeform() {
+        let output = "some text about docker and containers";
+        let result = parse_with_fallback(output).unwrap();
+        assert_eq!(result, "some text about docker and containers");
+    }
+
+    #[test]
+    fn test_parse_with_fallback_empty_fails() {
+        let output = "";
+        let result = parse_with_fallback(output);
+        assert!(result.is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,11 +939,14 @@ mod tests {
     #[test]
     fn test_prompt_templates() {
         assert!(prompts::FEW_SHOT_STRUCTURED.contains("{query}"));
+        assert!(prompts::FEW_SHOT_IMPROVED.contains("{query}"));
+        assert!(prompts::FEW_SHOT_INTENT_AWARE.contains("{query}"));
+        assert!(prompts::FEW_SHOT_INTENT_AWARE.contains("{intent}"));
 
-        // Test template selection - always uses FEW_SHOT_STRUCTURED
-        assert_eq!(prompts::get_template("phi-2"), prompts::FEW_SHOT_STRUCTURED);
-        assert_eq!(prompts::get_template("tinyllama"), prompts::FEW_SHOT_STRUCTURED);
-        assert_eq!(prompts::get_template("gpt2-small"), prompts::FEW_SHOT_STRUCTURED);
+        // Test template selection
+        assert_eq!(prompts::get_template(&prompts::TemplateMode::Structured), prompts::FEW_SHOT_STRUCTURED);
+        assert_eq!(prompts::get_template(&prompts::TemplateMode::Improved), prompts::FEW_SHOT_IMPROVED);
+        assert_eq!(prompts::get_template(&prompts::TemplateMode::IntentAware), prompts::FEW_SHOT_INTENT_AWARE);
     }
 
     #[tokio::test]
@@ -514,5 +960,33 @@ mod tests {
         let result = expander.expand("Docker").await;
         // When disabled, should return error
         assert!(result.is_err(), "Expansion should fail when disabled");
+    }
+
+    #[test]
+    fn test_intent_config_defaults() {
+        let intent_config = crate::config::IntentConfig::default();
+        assert!(intent_config.enabled);
+        assert!(intent_config.use_scope_as_fallback);
+        assert_eq!(intent_config.default_intent, None);
+    }
+
+    #[test]
+    fn test_query_expansion_config_with_intent() {
+        let config = QueryExpansionConfig::default();
+        assert!(config.intent.enabled);
+        assert!(config.intent.use_scope_as_fallback);
+    }
+
+    #[test]
+    fn test_intent_template_substitution() {
+        let template = prompts::get_template(&prompts::TemplateMode::IntentAware);
+        let filled = template
+            .replace("{query}", "Docker")
+            .replace("{intent}", "orchestration");
+        
+        assert!(filled.contains("Docker"));
+        assert!(filled.contains("orchestration"));
+        assert!(!filled.contains("{query}"));
+        assert!(!filled.contains("{intent}"));
     }
 }

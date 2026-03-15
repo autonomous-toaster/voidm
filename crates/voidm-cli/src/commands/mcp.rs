@@ -214,6 +214,7 @@ impl VoidmMcpServer {
             neighbor_min_score: None,
             neighbor_limit: None,
             edge_types: None,
+            intent: params.intent,
         };
 
         let resp = search(
@@ -457,6 +458,8 @@ struct SearchMemoriesParams {
     min_score: Option<f32>,
     #[serde(default)]
     min_quality: Option<f32>,
+    #[serde(default)]
+    intent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

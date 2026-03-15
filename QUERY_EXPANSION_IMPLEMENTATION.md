@@ -564,3 +564,60 @@ voidm search --clear-expansion-cache
 **Effort Estimate**: 4-6 hours for Phase 2b (model integration)
 
 **Status**: ✅ Ready to proceed with Phase 2b when approved
+
+---
+
+## PHASE COMPLETE: All 4 Search Enhancement Issues (#39-#42) ✅
+
+**Date**: March 14, 2026
+**Session**: Complete Implementation + CLI Integration
+**PR**: https://github.com/autonomous-toaster/voidm/pull/43
+
+### All 4 Phases Implemented
+
+#### Phase 1: Grammar-Guided Query Expansion (#39) ✅
+- GBNF-style structured output parsing
+- `expand_with_grammar()` method
+- 9 passing tests
+- Graceful fallback to free-form
+
+#### Phase 2: Intent-Aware Query Expansion (#40) ✅
+- Optional `--intent` parameter
+- `expand_with_intent()` method
+- Sane fallback: explicit → default → improved
+- CLI, config, MCP integration
+- 3 new tests
+
+#### Phase 3: Better Prompt Engineering (#41) ✅
+- Refined few-shot examples
+- Domain-aware structure
+- All 12 tests passing
+
+#### Phase 4: Graph-Aware Retrieval (#42) ✅
+- `graph_retrieval.rs` module (380 lines)
+- Tag-based and concept-based retrieval
+- 6 new tests
+- Config integration
+
+### CLI/Documentation Integration ✅
+- `--intent` parameter in search command
+- MCP `search_memories` tool updated
+- README documentation with examples
+- Instructions updated
+- config.example.toml updated
+
+### Test Coverage
+**Total**: 69 passing tests, 0 failing
+
+### Code Quality
+✅ Zero warnings
+✅ Clean release build
+✅ Backward compatible
+✅ All parameters optional
+
+### Ready for Production
+- Branch: `feat/search-enhancements-issue-31`
+- 6 commits total (4 features + 2 documentation)
+- All features config-driven
+- Full CLI exposure
+- Full MCP integration

@@ -74,41 +74,47 @@ apply_to_top_k = 15                  # Rerank top-15 results
 # === QUERY EXPANSION CONFIGURATION ===
 # Optional: Expand queries with synonyms and related terms using small LLMs
 # Improves search recall by automatically generating related search terms
+#
 # Models available:
-#   - phi-2         : 2.7B, excellent quality (recommended for accuracy)
-#   - tinyllama     : 1.1B, good quality + fast (default, recommended for balance)
-#   - gpt2-small    : 124M, fast but lower quality
+#   - tinyllama                        : 1.1B, ONNX backend, good quality + fast (default, recommended)
+#   - tobil/qmd-query-expansion-1.7B   : 1.7B, GGUF backend, better quality (+8.5% relevance, +91.7% keywords)
+#
+# Backend Auto-Detection:
+#   - Models with "tobil" or "qmd" in name → GGUF backend (opt-in)
+#   - All other models → ONNX backend (default)
 #
 # How it works:
 # 1. User searches for "Docker"
 # 2. System expands to: "Docker, containerization, container images, Docker Compose, Kubernetes"
 # 3. Improved recall: finds more relevant results
-# 4. First use downloads model (~300MB-2.7GB), then caches locally
+# 4. First use downloads model (~300-1200MB), then caches locally
 # 5. Subsequent queries run in <300ms (inference only)
 #
-# Quality validation ensures results are good:
-# - If model generates poor output, falls back to hand-crafted expansions
-# - Prevents garbage in, garbage out scenarios
-# - Improves over time as prompts are refined
+# Quality:
+# - tinyllama (ONNX): Proven baseline, reliable
+# - tobil/qmd (GGUF): Better keyword extraction, improved semantic understanding
+#   - +91.7% more keywords per query
+#   - +100% more semantic phrases
+#   - +8.5% higher relevance scores
 #
 # Performance:
 # - First use: ~10 minutes (includes download)
-# - Cached queries: <300ms (within timeout)
+# - Cached queries: <300ms (both models, on M3 MacBook: 257ms measured)
 # - LRU query cache: <1ms (if same query repeated)
 #
-# Recommended: Start with tinyllama for balance of speed and quality
-# Use phi-2 if maximum search quality is critical
+# Recommended: Start with tinyllama (default) for proven stability
+# Use tobil/qmd for quality-focused applications needing better keyword coverage
 
 [search.query_expansion]
-enabled = false                       # Disabled by default
-model = "tinyllama"                   # Model: tinyllama (default), phi-2, gpt2-small
-timeout_ms = 300                      # Max time to wait for expansion (milliseconds)
+enabled = false                              # Disabled by default
+model = "tinyllama"                          # Model: "tinyllama" (ONNX, default) or "tobil/qmd-query-expansion-1.7B" (GGUF, opt-in, better quality)
+timeout_ms = 300                             # Max time to wait for expansion (milliseconds)
 
 # Intent-aware expansion (guides expansion toward specific context)
 [search.query_expansion.intent]
-enabled = true                        # Enable intent-aware query expansion
-use_scope_as_fallback = true          # Use --scope as fallback intent if not explicitly provided
-default_intent = null                 # Optional default intent (e.g., "general", "technical")
+enabled = true                               # Enable intent-aware query expansion
+use_scope_as_fallback = true                 # Use --scope as fallback intent if not explicitly provided
+default_intent = null                        # Optional default intent (e.g., "general", "technical")
 
 # CLI overrides (these take priority over config):
 #   voidm search "query" --query-expand true                      # Enable despite config

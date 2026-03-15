@@ -839,13 +839,21 @@ Evidence Chain:
 ```toml
 [search.query_expansion]
 enabled = false
-model = "onnx"  # NEW: "onnx" or "gguf"
+# Explicit model identifier - app auto-selects backend (ONNX or GGUF)
+model = "tinyllama"                                    # DEFAULT: ONNX backend
+# model = "tobil/qmd-query-expansion-1.7B"            # ALTERNATIVE: GGUF backend
 ```
+
+**How it Works**:
+- App recognizes "tinyllama" → uses ONNX backend (default)
+- App recognizes "tobil/qmd-query-expansion-1.7B" → uses GGUF backend
+- Auto-detection: No explicit backend selection needed in config
+- Clean model names that reflect actual HuggingFace repositories
 
 **CLI Usage**:
 ```bash
-voidm search "query" --expansion-model gguf
-voidm search "query" --expansion-model onnx  # default
+voidm search "query" --expansion-model "tobil/qmd-query-expansion-1.7B"
+voidm search "query" --expansion-model "tinyllama"  # default
 ```
 
 **Note**: MCP integration will NOT expose model selection parameter (kept internal to CLI/config only)
@@ -868,12 +876,39 @@ All success criteria from Phase 2-3 are met:
 
 ### 4.5 Implementation Roadmap
 
+### 4.5 Implementation Architecture
+
+**Model-Agnostic Design with Explicit Model Names**:
+
+1. **Config Structure**:
+   - Store full model identifier: "tinyllama" or "tobil/qmd-query-expansion-1.7B"
+   - App detects backend automatically based on model name
+   - No explicit "backend" field needed (cleaner config)
+
+2. **Backend Auto-Detection Logic**:
+   ```
+   if model_name.contains("tobil") || model_name.contains("qmd") {
+       use_gguf_backend()
+   } else {
+       use_onnx_backend()
+   }
+   ```
+
+3. **Supported Models**:
+   - "tinyllama" → ONNX backend (default)
+   - "tobil/qmd-query-expansion-1.7B" → GGUF backend
+
+4. **Future Extensibility**:
+   - Easy to add new models with auto-detection
+   - Clear model names aligned with HuggingFace
+   - Backend logic in one place (query_expansion.rs)
+
 **Phase 4a: Core Integration** (Future PR - 2-3 hours)
-1. Create QueryExpander abstraction trait
-2. Refactor existing ONNX to trait
-3. Implement GGUF version
-4. Add config selection logic
-5. Update CLI parameters (--expansion-model flag)
+1. Refactor existing ONNX code to accept explicit model names
+2. Add backend detection based on model identifier
+3. Implement GGUF version using llama-gguf
+4. Add config selection logic (model name → backend)
+5. Update CLI parameters (--expansion-model with model names)
 6. Write tests and documentation
 7. Note: MCP will NOT expose model selection (internal only)
 

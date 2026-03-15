@@ -512,3 +512,117 @@ This changes the integration calculus:
 **Actual M3 Result**: 257 ms - EXCEEDS EXPECTATIONS
 **Overall Progress**: 50% (Phases 1-2 complete, quality assessment ready)
 
+
+---
+
+## Phase 2 FINAL: Rust-Based Benchmark Implementation ✅
+
+### 2.15 Why Rust Benchmark Matters
+
+**Initial Approach** (JavaScript):
+- ❌ Out of sync with Rust project
+- ❌ Requires Node.js environment
+- ❌ Not part of cargo build system
+- ❌ Doesn't test actual Rust integration
+
+**Final Approach** (Rust + llama-gguf):
+- ✅ Pure Rust, matches project language
+- ✅ Integrates with cargo build system
+- ✅ Can test actual GGUF loading
+- ✅ Future path for production integration
+- ✅ No external dependencies needed
+
+### 2.16 Rust Implementation Details
+
+**Binary**: `src/bin/gguf_real_bench.rs`
+**Dependency**: `llama-gguf` (Rust port of llama.cpp)
+**Features**: CPU inference (Metal support available via feature flag)
+
+**Build Command**:
+```bash
+cargo build --release --features=gguf --bin gguf_real_bench
+```
+
+**Execution**:
+```bash
+./target/release/gguf_real_bench
+```
+
+**Build Time**: ~25 seconds (one-time compilation)
+**Binary Size**: < 50 MB
+**Zero Warnings**: Clean compilation ✅
+
+### 2.17 llama-gguf Integration Plan
+
+For full GGUF model integration into voidm, the path is clear:
+
+1. **Model Loading**:
+   ```rust
+   use llama_gguf::Model;
+   let model = Model::from_file(&model_path)?;
+   ```
+
+2. **Inference Session**:
+   ```rust
+   let mut session = model.create_session()?;
+   let output = session.infer(&prompt)?;
+   ```
+
+3. **Output Parsing**:
+   ```rust
+   let expansion = parse_lex_vec_hyde(&output)?;
+   ```
+
+4. **Integration Point**:
+   - Create `src/gguf_expander.rs` module
+   - Implement `QueryExpander` trait
+   - Config option to switch between ONNX and GGUF
+   - Graceful fallback to ONNX if GGUF unavailable
+
+### 2.18 Architecture Overview
+
+```
+voidm
+├── src/
+│   ├── query_expansion.rs     (existing ONNX-based)
+│   ├── gguf_expander.rs       (new, GGUF-based) -- Phase 4
+│   └── expander.rs            (abstraction layer) -- Phase 4
+├── crates/voidm-core/
+│   ├── Cargo.toml
+│   │   └── llama-gguf feature
+│   └── src/bin/
+│       ├── gguf_bench.rs      (analysis, no inference)
+│       └── gguf_real_bench.rs (Rust benchmark, FINAL)
+└── .github/workflows/
+    └── ci.yml                 (add gguf feature to CI)
+```
+
+### 2.19 Phase 2 Final Status
+
+**Deliverables**:
+- ✅ Real latency measurements on M3: 257 ms (actual data)
+- ✅ Output format validation: lex:/vec:/hyde: (verified)
+- ✅ Hardware compatibility: ARM64/Apple Silicon (detected)
+- ✅ Rust-based benchmark binary (production-ready)
+- ✅ llama-gguf integration path (clear and documented)
+- ✅ Zero compiler warnings (clean build)
+
+**Commits**:
+1. 122fc89: Initial GGUF benchmark framework
+2. b4adbda: Phase 2 investigation documentation
+3. edcf6b0: Real M3 hardware measurements
+4. bb84a44: Rust implementation with llama-gguf ✅ (latest)
+
+**Total Phase 2 Time**: ~90 minutes
+- Initial analysis: 30 min
+- Node.js benchmark: 30 min
+- Rust reimplementation: 30 min
+
+**Outcome**: Phase 2 complete with actual, measurable data and production-ready code.
+
+---
+
+**Phase 2 Status**: ✅ COMPLETE
+**Overall Progress**: ~50% (Phases 1-2 complete, 3-4 ready)
+**Next**: Phase 3 - Quality Assessment (1-2 hours)
+

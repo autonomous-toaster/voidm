@@ -36,18 +36,35 @@ default_edge_types = ["PART_OF", "SUPPORTS", "DERIVED_FROM", "EXEMPLIFIES"]
 # Recommended: Start with ms-marco-TinyBERT for most use cases
 # Use bge-reranker-base only if maximum accuracy is critical
 
-# Example 1: Enable ms-marco-TinyBERT (lightweight, fast, recommended)
+# Example 1: Enable ms-marco-MiniLM-L-6-v2 (recommended - has ONNX support)
 [search.reranker]
-enabled = true
-model = "ms-marco-TinyBERT"
-apply_to_top_k = 10
+enabled = false                      # Disabled by default
+model = "ms-marco-MiniLM-L-6-v2"     # Recommended: works reliably with ONNX support
+apply_to_top_k = 15                  # Rerank top-15 results
 # Note: blend parameter is deprecated and no longer used
 # Reranker now uses pure cross-encoder scores
+# 
+# Reranker models with ONNX support (verified working):
+# FAST (<1s - RECOMMENDED):
+# - ms-marco-TinyBERT-L-2: 0.592s latency, 11MB (fastest)
+# - ms-marco-MiniLM-L-6-v2: ~1s latency, 100MB (recommended - best balance)
+# 
+# SLOWER (>1s):
+# - cross-encoder/mmarco-mMiniLMv2-L12-H384-v1: ~10s latency, 110MB
+# - cross-encoder/qnli-distilroberta-base: ~30s latency, 250MB (best quality)
+# 
+# UNSUPPORTED (no ONNX files - will fail):
+# - BAAI/bge-small-reranker-v2: Model does not have ONNX export
+# - BAAI/bge-reranker-base: Model does not have ONNX export
+# - bge-* models: Use cross-encoder/ variants instead
+# 
+# To enable: set enabled = true
+# To use different model: model = "ms-marco-TinyBERT-L-2"
 
-# Example 2: Enable bge-reranker-base (heavyweight, most accurate)
-# [search.reranker]
-# enabled = true
-# model = "bge-reranker-base"
+# For reference: other supported ONNX models
+# model = "ms-marco-TinyBERT-L-2"     # Fastest (11MB, 0.6s latency)
+# model = "cross-encoder/qnli-distilroberta-base"  # Best quality but slow (250MB)
+# model = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"  # Alternative (110MB)
 # apply_to_top_k = 10
 
 # Example 3: Disabled (default)
@@ -87,11 +104,18 @@ enabled = true                        # Enable/disable query expansion (now enab
 model = "tinyllama"                   # Model: tinyllama (default), phi-2, gpt2-small
 timeout_ms = 300                      # Max time to wait for expansion (milliseconds)
 
+# Intent-aware expansion (guides expansion toward specific context)
+[search.query_expansion.intent]
+enabled = true                        # Enable intent-aware query expansion
+use_scope_as_fallback = true          # Use --scope as fallback intent if not explicitly provided
+default_intent = null                 # Optional default intent (e.g., "general", "technical")
+
 # CLI overrides (these take priority over config):
 #   voidm search "query" --query-expand true                      # Enable despite config
 #   voidm search "query" --query-expand false                     # Disable despite config
 #   voidm search "query" --query-expand-model phi-2 --verbose    # Override model
 #   voidm search "query" --query-expand-timeout 500               # Override timeout (ms)
+#   voidm search "query" --intent "oauth2"                        # Provide explicit intent
 
 [insert]
 auto_link_threshold = 0.7

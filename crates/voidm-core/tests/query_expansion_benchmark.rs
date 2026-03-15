@@ -6,7 +6,7 @@
 #[cfg(test)]
 mod query_expansion_benchmark {
     use voidm_core::query_expansion::QueryExpander;
-    use voidm_core::config::QueryExpansionConfig;
+    use voidm_core::config::{QueryExpansionConfig, IntentConfig};
 
     /// Test dataset: representative voidm queries.
     fn get_test_queries() -> Vec<(&'static str, &'static str)> {
@@ -45,6 +45,7 @@ mod query_expansion_benchmark {
             enabled: false,
             model: "phi-2".to_string(),
             timeout_ms: 300,
+            intent: IntentConfig::default(),
         };
         let expander = QueryExpander::new(config);
 
@@ -66,6 +67,7 @@ mod query_expansion_benchmark {
                 enabled: true,
                 model: model_name.to_string(),
                 timeout_ms: 300,
+                intent: IntentConfig::default(),
             };
             let expander = QueryExpander::new(config);
 
@@ -91,6 +93,7 @@ mod query_expansion_benchmark {
             enabled: true,
             model: "phi-2".to_string(),
             timeout_ms: 300,
+            intent: IntentConfig::default(),
         };
         let expander = QueryExpander::new(config);
 

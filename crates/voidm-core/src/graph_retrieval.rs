@@ -546,6 +546,82 @@ pub fn merge_graph_results(
     merged
 }
 
+/// Expand search results with graph-aware retrieval (tag & concept matching).
+/// This function is called during the search pipeline to add related memories
+/// based on tag overlap and concept relationships.
+/// 
+/// Errors are logged but don't stop the search pipeline (graceful degradation).
+pub async fn expand_graph_results(
+    pool: &SqlitePool,
+    results: &mut Vec<crate::search::SearchResult>,
+    config: &GraphRetrievalConfig,
+) -> Result<()> {
+    if !config.enabled || results.is_empty() {
+        return Ok(());
+    }
+
+    let span = span!(Level::DEBUG, "expand_graph_results",
+                     enabled = config.enabled,
+                     direct_result_count = results.len());
+    let _enter = span.enter();
+
+    let start = Instant::now();
+    let mut graph_results = Vec::new();
+    let mut seen_ids: std::collections::HashSet<String> =
+        results.iter().map(|r| r.id.clone()).collect();
+
+    // Get tag-based related results
+    if config.tags.enabled {
+        let tag_start = Instant::now();
+        if let Ok(tag_related) = find_related_by_tags(pool, results, &config.tags).await {
+            debug!(elapsed_ms = tag_start.elapsed().as_millis() as u64,
+                   result_count = tag_related.len(),
+                   "tag-based retrieval completed");
+            
+            for mut result in tag_related {
+                if !seen_ids.contains(&result.id) {
+                    result.source = "graph_tags".to_string();
+                    seen_ids.insert(result.id.clone());
+                    graph_results.push(result);
+                }
+            }
+        }
+    }
+
+    // Get concept-based related results
+    if config.concepts.enabled {
+        let concept_start = Instant::now();
+        let max_hops = config.concepts.max_hops.unwrap_or(config.max_concept_hops);
+        
+        if let Ok(concept_related) = find_related_by_concepts(pool, results, &config.concepts, max_hops).await {
+            debug!(elapsed_ms = concept_start.elapsed().as_millis() as u64,
+                   result_count = concept_related.len(),
+                   max_hops = max_hops,
+                   "concept-based retrieval completed");
+            
+            for mut result in concept_related {
+                if !seen_ids.contains(&result.id) {
+                    result.source = "graph_concepts".to_string();
+                    seen_ids.insert(result.id.clone());
+                    graph_results.push(result);
+                }
+            }
+        }
+    }
+
+    // Sort graph results by score and append to results
+    graph_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    
+    info!(total_ms = start.elapsed().as_millis() as u64,
+          graph_result_count = graph_results.len(),
+          tag_enabled = config.tags.enabled,
+          concept_enabled = config.concepts.enabled,
+          "graph-aware retrieval completed");
+    
+    results.extend(graph_results);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

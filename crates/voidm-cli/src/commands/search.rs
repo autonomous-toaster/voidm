@@ -58,6 +58,10 @@ pub struct SearchArgs {
     #[arg(long, value_delimiter = ',')]
     pub edge_types: Option<Vec<String>>,
 
+    /// Enable/disable graph-aware retrieval (tag & concept matching) (overrides config)
+    #[arg(long)]
+    pub graph_retrieval: Option<bool>,
+
     /// Enable/disable reranker (overrides config)
     #[arg(long)]
     pub reranker: Option<bool>,

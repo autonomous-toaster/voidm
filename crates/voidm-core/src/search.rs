@@ -257,6 +257,24 @@ pub async fn search(
         tracing::debug!("Search: No reranker config found");
     }
 
+    // Apply graph-aware retrieval if enabled (before quality/threshold filters)
+    if let Some(graph_config) = &config_search.graph_retrieval {
+        if graph_config.enabled {
+            if !results.is_empty() {
+                tracing::info!("Search: Graph-aware retrieval enabled, applying to {} results", results.len());
+                if let Err(e) = crate::graph_retrieval::expand_graph_results(pool, &mut results, graph_config).await {
+                    tracing::warn!("Search: Graph-aware retrieval failed, continuing with original results: {}", e);
+                }
+            } else {
+                tracing::debug!("Search: Graph-aware retrieval enabled but no results to expand");
+            }
+        } else {
+            tracing::debug!("Search: Graph-aware retrieval disabled");
+        }
+    } else {
+        tracing::debug!("Search: No graph-retrieval config found");
+    }
+
     // Apply quality filter if specified
     if let Some(min_quality) = opts.min_quality {
         results.retain(|r| r.quality_score.unwrap_or(0.0) >= min_quality);

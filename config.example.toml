@@ -27,6 +27,67 @@ neighbor_min_score = 0.2
 default_neighbor_depth = 1
 default_edge_types = ["PART_OF", "SUPPORTS", "DERIVED_FROM", "EXEMPLIFIES"]
 
+# === GRAPH-AWARE RETRIEVAL CONFIGURATION ===
+# Enable tag-based and concept-based memory retrieval to expand search results
+# with conceptually related memories
+# 
+# This is particularly useful for finding memories related through:
+# - Shared tags (tag overlap scoring)
+# - Shared concepts (ontology relationships with decay by distance)
+#
+# Performance: <500ms total for both functions combined (100K dataset)
+# Target: <200ms tag overlap, <300ms concept distance
+#
+# When disabled, graph-aware results are not included in search results
+
+[search.graph_retrieval]
+enabled = true                          # Enable graph-aware retrieval (default: true)
+max_concept_hops = 2                    # Global default: max hops for concept traversal (default: 2)
+                                        # 1-hop: score=0.7, 2-hop: score=0.49, etc.
+                                        # Higher values = more results but exponential cost
+
+# Tag-based retrieval configuration
+[search.graph_retrieval.tags]
+enabled = true                          # Enable tag-based retrieval (default: true)
+min_overlap = 3                         # Minimum shared tags required (default: 3)
+min_percentage = 50.0                   # Minimum overlap percentage (default: 50%)
+                                        # Formula: overlap_count / max(query_tags, memory_tags) * 100
+decay_factor = 0.7                      # Score multiplier for tag-related results (default: 0.7)
+limit = 5                               # Max tag-related results per direct result (default: 5)
+
+# Concept-based retrieval configuration
+[search.graph_retrieval.concepts]
+enabled = true                          # Enable concept-based retrieval (default: true)
+max_hops = 2                            # Optional: override global max_concept_hops (None = use global)
+                                        # This setting is optional; if not set, uses [search.graph_retrieval].max_concept_hops
+decay_factor = 0.7                      # Score multiplier per hop: score = decay_factor^hops (default: 0.7)
+limit = 3                               # Max concept-related results per direct result (default: 3)
+
+# EXAMPLES:
+#
+# Example 1: Tag-based retrieval finds memory with "Docker" and "Kubernetes"
+#   Query: "Docker container"
+#   Direct match: Memory with content "Docker basics"
+#   Tag overlap: Finds "Kubernetes tutorial" (shared tag: "container", 50% overlap)
+#   Result score: 0.7 (base score * decay_factor)
+#
+# Example 2: Concept-based retrieval
+#   Query: "Docker"
+#   Direct match: Memory linked to concept "Docker"
+#   1-hop: Finds memories linked to "Containerization" (score: 0.7)
+#   2-hop: Finds memories linked to "DevOps" (score: 0.49)
+#   (both concepts related via IS_A edges)
+#
+# PERFORMANCE TUNING:
+#   - max_concept_hops = 1: Conservative, faster, fewer results (~10 per query)
+#   - max_concept_hops = 2: Balanced (recommended), ~50 results per query
+#   - max_concept_hops = 3: Aggressive, slower, ~500 results per query
+#   - max_concept_hops ≥ 4: Exponential growth, not recommended (>1s latency)
+#
+# CLI overrides:
+#   voidm search "query" --graph-retrieval            # Force enable
+#   voidm search "query" --no-graph-retrieval         # Force disable
+
 # === RERANKER CONFIGURATION ===
 # Optional: Enable cross-encoder reranking for better search quality
 # Two models available:

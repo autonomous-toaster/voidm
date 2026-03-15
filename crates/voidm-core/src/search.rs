@@ -502,30 +502,27 @@ async fn apply_reranker(
         return Ok(());
     }
 
-    // Warn if blend factor is not 1.0 (deprecated behavior)
-    if (config.blend - 1.0).abs() > 0.01 {
-        tracing::warn!(
-            "Reranker blend factor {} is deprecated. Using pure reranker scores (blend=1.0) instead. \
-             Remove 'blend' from config to suppress this warning.",
-            config.blend
-        );
-    }
-
     tracing::info!("Reranker: Initializing reranking with model: {}", config.model);
-    tracing::debug!("Reranker config: apply_to_top_k={}, blend={}", config.apply_to_top_k, config.blend);
+    tracing::debug!("Reranker config: apply_to_top_k={}", config.apply_to_top_k);
     
     let reranker = crate::reranker::CrossEncoderReranker::load(&config.model).await?;
     tracing::info!("Reranker: Model '{}' loaded successfully", config.model);
     
-    // Extract documents to rerank (only top-k)
-    let docs_to_rerank: Vec<&str> = results[..apply_to_k]
+    // Extract passages using intelligent passage extraction
+    let docs_to_rerank: Vec<String> = results[..apply_to_k]
         .iter()
-        .map(|r| r.content.as_str())
+        .map(|r| crate::passage::extract_best_passage(
+            &r.content,
+            query,
+            &config.passage_extraction,
+        ))
         .collect();
+    
+    let docs_to_rerank_refs: Vec<&str> = docs_to_rerank.iter().map(|s| s.as_str()).collect();
 
     tracing::debug!("Reranker: Starting reranking of top-{} results (from {} total)", apply_to_k, results.len());
     
-    let reranked = reranker.rerank(query, &docs_to_rerank)?;
+    let reranked = reranker.rerank(query, &docs_to_rerank_refs)?;
     tracing::info!("Reranker: Successfully reranked {} documents", reranked.len());
 
     // Create a mapping of original_index -> reranker_score

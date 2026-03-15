@@ -78,7 +78,8 @@ pub struct SearchArgs {
     #[arg(long)]
     pub query_expand: Option<bool>,
 
-    /// Query expansion model: phi-2, tinyllama, or gpt2-small (overrides config)
+    /// Query expansion model: tinyllama (ONNX, default) or tobil/qmd-query-expansion-1.7B (GGUF, opt-in, better quality).
+    /// App auto-detects backend. (overrides config)
     #[arg(long)]
     pub query_expand_model: Option<String>,
 

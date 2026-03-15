@@ -120,23 +120,62 @@ pub struct SearchConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PassageExtractionConfig {
+    /// Enable passage extraction for reranking (default: true)
+    #[serde(default = "default_passage_extraction_enabled")]
+    pub enabled: bool,
+    /// Number of context sentences before/after match (default: 1)
+    #[serde(default = "default_context_sentences")]
+    pub context_sentences: usize,
+    /// Fallback length if no match found (default: 400)
+    #[serde(default = "default_fallback_length")]
+    pub fallback_length: usize,
+    /// Minimum passage length to return (default: 50)
+    #[serde(default = "default_min_passage_length")]
+    pub min_passage_length: usize,
+}
+
+impl Default for PassageExtractionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            context_sentences: 1,
+            fallback_length: 400,
+            min_passage_length: 50,
+        }
+    }
+}
+
+fn default_passage_extraction_enabled() -> bool {
+    true
+}
+
+fn default_context_sentences() -> usize {
+    1
+}
+
+fn default_fallback_length() -> usize {
+    400
+}
+
+fn default_min_passage_length() -> usize {
+    50
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RerankerConfig {
     /// Enable reranking (default: false).
     #[serde(default)]
     pub enabled: bool,
-    /// Model name: "ms-marco-TinyBERT" or "bge-reranker-base" (default: "ms-marco-TinyBERT").
+    /// Model name: "ms-marco-TinyBERT-L-2" (default)
     #[serde(default = "default_reranker_model")]
     pub model: String,
-    /// Apply reranker to top-k results only (default: 10).
+    /// Apply reranker to top-k results only (default: 15).
     #[serde(default = "default_reranker_top_k")]
     pub apply_to_top_k: usize,
-    /// DEPRECATED: Blend factor (no longer used).
-    /// Previous behavior: final_score = rerank_score * blend + original_score * (1 - blend).
-    /// New behavior: Uses pure reranker scores (blend=1.0 semantics).
-    /// Kept for backward compatibility; setting this will trigger a deprecation warning.
-    /// (default: 0.7 for backward compatibility, but effectively ignored).
-    #[serde(default = "default_reranker_blend")]
-    pub blend: f32,
+    /// Passage extraction configuration for better reranking on long documents
+    #[serde(default)]
+    pub passage_extraction: PassageExtractionConfig,
 }
 
 impl Default for RerankerConfig {
@@ -145,21 +184,17 @@ impl Default for RerankerConfig {
             enabled: false,
             model: default_reranker_model(),
             apply_to_top_k: default_reranker_top_k(),
-            blend: default_reranker_blend(),
+            passage_extraction: PassageExtractionConfig::default(),
         }
     }
 }
 
 fn default_reranker_model() -> String {
-    "ms-marco-TinyBERT".into()
+    "ms-marco-MiniLM-L-6-v2".into()
 }
 
 fn default_reranker_top_k() -> usize {
-    10
-}
-
-fn default_reranker_blend() -> f32 {
-    0.7
+    15
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

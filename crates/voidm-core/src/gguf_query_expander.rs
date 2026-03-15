@@ -232,11 +232,74 @@ lex: "#,
     }
 }
 
-// Non-feature stub implementations
-#[cfg(not(feature = "gguf"))]
-pub struct GgufQueryExpander {
-    _private: (),
+
+#[cfg(feature = "gguf")]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_use_gguf() {
+        assert!(GgufQueryExpander::should_use_gguf("tobil/qmd-query-expansion-1.7B"));
+        assert!(GgufQueryExpander::should_use_gguf("qmd-something"));
+        assert!(!GgufQueryExpander::should_use_gguf("tinyllama"));
+        assert!(!GgufQueryExpander::should_use_gguf("gpt2-small"));
+    }
+
+    #[test]
+    fn test_get_huggingface_id() {
+        let result = GgufQueryExpander::get_huggingface_id("tobil/qmd-query-expansion-1.7B");
+        assert_eq!(result, Some("tobil/qmd-query-expansion-1.7B-gguf".to_string()));
+
+        let result = GgufQueryExpander::get_huggingface_id("tinyllama");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_prepare_prompt() {
+        let prompt = GgufQueryExpander::prepare_prompt("docker");
+        assert!(prompt.contains("docker"));
+        assert!(prompt.contains("lex:"));
+    }
+
+    #[test]
+    fn test_parse_structured_output_lex() {
+        let output = "lex: containers, orchestration, deployment";
+        let result = GgufQueryExpander::parse_structured_output(output, "docker").unwrap();
+        assert!(result.contains("docker"));
+        assert!(result.contains("containers"));
+        assert!(result.contains("orchestration"));
+    }
+
+    #[test]
+    fn test_parse_structured_output_all_sections() {
+        let output = "lex: containers, images\nvec: containerization, orchestration\nhyde: Docker Compose";
+        let result = GgufQueryExpander::parse_structured_output(output, "docker").unwrap();
+        assert!(result.contains("docker"));
+        assert!(result.contains("containers"));
+        assert!(result.contains("containerization"));
+        assert!(result.contains("Docker Compose"));
+    }
+
+    #[test]
+    fn test_parse_structured_output_empty_falls_back() {
+        let output = "";
+        let result = GgufQueryExpander::parse_structured_output(output, "docker").unwrap();
+        // Should return original query when parsing fails
+        assert_eq!(result, "docker");
+    }
+
+    #[test]
+    fn test_parse_structured_output_avoids_duplicate() {
+        // If original query is already the first term, don't duplicate
+        let output = "lex: docker, containers, images";
+        let result = GgufQueryExpander::parse_structured_output(output, "docker").unwrap();
+        // Should not have "docker, docker, ..."
+        let docker_count = result.matches("docker").count();
+        assert_eq!(docker_count, 1);
+    }
 }
+
 
 #[cfg(not(feature = "gguf"))]
 impl GgufQueryExpander {

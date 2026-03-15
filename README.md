@@ -330,6 +330,87 @@ apply_to_top_k = 15               # Rerank top-15 results
 **Note**: Reranking works on the initial search results. For low initial scores, improve query expansion instead.
 
 
+#### Graph-Aware Retrieval (Tag & Concept Matching)
+
+Automatically expand search results with related memories via shared tags and concept hierarchies. This improves recall without sacrificing precision.
+
+```bash
+# Tag-based retrieval (finds memories with shared tags)
+voidm search "Docker" --verbose
+# Output: [search] Direct results: 1
+#         [graph] Tag-based: 2 related memories found
+#         [graph] Concept-based: 1 related memory found
+#         Total: 4 results
+
+# Disable graph-aware retrieval if needed
+voidm search "Docker" --no-graph-retrieval
+```
+
+**How it works:**
+
+1. **Tag-based retrieval**: Finds memories with tag overlap
+   - Minimum shared tags: 3 (configurable)
+   - Minimum overlap %: 50% (configurable)
+   - Score decay: 0.7x per tag-related result
+   - Example: Query tags `["docker", "container", "linux"]` matches memory with tags `["docker", "container", "devops"]` (2/3 = 67% overlap)
+
+2. **Concept-based retrieval**: Traverses ontology to find related memories
+   - Bidirectional IS-A traversal (parents + children)
+   - Max hops: 2 (default, prevents exponential expansion)
+   - Distance-based scoring: score = 0.7^hops (1-hop=0.7, 2-hop=0.49)
+   - Example: Memory linked to concept "Docker" → finds memories linked to "Containerization" (1-hop) and "DevOps" (2-hop)
+
+**Performance:**
+- Tag overlap: <200ms for 100K dataset
+- Concept traversal: <300ms for 100K dataset
+- Combined: <500ms for both functions
+
+**Configuration** (in `~/.config/voidm/config.toml`):
+
+```toml
+[search.graph_retrieval]
+enabled = true                  # Enable/disable graph-aware retrieval (default: true)
+max_concept_hops = 2            # Global default: max concept traversal depth (default: 2)
+
+[search.graph_retrieval.tags]
+enabled = true                  # Enable tag-based retrieval
+min_overlap = 3                 # Minimum shared tags (default: 3)
+min_percentage = 50.0           # Minimum overlap % (default: 50%)
+decay_factor = 0.7              # Score multiplier (default: 0.7)
+limit = 5                       # Max results per direct result (default: 5)
+
+[search.graph_retrieval.concepts]
+enabled = true                  # Enable concept-based retrieval
+max_hops = 2                    # Optional: override global max_concept_hops
+decay_factor = 0.7              # Score multiplier per hop (default: 0.7)
+limit = 3                       # Max results per direct result (default: 3)
+```
+
+**Tuning Performance:**
+- `max_concept_hops=1`: Conservative (fewer results, faster)
+- `max_concept_hops=2`: Balanced, recommended
+- `max_concept_hops=3`: Aggressive (more results, slower)
+- `max_concept_hops≥4`: Not recommended (exponential growth)
+
+**When to Disable:**
+- Latency-critical applications (use `--no-graph-retrieval`)
+- When exact matches are important and related results add noise
+- Sparse knowledge graphs (few concept connections)
+
+**Examples:**
+
+```bash
+# Find Docker-related memories via tags and concepts
+voidm search "Docker container" --verbose
+
+# Disable for speed
+voidm search "Docker" --no-graph-retrieval
+
+# Use with other options
+voidm search "auth" --intent "oauth2" --scope work/auth --verbose
+```
+
+
 ### MCP server
 
 Expose a small assistant-focused subset of `voidm` as an MCP server over stdio:

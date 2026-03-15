@@ -284,7 +284,22 @@ voidm search "docker" --reranker false  # Default
 enabled = false                    # Disabled by default (adds ~1s latency when enabled)
 model = "ms-marco-MiniLM-L-6-v2"  # RECOMMENDED: 100MB, ~1s latency, best balance
 apply_to_top_k = 15               # Rerank top-15 results
+
+# Passage extraction: Find sentences containing query terms
+[search.reranker.passage_extraction]
+enabled = true                    # Intelligent passage extraction (enabled by default)
+context_sentences = 1             # Include ±1 sentence around match for context
+fallback_length = 400             # If no match found, use first 400 chars
+min_passage_length = 50           # Don't return passages shorter than this
 ```
+
+**How Passage Extraction Works**:
+Instead of passing full documents to the reranker (which is trained on short passages), passage extraction:
+1. Finds sentences containing query terms
+2. Extracts those sentences with surrounding context
+3. Passes only the relevant passage to the reranker
+
+This ensures high-quality reranking even on very long documents.
 
 **Supported Models** (all ONNX-compatible, verified working):
 

@@ -397,8 +397,46 @@ impl crate::db::Database for Neo4jDatabase {
     }
 
     fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>> {
-        // TODO: Implement ontology edge querying from Neo4j
-        Box::pin(async { Ok(Vec::new()) })
+        let graph = self.graph.clone();
+        
+        Box::pin(async move {
+            // Query all relationships with their properties
+            let cypher = r#"
+                MATCH (from)-[r]->(to)
+                WHERE r.from_id IS NOT NULL AND r.rel_type IS NOT NULL
+                RETURN r.from_id AS from_id, r.from_type AS from_type, 
+                       r.to_id AS to_id, r.to_type AS to_type, 
+                       r.rel_type AS rel_type, r.note AS note
+            "#;
+            
+            let mut result = graph
+                .execute(neo4rs::query(cypher))
+                .await
+                .context("Failed to list ontology edges from Neo4j")?;
+            
+            let mut edges = Vec::new();
+            while let Ok(Some(row)) = result.next().await {
+                if let (Ok(from_id), Ok(from_type), Ok(to_id), Ok(to_type), Ok(rel_type)) = (
+                    row.get::<String>("from_id"),
+                    row.get::<String>("from_type"),
+                    row.get::<String>("to_id"),
+                    row.get::<String>("to_type"),
+                    row.get::<String>("rel_type"),
+                ) {
+                    let note = row.get::<Option<String>>("note").ok().flatten();
+                    edges.push(crate::models::OntologyEdgeForMigration {
+                        from_id,
+                        from_type,
+                        to_id,
+                        to_type,
+                        rel_type,
+                        note,
+                    });
+                }
+            }
+            
+            Ok(edges)
+        })
     }
 
     /// Link a memory or concept to another memory or concept (for ontology edges)
@@ -415,20 +453,26 @@ impl crate::db::Database for Neo4jDatabase {
         let to_id = to_id.to_string();
         let from_label = if from_type == "memory" { "Memory" } else { "Concept" };
         let to_label = if to_type == "memory" { "Memory" } else { "Concept" };
-        let rel_type = rel_type.to_string();
+        let rel_type_str = rel_type.to_string();
+        let from_type_str = from_type.to_string();
+        let to_type_str = to_type.to_string();
 
         Box::pin(async move {
+            // Create relationship with properties for later querying/deletion
             let query_str = format!(
                 "MATCH (from:{} {{id: $from_id}}), (to:{} {{id: $to_id}})
-                 CREATE (from)-[r:{}]->(to)
+                 CREATE (from)-[r:{}{{from_id: $from_id, from_type: $from_type, to_id: $to_id, to_type: $to_type, rel_type: $rel_type}}]->(to)
                  RETURN true as created",
-                from_label, to_label, rel_type
+                from_label, to_label, rel_type_str
             );
 
             let mut result = graph
                 .execute(neo4rs::query(&query_str)
                     .param("from_id", from_id.clone())
-                    .param("to_id", to_id.clone()))
+                    .param("from_type", from_type_str)
+                    .param("to_id", to_id.clone())
+                    .param("to_type", to_type_str)
+                    .param("rel_type", rel_type_str))
                 .await
                 .with_context(|| format!("Failed to link {} -> {} in Neo4j", from_id, to_id))?;
 
@@ -958,11 +1002,33 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
-    fn delete_ontology_edge(&self, _edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+    fn delete_ontology_edge(&self, edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        let graph = self.graph.clone();
+        
         Box::pin(async move {
-            // Neo4j relationship IDs are not easily accessible in patterns
-            // This would need a different approach
-            anyhow::bail!("Neo4j delete_ontology_edge needs refactoring for relationship management")
+            // Neo4j internal relationship IDs are not directly accessible in parameterized queries
+            // For now, we'll query to find the Nth relationship (by ordinal position)
+            // and delete it. This is not ideal but works for the current interface.
+            
+            let cypher = r#"
+                MATCH (from)-[r]->(to)
+                WHERE r.from_id IS NOT NULL AND r.rel_type IS NOT NULL
+                WITH r, row_number() OVER () AS rn
+                WHERE rn = $edge_id
+                DELETE r
+                RETURN true as deleted
+            "#;
+            
+            let mut result = graph
+                .execute(neo4rs::query(cypher).param("edge_id", edge_id))
+                .await
+                .context("Failed to delete ontology edge from Neo4j")?;
+            
+            if let Ok(Some(_row)) = result.next().await {
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         })
     }
 

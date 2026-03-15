@@ -26,8 +26,43 @@ pub struct RerankerScore {
 
 impl CrossEncoderReranker {
     /// Load a reranker model. Downloads on first use.
+    /// Falls back to ms-marco-MiniLM-L-6-v2 if the requested model fails.
     pub async fn load(model_name: &str) -> Result<Self> {
         tracing::info!("Loading reranker: {}", model_name);
+        
+        // Try to load the requested model
+        match Self::load_model_internal(model_name).await {
+            Ok(reranker) => Ok(reranker),
+            Err(e) => {
+                // Check if this is a BAAI model (401 Unauthorized or file not found)
+                let error_msg = e.to_string();
+                if error_msg.contains("BAAI") || error_msg.contains("401") || error_msg.contains("Unauthorized") {
+                    tracing::warn!(
+                        "Failed to load {} (BAAI models unavailable with ONNX)\n\
+                         Falling back to: ms-marco-MiniLM-L-6-v2\n\
+                         Error: {}",
+                        model_name, e
+                    );
+                    
+                    // Fallback to working model
+                    let fallback_model = "ms-marco-MiniLM-L-6-v2";
+                    tracing::info!("Attempting fallback to: {}", fallback_model);
+                    
+                    Self::load_model_internal(fallback_model).await
+                        .with_context(|| format!(
+                            "Failed to load both {} and fallback {}: {}",
+                            model_name, fallback_model, e
+                        ))
+                } else {
+                    // Different error - not a BAAI issue
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Internal model loading (shared by load() and load_with_fallback()).
+    async fn load_model_internal(model_name: &str) -> Result<Self> {
         let (onnx_path, tokenizer_path) = ensure_model_files(model_name).await?;
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
@@ -316,18 +351,46 @@ impl CrossEncoderReranker {
 /// Model metadata: (hf_model_id, onnx_file, tokenizer_file)
 fn get_model_metadata(name: &str) -> Result<(&'static str, &'static str, &'static str)> {
     match name {
+        // Lightweight models (< 1s per query)
+        "ms-marco-TinyBERT-L-2" => Ok((
+            "cross-encoder/ms-marco-TinyBERT-L-2",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
         "ms-marco-TinyBERT" => Ok((
             "cross-encoder/ms-marco-TinyBERT-L-2",
             "onnx/model.onnx",
             "tokenizer.json",
         )),
+        "mmarco-mMiniLMv2-L12-H384-v1" => Ok((
+            "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        "qnli-distilroberta-base" => Ok((
+            "cross-encoder/qnli-distilroberta-base",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        // Standard models (1-5s per query)
+        "ms-marco-MiniLM-L-6-v2" => Ok((
+            "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        "bge-small-reranker-v2" => Ok((
+            "BAAI/bge-small-reranker-v2",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        // Heavy models (5s+ per query)
         "bge-reranker-base" => Ok((
             "BAAI/bge-reranker-base",
             "onnx/model.onnx",
             "tokenizer.json",
         )),
         other => Err(anyhow::anyhow!(
-            "Unknown reranker model '{}'. Supported: ms-marco-TinyBERT, bge-reranker-base",
+            "Unknown reranker model '{}'. Supported: ms-marco-TinyBERT-L-2, mmarco-mMiniLMv2-L12-H384-v1, qnli-distilroberta-base, ms-marco-MiniLM-L-6-v2, bge-small-reranker-v2, bge-reranker-base",
             other
         )),
     }
@@ -343,12 +406,22 @@ async fn ensure_model_files(model_name: &str) -> Result<(PathBuf, PathBuf)> {
     let onnx_path = cache_dir.join("model.onnx");
     let tokenizer_path = cache_dir.join("tokenizer.json");
 
+    // Check if both files exist
+    if onnx_path.exists() && tokenizer_path.exists() {
+        tracing::debug!("Reranker model '{}' found in cache: {}", model_name, cache_dir.display());
+        return Ok((onnx_path, tokenizer_path));
+    }
+
     // Download if missing
     if !onnx_path.exists() || !tokenizer_path.exists() {
         let size_hint = match model_name {
-            "ms-marco-TinyBERT" => "~11MB",
+            "ms-marco-TinyBERT-L-2" | "ms-marco-TinyBERT" => "~11MB",
+            "mmarco-mMiniLMv2-L12-H384-v1" => "~110MB",
+            "qnli-distilroberta-base" => "~250MB",
+            "ms-marco-MiniLM-L-6-v2" => "~100MB",
+            "bge-small-reranker-v2" => "~130MB",
             "bge-reranker-base" => "~278MB",
-            _ => "~100MB",
+            _ => "~150MB",
         };
         tracing::info!("Downloading reranker model '{}' ({}) to {}", hf_model_id, size_hint, cache_dir.display());
         eprintln!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -377,6 +450,8 @@ async fn download_model_files(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| cache_dir.clone());
 
+    tracing::debug!("Attempting to download from HuggingFace with cache: {}", hf_cache.display());
+    
     let api = hf_hub::api::tokio::ApiBuilder::new()
         .with_cache_dir(hf_cache)
         .build()
@@ -384,13 +459,19 @@ async fn download_model_files(
 
     let repo = api.model(hf_model_id.to_string());
 
+    tracing::debug!("Downloading ONNX file: {} from {}", onnx_file, hf_model_id);
     let onnx_src = repo.get(onnx_file).await
         .with_context(|| format!("Failed to download {} from {}", onnx_file, hf_model_id))?;
+    
+    tracing::debug!("Copying ONNX file to cache: {}", cache_dir.join("model.onnx").display());
     std::fs::copy(&onnx_src, cache_dir.join("model.onnx"))
         .context("Failed to copy ONNX model to cache")?;
 
+    tracing::debug!("Downloading tokenizer file: {} from {}", tokenizer_file, hf_model_id);
     let tok_src = repo.get(tokenizer_file).await
         .with_context(|| format!("Failed to download {} from {}", tokenizer_file, hf_model_id))?;
+    
+    tracing::debug!("Copying tokenizer file to cache: {}", cache_dir.join("tokenizer.json").display());
     std::fs::copy(&tok_src, cache_dir.join("tokenizer.json"))
         .context("Failed to copy tokenizer to cache")?;
 
@@ -415,6 +496,26 @@ pub fn get_reranker_cache_path(model_name: &str) -> PathBuf {
 pub fn is_model_cached(model_name: &str) -> bool {
     let dir = reranker_cache_dir(model_name);
     dir.join("model.onnx").exists() && dir.join("tokenizer.json").exists()
+}
+
+/// Load reranker with cache awareness. Used by `voidm init`.
+/// If update=true, forces re-download even if cached.
+pub async fn load_reranker_cached(model_name: &str, force_update: bool) -> Result<CrossEncoderReranker> {
+    let is_cached = is_model_cached(model_name);
+    
+    if is_cached && !force_update {
+        tracing::debug!("Reranker '{}' is cached, using cached version", model_name);
+    } else if force_update && is_cached {
+        tracing::info!("Force update requested, re-downloading reranker: {}", model_name);
+        let cache_dir = reranker_cache_dir(model_name);
+        if cache_dir.exists() {
+            std::fs::remove_dir_all(&cache_dir)
+                .with_context(|| format!("Failed to remove old cache: {}", cache_dir.display()))?;
+            tracing::debug!("Removed old cache directory: {}", cache_dir.display());
+        }
+    }
+    
+    CrossEncoderReranker::load(model_name).await
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

@@ -4,13 +4,20 @@
 //! specifically optimized for the tobil/qmd-query-expansion-1.7B model.
 //!
 //! Features:
-//! - Uses llama-gguf library for GGUF model inference
+//! - Uses llama-gguf Engine for GGUF model inference
 //! - Structured output parsing (lex:/vec:/hyde: format)
-//! - Caching via HuggingFace hub
-//! - Optional feature (requires feature flag)
+//! - Automatic model caching via HuggingFace hub
+//! - Optional feature (requires --features gguf)
+//!
+//! Model Details:
+//! - tobil/qmd-query-expansion-1.7B-q4_k_m.gguf (1223 MB)
+//! - Base model: Qwen3-1.7B
+//! - Output format: lex:/vec:/hyde: (lexical, vector, hypothetical)
 
 #[cfg(feature = "gguf")]
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
+#[cfg(feature = "gguf")]
+use std::path::PathBuf;
 
 /// GGUF-based query expander for qmd model
 #[cfg(feature = "gguf")]
@@ -36,27 +43,176 @@ impl GgufQueryExpander {
 
     /// Internal expansion using llama-gguf
     async fn expand_with_gguf(&self, query: &str) -> Result<String> {
-        // Placeholder for llama-gguf integration
-        // This will be called from the main query_expansion.rs when model name is detected as GGUF
+        // Get or download the model
+        let model_path = Self::get_model_path(&self.model_name).await?;
         
-        tracing::debug!("GGUF: Preparing prompt for query: '{}'", query);
+        tracing::debug!("GGUF: Loading model from: {}", model_path.display());
+
+        // Load the model (with caching)
+        let engine = Self::load_model(&self.model_name, &model_path)?;
+
+        tracing::debug!("GGUF: Model loaded successfully, preparing prompt");
+
+        // Prepare the prompt
+        let prompt = Self::prepare_prompt(query);
+        tracing::debug!("GGUF: Prompt prepared, length={}", prompt.len());
+
+        // Run inference
+        let output = engine.generate(&prompt, 100)
+            .context("GGUF inference failed")?;
+
+        tracing::debug!("GGUF: Inference complete, output length={}", output.len());
+
+        // Parse the structured output (lex:/vec:/hyde: format)
+        let expanded = Self::parse_structured_output(&output, query)?;
+
+        tracing::debug!("GGUF: Parsed expansion result");
+
+        Ok(expanded)
+    }
+
+    /// Load model with caching
+    #[cfg(feature = "gguf")]
+    fn load_model(_model_name: &str, model_path: &PathBuf) -> Result<llama_gguf::engine::Engine> {
+        // Note: llama-gguf Engine is not Clone, so we create a new one each time
+        // The underlying GGUF file is mmap'd so this is relatively cheap
+        tracing::debug!("GGUF: Loading model from: {}", model_path.display());
         
-        let prompt = format!(
-            r#"Expand search query with related terms and synonyms:
+        llama_gguf::engine::Engine::load(
+            llama_gguf::engine::EngineConfig {
+                model_path: model_path.to_string_lossy().to_string(),
+                temperature: 0.1,  // Low temperature for more consistent output
+                top_k: 40,
+                top_p: 0.9,
+                max_tokens: 100,
+                ..Default::default()
+            }
+        ).context(format!("Failed to load GGUF model from: {}", model_path.display()))
+    }
+
+    /// Get or download the model file
+    async fn get_model_path(model_name: &str) -> Result<PathBuf> {
+        use hf_hub::api::sync::Api;
+
+        // Resolve HuggingFace model ID
+        let hf_id = Self::get_huggingface_id(model_name)
+            .ok_or_else(|| anyhow!("Unknown GGUF model: {}", model_name))?;
+
+        tracing::info!("GGUF: Resolving model from HuggingFace: {}", hf_id);
+
+        // Use HuggingFace hub to get the model path (with caching)
+        let api = Api::new()
+            .context("Failed to initialize HuggingFace API")?;
+
+        let repo = api.model(hf_id.clone());
+        
+        // Get the specific GGUF file
+        let filename = if model_name.contains("tobil") {
+            "qmd-query-expansion-1.7B-q4_k_m.gguf"
+        } else {
+            return Err(anyhow!("Unknown GGUF model filename for: {}", model_name));
+        };
+
+        let model_path = repo.get(filename)
+            .context(format!("Failed to download GGUF model from HuggingFace: {}", hf_id))?;
+
+        tracing::info!("GGUF: Model ready at: {}", model_path.display());
+
+        Ok(model_path)
+    }
+
+    /// Prepare the prompt for query expansion
+    fn prepare_prompt(query: &str) -> String {
+        // QMD-optimized prompt for structured expansion output
+        format!(
+            r#"Expand the following search query with related terms for better retrieval:
 
 Query: {}
 lex: "#,
             query
-        );
+        )
+    }
 
-        tracing::debug!("GGUF: Prompt prepared, length={}", prompt.len());
+    /// Parse structured GGUF output (lex:/vec:/hyde: format)
+    fn parse_structured_output(output: &str, original_query: &str) -> Result<String> {
+        let output = output.trim();
 
-        // For now, return a placeholder error indicating feature needs llama-gguf runtime
-        // When llama-gguf is integrated, this will perform actual inference
-        Err(anyhow::anyhow!(
-            "GGUF query expansion for '{}' requires llama-gguf runtime integration",
-            self.model_name
-        ))
+        tracing::debug!("GGUF: Parsing output (first 200 chars): {}", 
+                       &output.chars().take(200).collect::<String>());
+
+        // Extract terms from structured output
+        let mut keywords = Vec::new();
+        let mut semantic_phrases = Vec::new();
+
+        // Parse lex: section (lexical terms)
+        if let Some(lex_start) = output.find("lex:") {
+            let lex_content = &output[lex_start + 4..];
+            // Get content until next section or end
+            let lex_end = lex_content.find("vec:").unwrap_or(lex_content.len());
+            let lex_terms = lex_content[..lex_end].trim();
+            
+            keywords.extend(
+                lex_terms
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // Parse vec: section (vector/semantic terms)
+        if let Some(vec_start) = output.find("vec:") {
+            let vec_content = &output[vec_start + 4..];
+            // Get content until next section or end
+            let vec_end = vec_content.find("hyde:").unwrap_or(vec_content.len());
+            let vec_terms = vec_content[..vec_end].trim();
+            
+            semantic_phrases.extend(
+                vec_terms
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // Parse hyde: section (hypothetical document terms)
+        if let Some(hyde_start) = output.find("hyde:") {
+            let hyde_content = &output[hyde_start + 5..].trim();
+            keywords.extend(
+                hyde_content
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // Combine all terms
+        let all_terms: Vec<&str> = keywords.iter()
+            .chain(semantic_phrases.iter())
+            .copied()
+            .collect();
+
+        if all_terms.is_empty() {
+            tracing::warn!("GGUF: No terms extracted from output, falling back to original query");
+            return Ok(original_query.to_string());
+        }
+
+        // Check if original query is already the first term
+        let first_term = all_terms.first().unwrap_or(&"");
+        let result = if first_term.eq_ignore_ascii_case(original_query) {
+            // Original query is already present, use as-is
+            all_terms.join(", ")
+        } else {
+            // Prepend original query
+            format!("{}, {}", original_query, all_terms.join(", "))
+        };
+
+        tracing::debug!("GGUF: Expansion result (first 200 chars): {}", 
+                       result.chars().take(200).collect::<String>());
+
+        Ok(result)
     }
 
     /// Check if a model name should use GGUF backend
@@ -76,6 +232,7 @@ lex: "#,
     }
 }
 
+// Non-feature stub implementations
 #[cfg(not(feature = "gguf"))]
 pub struct GgufQueryExpander {
     _private: (),

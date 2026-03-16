@@ -2,11 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-mod commands;
-mod output;
-mod instructions;
-mod cli_config;
-
+use voidm_cli::{commands, output, instructions, cli_config};
 use voidm_core::{Config, open_pool};
 use cli_config::CliConfigOverrides;
 

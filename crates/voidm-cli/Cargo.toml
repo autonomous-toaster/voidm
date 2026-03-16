@@ -12,6 +12,10 @@ categories = ["command-line-utilities", "database"]
 name = "voidm"
 path = "src/main.rs"
 
+[lib]
+name = "voidm_cli"
+path = "src/lib.rs"
+
 [dependencies]
 voidm-core       = { path = "../voidm-core" }
 voidm-graph      = { path = "../voidm-graph" }

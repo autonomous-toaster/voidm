@@ -532,6 +532,435 @@ voidm graph export --format csv > edges.csv
 
 ---
 
+## Database Backends
+
+`voidm` supports multiple database backends for storage:
+
+### SQLite (Default)
+
+Single-file embedded database, no server required, excellent for local-first use.
+
+```toml
+# ~/.config/voidm/config.toml
+[database]
+backend = "sqlite"
+
+[database.sqlite]
+path = "~/.local/share/voidm/memories.db"
+```
+
+**Characteristics:**
+- ✅ Single file, fully portable
+- ✅ Zero setup, no server required
+- ✅ Excellent for local development and CI/CD
+- ✅ ACID-compliant transactions
+- ⚠️ Single-writer (concurrent writes may be slow)
+- 📦 Built-in (no external dependencies)
+
+### Neo4j
+
+Graph database with native Cypher support, excellent for large graphs with complex relationships.
+
+```toml
+# ~/.config/voidm/config.toml
+[database]
+backend = "neo4j"
+
+[database.neo4j]
+uri = "bolt://localhost:7687"
+username = "neo4j"
+password = "your-password"
+```
+
+**Characteristics:**
+- ✅ Native graph traversal with Cypher
+- ✅ Excellent for large, highly-connected graphs
+- ✅ Built-in visualization (Neo4j Browser)
+- ✅ Concurrent read+write support
+- ✅ Full-text search (Lucene)
+- ⚠️ Requires running Neo4j server
+- ⚠️ Higher resource overhead
+
+**Setup:**
+
+```bash
+# Docker (quickest)
+docker run --rm \
+  -p 7687:7687 \
+  -p 7474:7474 \
+  -e NEO4J_AUTH=neo4j/your-password \
+  neo4j:latest
+
+# Or install locally: https://neo4j.com/download/
+```
+
+### pgVector (PostgreSQL + Vector Extension)
+
+PostgreSQL with pgvector extension for hybrid search and large-scale deployments.
+
+```toml
+# ~/.config/voidm/config.toml
+[database]
+backend = "pgvector"
+
+[database.pgvector]
+connection_string = "postgresql://user:password@localhost:5432/voidm"
+```
+
+**Characteristics:**
+- ✅ Excellent for large-scale deployments (100K+ memories)
+- ✅ Native vector similarity search (pgvector)
+- ✅ Full-text search with PostgreSQL FTS
+- ✅ Concurrent read+write support
+- ✅ Advanced indexing (HNSW, IVFFlat)
+- ⚠️ Requires PostgreSQL + pgvector extension
+- ⚠️ Requires running database server
+
+**Setup:**
+
+```bash
+# Docker (with pgvector)
+docker run --rm \
+  -p 5432:5432 \
+  -e POSTGRES_PASSWORD=password \
+  pgvector/pgvector:latest
+
+# Or install locally:
+# 1. Install PostgreSQL: https://www.postgresql.org/download/
+# 2. Install pgvector: https://github.com/pgvector/pgvector#installation
+#    CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+---
+
+## Import / Export
+
+### Export memories and graph
+
+Export your memories and relationships for backup, analysis, or migration:
+
+```bash
+# Export all memories as JSON
+voidm export --format json > memories.json
+
+# Export graph structure
+voidm graph export --format json > graph.json
+
+# Export to CSV (for spreadsheets)
+voidm graph export --format csv > edges.csv
+
+# Export to DOT (Graphviz visualization)
+voidm graph export --format dot > graph.dot
+```
+
+### Import memories
+
+Import memories from JSON:
+
+```bash
+# Import from file
+voidm import --from memories.json
+
+# Import with type override
+voidm import --from memories.json --type semantic
+
+# Import with scope prefix
+voidm import --from memories.json --scope work/acme
+```
+
+### Migrate between backends
+
+Seamlessly migrate between database backends:
+
+```bash
+# Migrate from SQLite to Neo4j
+voidm migrate --from sqlite --to neo4j \
+  --sqlite-path ~/.local/share/voidm/memories.db \
+  --neo4j-uri bolt://localhost:7687 \
+  --neo4j-username neo4j \
+  --neo4j-password password
+
+# Migrate from SQLite to PostgreSQL+pgvector
+voidm migrate --from sqlite --to pgvector \
+  --sqlite-path ~/.local/share/voidm/memories.db \
+  --pgvector-connection-string "postgresql://user:password@localhost:5432/voidm"
+
+# Migrate from Neo4j to SQLite (backup)
+voidm migrate --from neo4j --to sqlite \
+  --neo4j-uri bolt://localhost:7687 \
+  --sqlite-path ~/backup/memories.db
+
+# Dry-run (preview without writing)
+voidm migrate --from sqlite --to neo4j --dry-run
+```
+
+**Characteristics:**
+- ✅ Preserves all memories, links, concepts, relationships
+- ✅ Supports dry-run preview before commit
+- ✅ Automatic schema creation on target
+- ✅ Transactional (all-or-nothing)
+- ⚠️ Requires both source and target backends accessible
+- ⚠️ Large datasets may take time (100K memories ≈ 2-5 minutes)
+
+---
+
+## Configuration
+
+### Config File Location
+
+voidm reads configuration from (in order of priority):
+
+1. Command-line flags (highest priority)
+2. Environment variables (prefixed with `VOIDM_`)
+3. Config file: `~/.config/voidm/config.toml`
+4. Default values (lowest priority)
+
+### Viewing Configuration
+
+```bash
+# Show current config (merged from all sources)
+voidm config show
+
+# Show specific config section
+voidm config show --section database
+voidm config show --section search
+
+# Show as JSON (machine-readable)
+voidm config show --json
+```
+
+### Editing Configuration
+
+```bash
+# Set a config value
+voidm config set database.backend neo4j
+voidm config set database.neo4j.uri bolt://localhost:7687
+voidm config set search.mode hybrid-rrf
+voidm config set embeddings.model Xenova/all-MiniLM-L6-v2
+
+# Reset to defaults
+voidm config reset
+```
+
+### Command-Line Help
+
+```bash
+voidm --help
+```
+
+Output:
+
+```
+Local-first memory tool for LLM agents
+
+Usage: voidm [OPTIONS] <COMMAND>
+
+Commands:
+  add           Add a memory
+  get           Get a memory by ID
+  search        Hybrid search
+  list          List memories (newest first)
+  delete        Delete a memory (cascades graph edges)
+  link          Create a graph edge between two memories
+  unlink        Remove a graph edge
+  init          Initialize voidm: download and cache all models
+  graph         Graph operations
+  ontology      Ontology operations (concepts, hierarchy, instances)
+  conflicts     Review and resolve ontology conflicts (CONTRADICTS edges)
+  scopes        List all known scope strings
+  export        Export memories
+  config        Show or edit config
+  models        Model management
+  instructions  Print usage guide for LLM agents
+  info          Show paths, config and runtime settings
+  stats         Show memory and graph statistics
+  mcp           Run an assistant-friendly MCP server
+  migrate       Migrate data between backends (sqlite ↔ neo4j)
+  check-update  Check for new releases on GitHub
+  help          Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>  Override database path [env: VOIDM_DB] [env: VOIDM_DB=]
+      --json     Output JSON (machine-readable)
+  -q, --quiet    Suppress decorative output
+  -h, --help     Print help
+  -V, --version  Print version
+```
+
+### Command Examples
+
+```bash
+# Add a memory
+voidm add "Docker is a containerization platform" --type semantic
+
+# Search memories
+voidm search "containers" --mode hybrid-rrf --limit 10
+
+# List all memories
+voidm list --scope work/
+
+# Get specific memory
+voidm get abc123
+
+# Link memories
+voidm link abc123 SUPPORTS def456
+
+# View graph
+voidm graph neighbors abc123 --depth 2
+
+# Create ontology concept
+voidm ontology concept add "DevOps" --scope work/infra
+
+# Initialize (download models)
+voidm init
+
+# View system info
+voidm info
+
+# Show statistics
+voidm stats
+```
+
+---
+
+## Environment Variables
+
+All configuration can be overridden with environment variables. Environment variables take precedence over the config file but lower than command-line flags.
+
+### Database Configuration
+
+| Variable | Default | Possible Values | Description |
+|----------|---------|-----------------|-------------|
+| `VOIDM_DB` | `~/.local/share/voidm/memories.db` | Path string | SQLite database file path (shorthand for `--db`) |
+| `VOIDM_DATABASE_BACKEND` | `sqlite` | `sqlite`, `neo4j`, `pgvector` | Which database backend to use |
+| `VOIDM_DATABASE_SQLITE_PATH` | `~/.local/share/voidm/memories.db` | Path string | SQLite database file location |
+| `VOIDM_DATABASE_NEO4J_URI` | *(unset)* | `bolt://host:port`, `neo4j://host:port`, `neo4j+s://host:port` | Neo4j connection URI |
+| `VOIDM_DATABASE_NEO4J_USERNAME` | `neo4j` | Username string | Neo4j username |
+| `VOIDM_DATABASE_NEO4J_PASSWORD` | *(unset)* | Password string | Neo4j password |
+| `VOIDM_DATABASE_PGVECTOR_CONNECTION_STRING` | *(unset)* | `postgresql://user:pass@host:5432/dbname` | PostgreSQL connection string |
+| `VOIDM_DATABASE_PGVECTOR_MAX_CONNECTIONS` | `20` | Integer 1-100 | Connection pool size |
+
+### Embeddings Configuration
+
+| Variable | Default | Possible Values | Description |
+|----------|---------|-----------------|-------------|
+| `VOIDM_EMBEDDINGS_ENABLED` | `true` | `true`, `false` | Enable/disable embeddings |
+| `VOIDM_EMBEDDINGS_MODEL` | `Xenova/all-MiniLM-L6-v2` | Model name from `voidm models list` | Which embedding model to use |
+| `VOIDM_CACHE_DIR` | `~/.cache/voidm/` | Path string | Cache directory for models |
+
+**Available embedding models:**
+```bash
+voidm models list
+```
+
+Defaults: `Xenova/all-MiniLM-L6-v2` (384d, 50MB, fast), `Xenova/multilingual-e5-small` (384d, multilingual), `Xenova/bge-base-en-v1.5` (768d, highest quality).
+
+### Search Configuration
+
+| Variable | Default | Possible Values | Description |
+|----------|---------|-----------------|-------------|
+| `VOIDM_SEARCH_MODE` | `hybrid-rrf` | `hybrid`, `hybrid-rrf`, `semantic`, `keyword`, `bm25`, `fuzzy` | Search ranking algorithm |
+| `VOIDM_SEARCH_DEFAULT_LIMIT` | `10` | Integer 1-1000 | Default result count |
+| `VOIDM_SEARCH_MIN_SCORE` | `0.3` | Float 0.0-1.0 | Minimum relevance threshold |
+| `VOIDM_SEARCH_DEFAULT_NEIGHBOR_DEPTH` | `1` | Integer 1-5 | Graph neighbor hops for tag/concept retrieval |
+| `VOIDM_SEARCH_GRAPH_RETRIEVAL_ENABLED` | `true` | `true`, `false` | Enable graph-aware retrieval |
+| `VOIDM_SEARCH_GRAPH_RETRIEVAL_MAX_CONCEPT_HOPS` | `2` | Integer 1-5 | Max concept traversal depth |
+| `VOIDM_SEARCH_QUERY_EXPANSION_ENABLED` | `false` | `true`, `false` | Enable query expansion |
+| `VOIDM_SEARCH_QUERY_EXPANSION_MODEL` | `tinyllama` | `tinyllama`, `phi-2`, `gpt2-small` | Query expansion model |
+| `VOIDM_SEARCH_QUERY_EXPANSION_TIMEOUT_MS` | `300` | Integer 100-5000 | Expansion timeout (milliseconds) |
+| `VOIDM_SEARCH_RERANKER_ENABLED` | `false` | `true`, `false` | Enable cross-encoder reranking |
+| `VOIDM_SEARCH_RERANKER_MODEL` | `ms-marco-MiniLM-L-6-v2` | Model name | Reranking model |
+| `VOIDM_SEARCH_RERANKER_APPLY_TO_TOP_K` | `15` | Integer 1-100 | Rerank top-K results |
+
+**Search modes explained:**
+- `hybrid-rrf`: Reciprocal Rank Fusion (recommended) — combines semantic, keyword, fuzzy
+- `hybrid`: Weighted average of semantic, keyword, fuzzy (legacy)
+- `semantic`: Vector similarity only
+- `keyword`: BM25 full-text search only
+- `fuzzy`: String similarity only
+
+### Insert Configuration
+
+| Variable | Default | Possible Values | Description |
+|----------|---------|-----------------|-------------|
+| `VOIDM_INSERT_AUTO_LINK_THRESHOLD` | `0.7` | Float 0.0-1.0 | Similarity threshold for auto-linking |
+| `VOIDM_INSERT_AUTO_LINK_LIMIT` | `5` | Integer 0-50 | Max auto-links per memory |
+| `VOIDM_INSERT_DUPLICATE_THRESHOLD` | `0.95` | Float 0.0-1.0 | Similarity threshold for duplicate warning |
+
+### Redaction Configuration
+
+| Variable | Default | Possible Values | Description |
+|----------|---------|-----------------|-------------|
+| `VOIDM_REDACTION_ENABLED` | `true` | `true`, `false` | Enable secret redaction |
+| `VOIDM_REDACTION_API_KEYS_ENABLED` | `true` | `true`, `false` | Redact API keys (sk-..., AKIA...) |
+| `VOIDM_REDACTION_JWT_TOKENS_ENABLED` | `true` | `true`, `false` | Redact JWT tokens |
+| `VOIDM_REDACTION_DB_CONNECTIONS_ENABLED` | `true` | `true`, `false` | Redact DB connection strings |
+| `VOIDM_REDACTION_AUTH_TOKENS_ENABLED` | `true` | `true`, `false` | Redact auth tokens and cookies |
+| `VOIDM_REDACTION_EMAILS_ENABLED` | `true` | `true`, `false` | Redact email addresses |
+
+### Model Cache Configuration
+
+| Variable | Default | Possible Values | Description |
+|----------|---------|-----------------|-------------|
+| `VOIDM_CACHE_EMBEDDINGS_DIR` | `~/.cache/voidm/embeddings/` | Path string | Cache for embedding models |
+| `VOIDM_CACHE_NER_DIR` | `~/.cache/voidm/ner/` | Path string | Cache for NER model |
+| `VOIDM_CACHE_NLI_DIR` | `~/.cache/voidm/nli/` | Path string | Cache for NLI model |
+
+### Performance Configuration
+
+| Variable | Default | Possible Values | Description |
+|----------|---------|-----------------|-------------|
+| `VOIDM_PARALLEL_THREADS` | `num_cpus / 2` | Integer 1-64 | Thread pool size for parallel ops |
+| `VOIDM_BATCH_SIZE` | `1000` | Integer 10-10000 | Batch size for migrations |
+| `VOIDM_TIMEOUT_MS` | `30000` | Integer 1000-300000 | Global operation timeout (ms) |
+
+### Output Configuration
+
+| Variable | Default | Possible Values | Description |
+|----------|---------|-----------------|-------------|
+| `VOIDM_OUTPUT_JSON` | `false` | `true`, `false` | Output JSON (equivalent to `--json`) |
+| `VOIDM_OUTPUT_QUIET` | `false` | `true`, `false` | Suppress decorative output |
+| `VOIDM_OUTPUT_COLOR` | `auto` | `auto`, `always`, `never` | Color output control |
+
+### Example: Setting via Environment
+
+```bash
+# Override database backend
+export VOIDM_DATABASE_BACKEND=neo4j
+export VOIDM_DATABASE_NEO4J_URI=bolt://localhost:7687
+export VOIDM_DATABASE_NEO4J_USERNAME=neo4j
+export VOIDM_DATABASE_NEO4J_PASSWORD=password
+
+# Override search settings
+export VOIDM_SEARCH_MODE=hybrid-rrf
+export VOIDM_SEARCH_DEFAULT_LIMIT=20
+export VOIDM_SEARCH_QUERY_EXPANSION_ENABLED=true
+export VOIDM_SEARCH_QUERY_EXPANSION_MODEL=phi-2
+
+# Run voidm with custom config
+voidm search "docker"
+```
+
+### Environment Variable Precedence
+
+When the same setting is configured in multiple places, the precedence is (highest to lowest):
+
+1. **Command-line flags** (e.g., `--db`, `--json`)
+2. **Environment variables** (e.g., `VOIDM_DATABASE_BACKEND`)
+3. **Config file** (`~/.config/voidm/config.toml`)
+4. **Defaults** (built-in)
+
+Example:
+
+```bash
+# Config file has: search.mode = "semantic"
+# Environment has: VOIDM_SEARCH_MODE=keyword
+# Command-line has: voidm search "query" --mode fuzzy
+# Result: fuzzy search (command-line wins)
+```
+
+---
+
 ## Ontology
 
 The ontology layer adds first-class concept nodes — classes, categories, architectural components — that memories can be attached to as instances.

@@ -1,6 +1,7 @@
 pub mod config;
 pub mod crud;
 pub mod db;
+pub mod query;
 pub mod migrate;
 pub mod models;
 pub mod ner;

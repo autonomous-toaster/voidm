@@ -102,6 +102,9 @@ impl QueryTranslator for SqliteTranslator {
                 scopes,
                 embedding,
             } => self.translate_search_hybrid(query, *limit, *min_score, scopes, embedding.as_deref()),
+            super::cypher::CypherOperation::SearchHybridRRF { query, limit, min_score, scopes, embedding } => {
+                self.translate_search_hybrid_rrf(query, *limit, *min_score, scopes, embedding.as_deref())
+            },
             super::cypher::CypherOperation::QueryCypher { query, params } => self.translate_query_cypher(query, params),
             super::cypher::CypherOperation::GetNeighbors { id, depth } => self.translate_get_neighbors(id, *depth),
         }
@@ -395,6 +398,30 @@ impl QueryTranslator for SqliteTranslator {
         // - Custom vector functions for embeddings
         // - FTS5 virtual table for full-text search
         // - Scoring combination
+        let sql = r#"
+            SELECT m.* FROM memories m
+            WHERE m.content MATCH $query
+            LIMIT $limit
+        "#.to_string();
+        Ok((sql, params))
+    }
+
+    fn translate_search_hybrid_rrf(
+        &self,
+        query: &str,
+        limit: usize,
+        min_score: f32,
+        _scopes: &[String],
+        _embedding: Option<&[f32]>,
+    ) -> Result<(String, QueryParams), String> {
+        let params = QueryParams::new()
+            .with_param("query", query)
+            .with_param("limit", limit as i32)
+            .with_param("min_score", min_score);
+
+        // SQLite RRF hybrid search (Reciprocal Rank Fusion)
+        // Note: Implementation handled by search_with_rrf() in search.rs
+        // This translator stub is for interface compatibility
         let sql = r#"
             SELECT m.* FROM memories m
             WHERE m.content MATCH $query

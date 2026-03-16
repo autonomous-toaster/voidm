@@ -43,6 +43,9 @@ pub enum SearchMode {
     Keyword,
     Fuzzy,
     Bm25,
+    /// Hybrid search with Reciprocal Rank Fusion (RRF)
+    /// Combines vector, BM25, fuzzy signals using RRF instead of weighted averaging
+    HybridRRF,
 }
 
 impl std::str::FromStr for SearchMode {
@@ -54,7 +57,8 @@ impl std::str::FromStr for SearchMode {
             "keyword" => Ok(SearchMode::Keyword),
             "fuzzy" => Ok(SearchMode::Fuzzy),
             "bm25" => Ok(SearchMode::Bm25),
-            other => Err(anyhow::anyhow!("Unknown search mode: '{}'. Valid: hybrid, semantic, keyword, fuzzy, bm25", other)),
+            "hybrid-rrf" => Ok(SearchMode::HybridRRF),
+            other => Err(anyhow::anyhow!("Unknown search mode: '{}'. Valid: hybrid, semantic, keyword, fuzzy, bm25, hybrid-rrf", other)),
         }
     }
 }
@@ -104,6 +108,11 @@ pub async fn search(
     config_min_score: f32,
     config_search: &crate::config::SearchConfig,
 ) -> Result<SearchResponse> {
+    // Dispatch to RRF-enhanced search if mode is HybridRRF
+    if opts.mode == SearchMode::HybridRRF {
+        return search_with_rrf(pool, opts, model_name, embeddings_enabled, config_min_score, config_search).await;
+    }
+
     use std::collections::HashMap;
 
     tracing::info!("Search: Starting search request");

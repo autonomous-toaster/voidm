@@ -1,5 +1,26 @@
 # voidm Configuration Example
 # Location: ~/.config/voidm/config.toml
+#
+# CONFIGURATION HIERARCHY (lowest to highest priority):
+# 1. This file (config.toml) - persistent baseline configuration
+# 2. Environment variables (VOIDM_*) - override file settings
+# 3. CLI arguments (--flags) - override both file and env vars
+#
+# Example: Set search mode via any method:
+#   - File:     [search] mode = "hybrid-rrf"
+#   - Env:      VOIDM_SEARCH_MODE=hybrid-rrf voidm search "query"
+#   - CLI:      voidm search "query" --search-mode hybrid-rrf
+#
+# Environment Variable Naming:
+#   VOIDM_SECTION_SUBSECTION_PARAM (uppercase, underscores)
+#   Examples:
+#     - VOIDM_DATABASE_BACKEND → database.backend
+#     - VOIDM_SEARCH_MODE → search.mode
+#     - VOIDM_SEARCH_RERANKER_ENABLED → search.reranker.enabled
+#     - VOIDM_INSERT_AUTO_LINK_THRESHOLD → insert.auto_link_threshold
+#
+# For full environment variable reference, see:
+#   https://github.com/autonomous-toaster/voidm#environment-variables
 
 [database]
 backend = "sqlite"  # "sqlite" (default) or "neo4j"

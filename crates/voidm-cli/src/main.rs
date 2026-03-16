@@ -2,11 +2,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-mod commands;
-mod output;
-mod instructions;
-
+use voidm_cli::{commands, output, instructions, cli_config};
 use voidm_core::{Config, open_pool};
+use cli_config::CliConfigOverrides;
 
 #[derive(Parser)]
 #[command(name = "voidm", about = "Local-first memory tool for LLM agents", version)]
@@ -23,8 +21,98 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
+    // ─── Global Config Overrides ───
+
+    /// Database backend: sqlite, neo4j [env: VOIDM_DATABASE_BACKEND]
+    #[arg(long, global = true, env = "VOIDM_DATABASE_BACKEND")]
+    pub database_backend: Option<String>,
+
+    /// SQLite database path [env: VOIDM_DATABASE_SQLITE_PATH]
+    #[arg(long, global = true, env = "VOIDM_DATABASE_SQLITE_PATH")]
+    pub database_sqlite_path: Option<String>,
+
+    /// Embeddings enabled [env: VOIDM_EMBEDDINGS_ENABLED]
+    #[arg(long, global = true, env = "VOIDM_EMBEDDINGS_ENABLED")]
+    pub embeddings_enabled: Option<bool>,
+
+    /// Embeddings model name [env: VOIDM_EMBEDDINGS_MODEL]
+    #[arg(long, global = true, env = "VOIDM_EMBEDDINGS_MODEL")]
+    pub embeddings_model: Option<String>,
+
+    /// Search mode: hybrid-rrf, hybrid, semantic, keyword, fuzzy, bm25 [env: VOIDM_SEARCH_MODE]
+    #[arg(long, global = true, env = "VOIDM_SEARCH_MODE")]
+    pub search_mode: Option<String>,
+
+    /// Search default limit [env: VOIDM_SEARCH_DEFAULT_LIMIT]
+    #[arg(long, global = true, env = "VOIDM_SEARCH_DEFAULT_LIMIT")]
+    pub search_default_limit: Option<usize>,
+
+    /// Search minimum score (0.0-1.0) [env: VOIDM_SEARCH_MIN_SCORE]
+    #[arg(long, global = true, env = "VOIDM_SEARCH_MIN_SCORE")]
+    pub search_min_score: Option<f32>,
+
+    /// Reranker enabled [env: VOIDM_SEARCH_RERANKER_ENABLED]
+    #[arg(long, global = true, env = "VOIDM_SEARCH_RERANKER_ENABLED")]
+    pub reranker_enabled: Option<bool>,
+
+    /// Reranker model name [env: VOIDM_SEARCH_RERANKER_MODEL]
+    #[arg(long, global = true, env = "VOIDM_SEARCH_RERANKER_MODEL")]
+    pub reranker_model: Option<String>,
+
+    /// Reranker apply to top K results [env: VOIDM_SEARCH_RERANKER_TOP_K]
+    #[arg(long, global = true, env = "VOIDM_SEARCH_RERANKER_TOP_K")]
+    pub reranker_top_k: Option<usize>,
+
+    /// Query expansion enabled [env: VOIDM_SEARCH_QE_ENABLED]
+    #[arg(long, global = true, env = "VOIDM_SEARCH_QE_ENABLED")]
+    pub qe_enabled: Option<bool>,
+
+    /// Query expansion timeout milliseconds [env: VOIDM_SEARCH_QE_TIMEOUT_MS]
+    #[arg(long, global = true, env = "VOIDM_SEARCH_QE_TIMEOUT_MS")]
+    pub qe_timeout_ms: Option<usize>,
+
+    /// Graph retrieval enabled [env: VOIDM_SEARCH_GR_ENABLED]
+    #[arg(long, global = true, env = "VOIDM_SEARCH_GR_ENABLED")]
+    pub gr_enabled: Option<bool>,
+
+    /// Graph retrieval max concept hops [env: VOIDM_SEARCH_GR_MAX_HOPS]
+    #[arg(long, global = true, env = "VOIDM_SEARCH_GR_MAX_HOPS")]
+    pub gr_max_hops: Option<usize>,
+
+    /// Insert auto-link threshold [env: VOIDM_INSERT_AUTO_LINK_THRESHOLD]
+    #[arg(long, global = true, env = "VOIDM_INSERT_AUTO_LINK_THRESHOLD")]
+    pub insert_auto_link_threshold: Option<f32>,
+
+    /// Insert duplicate threshold [env: VOIDM_INSERT_DUPLICATE_THRESHOLD]
+    #[arg(long, global = true, env = "VOIDM_INSERT_DUPLICATE_THRESHOLD")]
+    pub insert_duplicate_threshold: Option<f32>,
+
     #[command(subcommand)]
     pub command: Commands,
+}
+
+impl Cli {
+    /// Extract CLI config overrides
+    pub fn cli_config_overrides(&self) -> CliConfigOverrides {
+        CliConfigOverrides {
+            database_backend: self.database_backend.clone(),
+            database_sqlite_path: self.database_sqlite_path.clone(),
+            embeddings_enabled: self.embeddings_enabled,
+            embeddings_model: self.embeddings_model.clone(),
+            search_mode: self.search_mode.clone(),
+            search_default_limit: self.search_default_limit,
+            search_min_score: self.search_min_score,
+            reranker_enabled: self.reranker_enabled,
+            reranker_model: self.reranker_model.clone(),
+            reranker_top_k: self.reranker_top_k,
+            qe_enabled: self.qe_enabled,
+            qe_timeout_ms: self.qe_timeout_ms,
+            gr_enabled: self.gr_enabled,
+            gr_max_hops: self.gr_max_hops,
+            insert_auto_link_threshold: self.insert_auto_link_threshold,
+            insert_duplicate_threshold: self.insert_duplicate_threshold,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -138,14 +226,20 @@ async fn run(cli: Cli) -> Result<()> {
             return commands::config::run(cmd, cli.json).await;
         }
         Commands::Info(args) => {
-            let config = Config::load();
+            let mut config = Config::load();
+            // Apply CLI overrides (file → env → CLI hierarchy)
+            config = config.merge_from_env();
+            config = cli.cli_config_overrides().apply_to_config(config);
             return commands::info::run(args.clone(), &config, cli.db.as_deref(), cli.json);
         }
         Commands::Init(args) => {
             return commands::init::run(args.clone()).await;
         }
         Commands::Migrate(args) => {
-            let config = Config::load();
+            let mut config = Config::load();
+            // Apply CLI overrides (file → env → CLI hierarchy)
+            config = config.merge_from_env();
+            config = cli.cli_config_overrides().apply_to_config(config);
             return commands::migrate::run(args.clone(), &config, cli.db.as_deref(), cli.json).await;
         }
         Commands::CheckUpdate(args) => {
@@ -160,7 +254,12 @@ async fn run(cli: Cli) -> Result<()> {
     }
 
     // Load config + open DB
-    let config = Config::load();
+    let mut config = Config::load();
+    // Apply environment variables and CLI overrides (file → env → CLI hierarchy)
+    use voidm_core::config_loader::MergeFromEnv;
+    config = config.merge_from_env();
+    config = cli.cli_config_overrides().apply_to_config(config);
+    
     let db_path = config.db_path(cli.db.as_deref());
     let pool = open_pool(&db_path).await?;
 

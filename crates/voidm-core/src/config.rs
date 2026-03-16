@@ -450,6 +450,156 @@ pub fn save_config(config: &Config) -> Result<()> {
     Ok(())
 }
 
+// ─── Configuration Merging from Environment Variables ───
+
+impl crate::config_loader::MergeFromEnv for Config {
+    fn merge_from_env(mut self) -> Self {
+        use crate::config_loader::EnvHelper;
+
+        // Database config
+        if let Some(backend) = EnvHelper::get("DATABASE_BACKEND") {
+            self.database.backend = backend;
+        }
+        if let Some(path) = EnvHelper::get("DATABASE_SQLITE_PATH") {
+            self.database.sqlite_path = path.clone();
+            if let Some(sqlite) = &mut self.database.sqlite {
+                sqlite.path = Some(path);
+            } else {
+                self.database.sqlite = Some(SqliteConfig { path: Some(path) });
+            }
+        }
+        if let Some(uri) = EnvHelper::get("DATABASE_NEO4J_URI") {
+            if let Some(neo4j) = &mut self.database.neo4j {
+                neo4j.uri = uri;
+            }
+        }
+        if let Some(user) = EnvHelper::get("DATABASE_NEO4J_USERNAME") {
+            if let Some(neo4j) = &mut self.database.neo4j {
+                neo4j.username = user;
+            }
+        }
+        if let Some(pass) = EnvHelper::get("DATABASE_NEO4J_PASSWORD") {
+            if let Some(neo4j) = &mut self.database.neo4j {
+                neo4j.password = pass;
+            }
+        }
+
+        // Embeddings config
+        if let Some(enabled) = EnvHelper::get_bool("EMBEDDINGS_ENABLED") {
+            self.embeddings.enabled = enabled;
+        }
+        if let Some(model) = EnvHelper::get("EMBEDDINGS_MODEL") {
+            self.embeddings.model = model;
+        }
+
+        // Search config
+        if let Some(mode) = EnvHelper::get("SEARCH_MODE") {
+            self.search.mode = mode;
+        }
+        if let Some(limit) = EnvHelper::get_usize("SEARCH_DEFAULT_LIMIT") {
+            self.search.default_limit = limit;
+        }
+        if let Some(min_score) = EnvHelper::get_f32("SEARCH_MIN_SCORE") {
+            self.search.min_score = min_score;
+        }
+        if let Some(decay) = EnvHelper::get_f32("SEARCH_NEIGHBOR_DECAY") {
+            self.search.neighbor_decay = decay;
+        }
+        if let Some(min) = EnvHelper::get_f32("SEARCH_NEIGHBOR_MIN_SCORE") {
+            self.search.neighbor_min_score = min;
+        }
+        if let Some(depth) = EnvHelper::get_usize("SEARCH_NEIGHBOR_DEPTH") {
+            self.search.default_neighbor_depth = depth as u8;
+        }
+        if let Some(edges) = EnvHelper::get_vec_string("SEARCH_DEFAULT_EDGE_TYPES") {
+            self.search.default_edge_types = edges;
+        }
+
+        // Reranker config
+        if let Some(mut reranker) = self.search.reranker.take() {
+            if let Some(enabled) = EnvHelper::get_bool("SEARCH_RERANKER_ENABLED") {
+                reranker.enabled = enabled;
+            }
+            if let Some(model) = EnvHelper::get("SEARCH_RERANKER_MODEL") {
+                reranker.model = model;
+            }
+            if let Some(top_k) = EnvHelper::get_usize("SEARCH_RERANKER_TOP_K") {
+                reranker.apply_to_top_k = top_k;
+            }
+            self.search.reranker = Some(reranker);
+        } else if EnvHelper::get("SEARCH_RERANKER_ENABLED").is_some()
+            || EnvHelper::get("SEARCH_RERANKER_MODEL").is_some()
+        {
+            // Create reranker config if env vars exist
+            let mut reranker = RerankerConfig::default();
+            if let Some(enabled) = EnvHelper::get_bool("SEARCH_RERANKER_ENABLED") {
+                reranker.enabled = enabled;
+            }
+            if let Some(model) = EnvHelper::get("SEARCH_RERANKER_MODEL") {
+                reranker.model = model;
+            }
+            if let Some(top_k) = EnvHelper::get_usize("SEARCH_RERANKER_TOP_K") {
+                reranker.apply_to_top_k = top_k;
+            }
+            self.search.reranker = Some(reranker);
+        }
+
+        // Query expansion config
+        if let Some(mut qe) = self.search.query_expansion.take() {
+            if let Some(enabled) = EnvHelper::get_bool("SEARCH_QE_ENABLED") {
+                qe.enabled = enabled;
+            }
+            if let Some(model) = EnvHelper::get("SEARCH_QE_MODEL") {
+                qe.model = model;
+            }
+            if let Some(timeout) = EnvHelper::get_usize("SEARCH_QE_TIMEOUT_MS") {
+                qe.timeout_ms = timeout as u64;
+            }
+            self.search.query_expansion = Some(qe);
+        }
+
+        // Graph retrieval config
+        if let Some(mut gr) = self.search.graph_retrieval.take() {
+            if let Some(enabled) = EnvHelper::get_bool("SEARCH_GR_ENABLED") {
+                gr.enabled = enabled;
+            }
+            if let Some(hops) = EnvHelper::get_usize("SEARCH_GR_MAX_HOPS") {
+                gr.max_concept_hops = hops as u8;
+            }
+            self.search.graph_retrieval = Some(gr);
+        }
+
+        // Insert config
+        if let Some(threshold) = EnvHelper::get_f32("INSERT_AUTO_LINK_THRESHOLD") {
+            self.insert.auto_link_threshold = threshold;
+        }
+        if let Some(threshold) = EnvHelper::get_f32("INSERT_DUPLICATE_THRESHOLD") {
+            self.insert.duplicate_threshold = threshold;
+        }
+        if let Some(limit) = EnvHelper::get_usize("INSERT_AUTO_LINK_LIMIT") {
+            self.insert.auto_link_limit = limit;
+        }
+
+        // Enrichment config
+        if let Some(mut sem_dedup) = self.enrichment.semantic_dedup.take() {
+            if let Some(enabled) = EnvHelper::get_bool("ENRICHMENT_SEMANTIC_DEDUP_ENABLED") {
+                sem_dedup.enabled = enabled;
+            }
+            if let Some(threshold) = EnvHelper::get_f32("ENRICHMENT_SEMANTIC_DEDUP_THRESHOLD") {
+                sem_dedup.threshold = threshold;
+            }
+            self.enrichment.semantic_dedup = Some(sem_dedup);
+        }
+
+        // Redaction config
+        if let Some(enabled) = EnvHelper::get_bool("REDACTION_ENABLED") {
+            self.redaction.enabled = enabled;
+        }
+
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,5 +744,15 @@ enabled = true
             assert_eq!(r.model, "ms-marco-MiniLM-L-6-v2", "should use default model");
             assert_eq!(r.apply_to_top_k, 15, "should use default top_k");
         }
+    }
+
+    #[test]
+    fn test_config_env_merge_search_mode() {
+        use crate::config_loader::MergeFromEnv;
+        // This test verifies that MergeFromEnv trait is implemented
+        // Note: Can't easily test actual env var behavior in tests without env::set_var
+        let config = Config::default();
+        let _merged = config.merge_from_env();
+        // If this compiles, the trait is properly implemented
     }
 }

@@ -773,6 +773,8 @@ voidm/
 
 Inspired by [byteowlz/mmry](https://github.com/byteowlz/mmry) and [colliery-io/graphqlite](https://github.com/colliery-io/graphqlite).
 
+RRF (Reciprocal Rank Fusion) signal fusion approach informed by [QMD project](https://github.com/tobil/qmd) architecture and research.
+
 Built with ❤️ and [pi-coding-agent](https://github.com/badlogic/pi-mono).
 
 ---

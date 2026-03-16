@@ -110,6 +110,16 @@ pub enum CypherOperation {
         embedding: Option<Vec<f32>>,
     },
 
+    /// Hybrid search with Reciprocal Rank Fusion (RRF)
+    /// Combines vector, BM25, and fuzzy signals using RRF instead of weighted averaging
+    SearchHybridRRF {
+        query: String,
+        limit: usize,
+        min_score: f32,
+        scopes: Vec<String>,
+        embedding: Option<Vec<f32>>,
+    },
+
     // Graph Operations
     QueryCypher {
         query: String,
@@ -318,10 +328,41 @@ impl CypherOperation {
                      (COALESCE(vec_score, 0.0) * 0.5 +
                       COALESCE(fts_score, 0.0) * 0.3 +
                       COALESCE(fuzzy_score, 0.0) * 0.2) AS combined_score
-                WHERE combined_score >= $min_score
-                RETURN m, combined_score
-                ORDER BY combined_score DESC
+                "#.to_string()
+            }
+            Self::SearchHybridRRF { .. } => {
+                r#"
+                // Vector search
+                MATCH (m:Memory)
+                WHERE m.embedding IS NOT NULL
+                WITH m, cosine_similarity($embedding, m.embedding) AS vec_score
+                WHERE vec_score > 0.0
+                WITH COLLECT({id: m.id, rank: 1}) AS vec_ranks
+
+                UNION
+
+                // Full-text search
+                MATCH (m:Memory)
+                WHERE m.content CONTAINS $query
+                WITH m, 1.0 / (1.0 + COALESCE(position($query in m.content), 999)) AS fts_score
+                WITH COLLECT({id: m.id, rank: 1}) AS fts_ranks
+
+                UNION
+
+                // Fuzzy search
+                MATCH (m:Memory)
+                WHERE levenshtein(m.content, $query) / COALESCE(length($query), 1) > 0.3
+                WITH m, 1.0 - (levenshtein(m.content, $query) / length($query)) AS fuzzy_score
+                WITH COLLECT({id: m.id, rank: 1}) AS fuzzy_ranks
+
+                // RRF Fusion: score = Σ 1/(k + rank), k=60
+                WITH vec_ranks, fts_ranks, fuzzy_ranks
+                UNWIND (vec_ranks + fts_ranks + fuzzy_ranks) AS item
+                WITH item.id AS id, SUM(1.0 / (60 + item.rank)) AS rrf_score
+                ORDER BY rrf_score DESC
                 LIMIT $limit
+                MATCH (m:Memory {id: id})
+                RETURN m, rrf_score
                 "#.to_string()
             }
             Self::QueryCypher { query, .. } => query.clone(),
@@ -358,6 +399,7 @@ impl CypherOperation {
             Self::OntologyEdgeDelete { .. } => "OntologyEdgeDelete",
             Self::ListOntologyEdges => "ListOntologyEdges",
             Self::SearchHybrid { .. } => "SearchHybrid",
+            Self::SearchHybridRRF { .. } => "SearchHybridRRF",
             Self::QueryCypher { .. } => "QueryCypher",
             Self::GetNeighbors { .. } => "GetNeighbors",
         }

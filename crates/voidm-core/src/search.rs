@@ -43,6 +43,9 @@ pub enum SearchMode {
     Keyword,
     Fuzzy,
     Bm25,
+    /// Hybrid search with Reciprocal Rank Fusion (RRF)
+    /// Combines vector, BM25, fuzzy signals using RRF instead of weighted averaging
+    HybridRRF,
 }
 
 impl std::str::FromStr for SearchMode {
@@ -54,7 +57,8 @@ impl std::str::FromStr for SearchMode {
             "keyword" => Ok(SearchMode::Keyword),
             "fuzzy" => Ok(SearchMode::Fuzzy),
             "bm25" => Ok(SearchMode::Bm25),
-            other => Err(anyhow::anyhow!("Unknown search mode: '{}'. Valid: hybrid, semantic, keyword, fuzzy, bm25", other)),
+            "hybrid-rrf" => Ok(SearchMode::HybridRRF),
+            other => Err(anyhow::anyhow!("Unknown search mode: '{}'. Valid: hybrid, semantic, keyword, fuzzy, bm25, hybrid-rrf", other)),
         }
     }
 }
@@ -104,6 +108,11 @@ pub async fn search(
     config_min_score: f32,
     config_search: &crate::config::SearchConfig,
 ) -> Result<SearchResponse> {
+    // Dispatch to RRF-enhanced search if mode is HybridRRF
+    if opts.mode == SearchMode::HybridRRF {
+        return search_with_rrf(pool, opts, model_name, embeddings_enabled, config_min_score, config_search).await;
+    }
+
     use std::collections::HashMap;
 
     tracing::info!("Search: Starting search request");
@@ -572,4 +581,185 @@ async fn apply_reranker(
     tracing::info!("Reranker: Results re-sorted by reranker scores");
 
     Ok(())
+}
+
+/// Enhanced hybrid search with Reciprocal Rank Fusion (RRF).
+///
+/// Combines vector, BM25, and fuzzy signals using RRF instead of weighted averaging.
+/// Benefits:
+/// - Better ranking by combining signals without manual weights
+/// - Preserves high-confidence matches (rank 1-3 bonuses)
+/// - Prevents any single signal from dominating
+///
+/// Usage: Enable via SearchMode or config option
+pub async fn search_with_rrf(
+    pool: &SqlitePool,
+    opts: &SearchOptions,
+    model_name: &str,
+    embeddings_enabled: bool,
+    config_min_score: f32,
+    config_search: &crate::config::SearchConfig,
+) -> Result<SearchResponse> {
+    use std::collections::HashMap;
+    
+    tracing::info!("Search (RRF): Starting RRF-enhanced search request");
+    tracing::debug!("Search (RRF): query='{}', mode={:?}, limit={}", 
+                    opts.query, opts.mode, opts.limit);
+
+    let fetch_limit = opts.limit * 3; // over-fetch for merging
+    
+    // Collect signal results separately for RRF
+    let mut vector_results: Vec<(String, f32)> = Vec::new();
+    let mut bm25_results: Vec<(String, f32)> = Vec::new();
+    let mut fuzzy_results: Vec<(String, f32)> = Vec::new();
+
+    // --- Vector ANN Signal ---
+    let use_vector = embeddings_enabled
+        && matches!(opts.mode, SearchMode::Hybrid | SearchMode::Semantic)
+        && crate::vector::vec_table_exists(pool).await.unwrap_or(false);
+
+    if use_vector {
+        tracing::debug!("Search (RRF): Vector signal");
+        if let Ok(embedding) = crate::embeddings::embed_text(model_name, &opts.query) {
+            if let Ok(hits) = crate::vector::ann_search(pool, &embedding, fetch_limit).await {
+                for (id, dist) in hits {
+                    let sim = 1.0 - (dist / 2.0).clamp(0.0, 1.0);
+                    vector_results.push((id, sim));
+                }
+                // Sort by score descending for RRF
+                vector_results.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+        }
+    }
+
+    // --- BM25 Signal ---
+    let use_bm25 = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Bm25 | SearchMode::Keyword);
+    if use_bm25 {
+        tracing::debug!("Search (RRF): BM25 signal");
+        let fts_query = sanitize_fts_query(&opts.query);
+        if let Ok(rows) = sqlx::query_as::<_, (String, f32)>(
+            "SELECT id, bm25(memories_fts) AS score FROM memories_fts WHERE content MATCH ? ORDER BY score LIMIT ?"
+        )
+        .bind(&fts_query)
+        .bind(fetch_limit as i64)
+        .fetch_all(pool)
+        .await {
+            let min_bm25 = rows.iter().map(|(_, s)| *s).fold(f32::MAX, f32::min);
+            let max_bm25 = rows.iter().map(|(_, s)| *s).fold(f32::MIN, f32::max);
+            let range = (max_bm25 - min_bm25).abs().max(0.001);
+
+            for (id, raw_score) in rows {
+                let norm = 1.0 - ((raw_score - min_bm25) / range).clamp(0.0, 1.0);
+                bm25_results.push((id, norm));
+            }
+            bm25_results.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+    }
+
+    // --- Fuzzy Signal ---
+    let use_fuzzy = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Fuzzy);
+    if use_fuzzy {
+        tracing::debug!("Search (RRF): Fuzzy signal");
+        if let Ok(all) = sqlx::query_as::<_, (String, String)>(
+            "SELECT id, content FROM memories ORDER BY created_at DESC LIMIT 500"
+        )
+        .fetch_all(pool)
+        .await {
+            let query_lower = opts.query.to_lowercase();
+            for (id, content) in all {
+                let sim = strsim::jaro_winkler(&query_lower, &content.to_lowercase()) as f32;
+                if sim > 0.6 {
+                    fuzzy_results.push((id, sim));
+                }
+            }
+            fuzzy_results.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+    }
+
+    // Prepare signals for RRF
+    let mut signals: Vec<(&str, Vec<(String, f32)>)> = Vec::new();
+    if !vector_results.is_empty() {
+        signals.push(("vector", vector_results));
+    }
+    if !bm25_results.is_empty() {
+        signals.push(("bm25", bm25_results));
+    }
+    if !fuzzy_results.is_empty() {
+        signals.push(("fuzzy", fuzzy_results));
+    }
+
+    if signals.is_empty() {
+        // Fallback: return newest memories
+        let memories = fetch_memories_newest(pool, opts).await?;
+        return Ok(SearchResponse {
+            results: memories,
+            threshold_applied: None,
+            best_score: None,
+        });
+    }
+
+    // Apply RRF fusion
+    let rrf = crate::rrf_fusion::RRFFusion::default();
+    let fused = rrf.fuse(signals);
+
+    tracing::debug!("Search (RRF): RRF fusion complete, {} results", fused.len());
+
+    // Fetch full memory records
+    let mut results = Vec::new();
+    let mut best_score = None;
+
+    for rrf_result in fused.iter().take(opts.limit * 2) {
+        if let Some(m) = fetch_memory_by_id(pool, &rrf_result.id).await? {
+            if let Some(ref scope) = opts.scope_filter {
+                if !m.scopes.iter().any(|s| s.starts_with(scope.as_str())) {
+                    continue;
+                }
+            }
+            if let Some(ref t) = opts.type_filter {
+                if m.memory_type != *t {
+                    continue;
+                }
+            }
+
+            let importance_boost = (m.importance as f32 - 5.0) * 0.02;
+            let final_score = rrf_result.rrf_score + importance_boost;
+            
+            best_score = Some(best_score.unwrap_or(final_score).max(final_score));
+
+            results.push(SearchResult {
+                id: rrf_result.id.clone(),
+                score: final_score,
+                memory_type: m.memory_type,
+                content: m.content,
+                scopes: m.scopes,
+                tags: m.tags,
+                importance: m.importance,
+                created_at: m.created_at,
+                source: "search".into(),
+                rel_type: None,
+                direction: None,
+                hop_depth: None,
+                parent_id: None,
+                quality_score: m.quality_score,
+            });
+
+            if results.len() >= opts.limit {
+                break;
+            }
+        }
+    }
+
+    tracing::info!("Search (RRF): Returning {} results", results.len());
+
+    Ok(SearchResponse {
+        results,
+        threshold_applied: None,
+        best_score,
+    })
 }

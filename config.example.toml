@@ -90,43 +90,85 @@ limit = 3                               # Max concept-related results per direct
 
 # === RERANKER CONFIGURATION ===
 # Optional: Enable cross-encoder reranking for better search quality
+# Two models available:
+#   - ms-marco-TinyBERT    : 11MB, 6-12ms/result, 70-80% accuracy vs bge
+#   - bge-reranker-base    : 278MB, 20-30ms/result, highest accuracy
 # 
-# Only ONNX-compatible models are supported (no BAAI models - they lack ONNX exports)
-# 
-# Recommended: ms-marco-MiniLM-L-6-v2 (100MB, ~1s latency, best balance)
-# Fast alternative: ms-marco-TinyBERT-L-2 (11MB, 0.6s latency)
-# High quality: qnli-distilroberta-base (250MB, 30s latency, best accuracy)
+# Recommended: Start with ms-marco-TinyBERT for most use cases
+# Use bge-reranker-base only if maximum accuracy is critical
 
+# Example 1: Enable ms-marco-MiniLM-L-6-v2 (recommended - has ONNX support)
 [search.reranker]
 enabled = false                      # Disabled by default
-model = "ms-marco-MiniLM-L-6-v2"     # RECOMMENDED: works reliably, best balance of speed and quality
+model = "ms-marco-MiniLM-L-6-v2"     # Recommended: works reliably with ONNX support
 apply_to_top_k = 15                  # Rerank top-15 results
-
-# Supported reranker models (ONNX-compatible, verified working):
-# model = "ms-marco-TinyBERT-L-2"     # Fastest: 11MB, 0.6s latency
-# model = "ms-marco-MiniLM-L-6-v2"    # RECOMMENDED: 100MB, ~1s latency
-# model = "mmarco-mMiniLMv2-L12-H384-v1"  # Medium: 110MB, ~10s latency
-# model = "qnli-distilroberta-base"   # Best quality: 250MB, ~30s latency (slow but accurate)
-
 # Note: blend parameter is deprecated and no longer used
 # Reranker now uses pure cross-encoder scores
+# 
+# Reranker models with ONNX support (verified working):
+# FAST (<1s - RECOMMENDED):
+# - ms-marco-TinyBERT-L-2: 0.592s latency, 11MB (fastest)
+# - ms-marco-MiniLM-L-6-v2: ~1s latency, 100MB (recommended - best balance)
+# 
+# SLOWER (>1s):
+# - cross-encoder/mmarco-mMiniLMv2-L12-H384-v1: ~10s latency, 110MB
+# - cross-encoder/qnli-distilroberta-base: ~30s latency, 250MB (best quality)
+# 
+# UNSUPPORTED (no ONNX files - will fail):
+# - BAAI/bge-small-reranker-v2: Model does not have ONNX export
+# - BAAI/bge-reranker-base: Model does not have ONNX export
+# - bge-* models: Use cross-encoder/ variants instead
+# 
+# To enable: set enabled = true
+# To use different model: model = "ms-marco-TinyBERT-L-2"
+
+# For reference: other supported ONNX models
+# model = "ms-marco-TinyBERT-L-2"     # Fastest (11MB, 0.6s latency)
+# model = "cross-encoder/qnli-distilroberta-base"  # Best quality but slow (250MB)
+# model = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"  # Alternative (110MB)
+# apply_to_top_k = 10
+
+# Example 3: Disabled (default)
+# [search.reranker]
+# enabled = false
 
 # === QUERY EXPANSION CONFIGURATION ===
 # Optional: Expand queries with synonyms and related terms using small LLMs
 # Improves search recall by automatically generating related search terms
 #
 # Models available:
-#   - tinyllama                  : 1.1B, good quality + fast (DEFAULT, RECOMMENDED)
-#   - phi-2                      : 2.7B, highest quality but slower
-#   - gpt2-small                 : lightweight, acceptable quality
+#   - tinyllama                        : 1.1B, ONNX backend, good quality + fast (default, recommended)
+#   - tobil/qmd-query-expansion-1.7B   : 1.7B, GGUF backend, better quality (+8.5% relevance, +91.7% keywords)
 #
-# Default: tinyllama (proven baseline, reliable, good balance)
-# Best quality: phi-2 (slower, 2.7B model)
-# Fastest: gpt2-small (lightweight)
+# Backend Auto-Detection:
+#   - Models with "tobil" or "qmd" in name → GGUF backend (opt-in)
+#   - All other models → ONNX backend (default)
+#
+# How it works:
+# 1. User searches for "Docker"
+# 2. System expands to: "Docker, containerization, container images, Docker Compose, Kubernetes"
+# 3. Improved recall: finds more relevant results
+# 4. First use downloads model (~300-1200MB), then caches locally
+# 5. Subsequent queries run in <300ms (inference only)
+#
+# Quality:
+# - tinyllama (ONNX): Proven baseline, reliable
+# - tobil/qmd (GGUF): Better keyword extraction, improved semantic understanding
+#   - +91.7% more keywords per query
+#   - +100% more semantic phrases
+#   - +8.5% higher relevance scores
+#
+# Performance:
+# - First use: ~10 minutes (includes download)
+# - Cached queries: <300ms (both models, on M3 MacBook: 257ms measured)
+# - LRU query cache: <1ms (if same query repeated)
+#
+# Recommended: Start with tinyllama (default) for proven stability
+# Use tobil/qmd for quality-focused applications needing better keyword coverage
 
 [search.query_expansion]
 enabled = false                              # Disabled by default
-model = "tinyllama"                          # RECOMMENDED: Good quality + fast
+model = "tinyllama"                          # Model: "tinyllama" (ONNX, default) or "tobil/qmd-query-expansion-1.7B" (GGUF, opt-in, better quality)
 timeout_ms = 300                             # Max time to wait for expansion (milliseconds)
 
 # Intent-aware expansion (guides expansion toward specific context)

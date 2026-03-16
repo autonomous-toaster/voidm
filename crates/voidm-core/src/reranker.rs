@@ -26,10 +26,39 @@ pub struct RerankerScore {
 
 impl CrossEncoderReranker {
     /// Load a reranker model. Downloads on first use.
-    /// Fails with a descriptive error if the model cannot be loaded.
+    /// Falls back to ms-marco-MiniLM-L-6-v2 if the requested model fails.
     pub async fn load(model_name: &str) -> Result<Self> {
         tracing::info!("Loading reranker: {}", model_name);
-        Self::load_model_internal(model_name).await
+        
+        // Try to load the requested model
+        match Self::load_model_internal(model_name).await {
+            Ok(reranker) => Ok(reranker),
+            Err(e) => {
+                // Check if this is a BAAI model (401 Unauthorized or file not found)
+                let error_msg = e.to_string();
+                if error_msg.contains("BAAI") || error_msg.contains("401") || error_msg.contains("Unauthorized") {
+                    tracing::warn!(
+                        "Failed to load {} (BAAI models unavailable with ONNX)\n\
+                         Falling back to: ms-marco-MiniLM-L-6-v2\n\
+                         Error: {}",
+                        model_name, e
+                    );
+                    
+                    // Fallback to working model
+                    let fallback_model = "ms-marco-MiniLM-L-6-v2";
+                    tracing::info!("Attempting fallback to: {}", fallback_model);
+                    
+                    Self::load_model_internal(fallback_model).await
+                        .with_context(|| format!(
+                            "Failed to load both {} and fallback {}: {}",
+                            model_name, fallback_model, e
+                        ))
+                } else {
+                    // Different error - not a BAAI issue
+                    Err(e)
+                }
+            }
+        }
     }
 
     /// Internal model loading (shared by load() and load_with_fallback()).
@@ -323,8 +352,23 @@ impl CrossEncoderReranker {
 fn get_model_metadata(name: &str) -> Result<(&'static str, &'static str, &'static str)> {
     match name {
         // Lightweight models (< 1s per query)
-        "ms-marco-TinyBERT-L-2" | "ms-marco-TinyBERT" => Ok((
+        "ms-marco-TinyBERT-L-2" => Ok((
             "cross-encoder/ms-marco-TinyBERT-L-2",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        "ms-marco-TinyBERT" => Ok((
+            "cross-encoder/ms-marco-TinyBERT-L-2",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        "mmarco-mMiniLMv2-L12-H384-v1" => Ok((
+            "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+            "onnx/model.onnx",
+            "tokenizer.json",
+        )),
+        "qnli-distilroberta-base" => Ok((
+            "cross-encoder/qnli-distilroberta-base",
             "onnx/model.onnx",
             "tokenizer.json",
         )),
@@ -334,29 +378,21 @@ fn get_model_metadata(name: &str) -> Result<(&'static str, &'static str, &'stati
             "onnx/model.onnx",
             "tokenizer.json",
         )),
-        "mmarco-mMiniLMv2-L12-H384-v1" => Ok((
-            "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+        "bge-small-reranker-v2" => Ok((
+            "BAAI/bge-small-reranker-v2",
             "onnx/model.onnx",
             "tokenizer.json",
         )),
         // Heavy models (5s+ per query)
-        "qnli-distilroberta-base" => Ok((
-            "cross-encoder/qnli-distilroberta-base",
+        "bge-reranker-base" => Ok((
+            "BAAI/bge-reranker-base",
             "onnx/model.onnx",
             "tokenizer.json",
         )),
-        other => {
-            Err(anyhow::anyhow!(
-                "Unknown reranker model '{}'. Supported models:\n  \
-                 - ms-marco-TinyBERT-L-2 (11MB, fastest, <0.6s)\n  \
-                 - ms-marco-MiniLM-L-6-v2 (100MB, recommended, ~1s)\n  \
-                 - mmarco-mMiniLMv2-L12-H384-v1 (110MB, ~10s)\n  \
-                 - qnli-distilroberta-base (250MB, best quality, ~30s)\n\n\
-                 To use a different model, update [search.reranker] in your config:\n  \
-                 model = \"ms-marco-MiniLM-L-6-v2\"",
-                other
-            ))
-        }
+        other => Err(anyhow::anyhow!(
+            "Unknown reranker model '{}'. Supported: ms-marco-TinyBERT-L-2, mmarco-mMiniLMv2-L12-H384-v1, qnli-distilroberta-base, ms-marco-MiniLM-L-6-v2, bge-small-reranker-v2, bge-reranker-base",
+            other
+        )),
     }
 }
 
@@ -425,18 +461,7 @@ async fn download_model_files(
 
     tracing::debug!("Downloading ONNX file: {} from {}", onnx_file, hf_model_id);
     let onnx_src = repo.get(onnx_file).await
-        .with_context(|| {
-            format!(
-                "Failed to download ONNX model from HuggingFace repository '{}'.\n\
-                 This may happen if:\n\
-                 - The model doesn't have ONNX exports (e.g., BAAI models)\n\
-                 - Network connectivity issues\n\
-                 - HuggingFace API is unavailable\n\n\
-                 Please check your internet connection and verify the model supports ONNX format.\n\
-                 For BAAI models, use an alternative like: ms-marco-MiniLM-L-6-v2",
-                hf_model_id
-            )
-        })?;
+        .with_context(|| format!("Failed to download {} from {}", onnx_file, hf_model_id))?;
     
     tracing::debug!("Copying ONNX file to cache: {}", cache_dir.join("model.onnx").display());
     std::fs::copy(&onnx_src, cache_dir.join("model.onnx"))
@@ -454,8 +479,10 @@ async fn download_model_files(
 }
 
 fn reranker_cache_dir(model_name: &str) -> PathBuf {
-    let base = dirs::cache_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".cache"));
+    let base = crate::embeddings::embedding_cache_dir()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".local/share")));
     
     base.join("voidm/rerankers").join(model_name)
 }

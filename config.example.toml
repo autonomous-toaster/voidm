@@ -19,7 +19,20 @@ enabled = true
 model = "Xenova/all-MiniLM-L6-v2"
 
 [search]
-mode = "hybrid"
+# Search mode: which ranking algorithm to use for results
+# Options:
+#   - "hybrid": Weighted averaging of vector + BM25 + fuzzy (0.5, 0.3, 0.2 weights)
+#   - "hybrid-rrf": Reciprocal Rank Fusion (RRF) of vector + BM25 + fuzzy signals
+#              Produces better consensus results, no manual weight tuning required
+#              Uses k=60 with top-rank bonus (+0.05 for rank 1, +0.02 for ranks 2-3)
+#   - "semantic": Vector search only
+#   - "keyword": BM25 full-text search only
+#   - "fuzzy": Fuzzy string matching only
+#   - "bm25": Same as "keyword"
+#
+# Recommended: Use "hybrid-rrf" for best recall and precision
+# Default: "hybrid" for backward compatibility
+mode = "hybrid-rrf"
 default_limit = 10
 min_score = 0.3
 neighbor_decay = 0.7

@@ -103,6 +103,9 @@ impl QueryTranslator for PostgresTranslator {
                 scopes,
                 embedding,
             } => self.translate_search_hybrid(query, *limit, *min_score, scopes, embedding.as_deref()),
+            super::cypher::CypherOperation::SearchHybridRRF { query, limit, min_score, scopes, embedding } => {
+                self.translate_search_hybrid_rrf(query, *limit, *min_score, scopes, embedding.as_deref())
+            },
             super::cypher::CypherOperation::QueryCypher { query, params } => self.translate_query_cypher(query, params),
             super::cypher::CypherOperation::GetNeighbors { id, depth } => self.translate_get_neighbors(id, *depth),
         }
@@ -435,6 +438,63 @@ impl QueryTranslator for PostgresTranslator {
             SELECT * FROM combined
             WHERE combined_score >= $min_score
             ORDER BY combined_score DESC
+            LIMIT $limit
+        "#.to_string();
+
+        Ok((sql, params))
+    }
+
+    fn translate_search_hybrid_rrf(
+        &self,
+        query: &str,
+        limit: usize,
+        min_score: f32,
+        scopes: &[String],
+        embedding: Option<&[f32]>,
+    ) -> Result<(String, QueryParams), String> {
+        let params = QueryParams::new()
+            .with_param("query", query)
+            .with_param("limit", limit as i32)
+            .with_param("min_score", min_score)
+            .with_param("scopes", scopes)
+            .with_param("embedding", embedding.map(|e| e.to_vec()));
+
+        // PostgreSQL RRF (Reciprocal Rank Fusion) hybrid search
+        // Combines vector, FTS, and fuzzy using RRF formula: Σ 1/(k + rank)
+        let sql = r#"
+            WITH vector_search AS (
+              SELECT m.id,
+                     ROW_NUMBER() OVER (ORDER BY 1 - (m.embedding <-> $embedding::vector) DESC) as rank
+              FROM memories m
+              WHERE m.embedding IS NOT NULL
+                AND 1 - (m.embedding <-> $embedding::vector) > 0.0
+            ),
+            fts_search AS (
+              SELECT m.id,
+                     ROW_NUMBER() OVER (ORDER BY ts_rank(to_tsvector('english', m.content), plainto_tsquery('english', $query)) DESC) as rank
+              FROM memories m
+              WHERE to_tsvector('english', m.content) @@ plainto_tsquery('english', $query)
+            ),
+            fuzzy_search AS (
+              SELECT m.id,
+                     ROW_NUMBER() OVER (ORDER BY similarity(m.content, $query) DESC) as rank
+              FROM memories m
+              WHERE m.content % $query
+            ),
+            rrf_scores AS (
+              SELECT COALESCE(vs.id, fs.id, fzy.id) as id,
+                     COALESCE(1.0/(60 + vs.rank), 0) +
+                     COALESCE(1.0/(60 + fs.rank), 0) +
+                     COALESCE(1.0/(60 + fzy.rank), 0) as rrf_score
+              FROM vector_search vs
+              FULL OUTER JOIN fts_search fs ON vs.id = fs.id
+              FULL OUTER JOIN fuzzy_search fzy ON vs.id = fzy.id
+            )
+            SELECT m.*, rrf.rrf_score
+            FROM rrf_scores rrf
+            JOIN memories m ON rrf.id = m.id
+            WHERE rrf.rrf_score >= $min_score
+            ORDER BY rrf.rrf_score DESC
             LIMIT $limit
         "#.to_string();
 

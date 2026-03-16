@@ -145,6 +145,16 @@ pub trait QueryTranslator: Send + Sync {
         embedding: Option<&[f32]>,
     ) -> Result<(String, QueryParams), String>;
 
+    /// Translate hybrid search with RRF (Reciprocal Rank Fusion)
+    fn translate_search_hybrid_rrf(
+        &self,
+        query: &str,
+        limit: usize,
+        min_score: f32,
+        scopes: &[String],
+        embedding: Option<&[f32]>,
+    ) -> Result<(String, QueryParams), String>;
+
     /// Translate arbitrary Cypher query
     fn translate_query_cypher(
         &self,
@@ -248,6 +258,13 @@ impl QueryTranslator for Neo4jTranslator {
                 scopes,
                 embedding,
             } => self.translate_search_hybrid(query, *limit, *min_score, scopes, embedding.as_deref()),
+            CypherOperation::SearchHybridRRF {
+                query,
+                limit,
+                min_score,
+                scopes,
+                embedding,
+            } => self.translate_search_hybrid_rrf(query, *limit, *min_score, scopes, embedding.as_deref()),
             CypherOperation::QueryCypher { query, params } => self.translate_query_cypher(query, params),
             CypherOperation::GetNeighbors { id, depth } => self.translate_get_neighbors(id, *depth),
         }
@@ -595,6 +612,34 @@ impl QueryTranslator for Neo4jTranslator {
         // Note: The actual hybrid search implementation is more complex
         // This is a simplified stub for the translator interface
         let cypher = r#"
+            MATCH (m:Memory)
+            WHERE m.content CONTAINS $query
+            RETURN m
+            LIMIT $limit
+        "#.to_string();
+
+        Ok((cypher, params))
+    }
+
+    fn translate_search_hybrid_rrf(
+        &self,
+        query: &str,
+        limit: usize,
+        min_score: f32,
+        scopes: &[String],
+        embedding: Option<&[f32]>,
+    ) -> Result<(String, QueryParams), String> {
+        let params = QueryParams::new()
+            .with_param("query", query)
+            .with_param("limit", limit)
+            .with_param("min_score", min_score)
+            .with_param("scopes", scopes)
+            .with_param("embedding", embedding.map(|e| e.to_vec()));
+
+        // RRF hybrid search - uses Reciprocal Rank Fusion to combine signals
+        let cypher = r#"
+            // Implementation handled by search_with_rrf() in search.rs
+            // This translator stub is for interface compatibility
             MATCH (m:Memory)
             WHERE m.content CONTAINS $query
             RETURN m

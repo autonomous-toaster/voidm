@@ -74,10 +74,6 @@ pub struct SearchArgs {
     #[arg(long)]
     pub reranker_top_k: Option<usize>,
 
-    /// Blend factor for reranker scores [0.0-1.0] (overrides config)
-    #[arg(long)]
-    pub reranker_blend: Option<f32>,
-
     /// Enable/disable query expansion (overrides config)
     #[arg(long)]
     pub query_expand: Option<bool>,
@@ -106,7 +102,7 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
 
     // Apply CLI reranker overrides to config
     let mut config = config.clone();
-    if args.reranker.is_some() || args.reranker_model.is_some() || args.reranker_top_k.is_some() || args.reranker_blend.is_some() {
+    if args.reranker.is_some() || args.reranker_model.is_some() || args.reranker_top_k.is_some() {
         let mut reranker_config = config.search.reranker.take().unwrap_or_default();
         tracing::info!("CLI: Applying reranker CLI overrides");
         if let Some(enabled) = args.reranker {
@@ -120,11 +116,6 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         if let Some(k) = args.reranker_top_k {
             tracing::info!("CLI: Reranker apply_to_top_k override: {} → {}", reranker_config.apply_to_top_k, k);
             reranker_config.apply_to_top_k = k;
-        }
-        if let Some(blend) = args.reranker_blend {
-            let blend_clamped = blend.clamp(0.0, 1.0);
-            tracing::info!("CLI: Reranker blend override: {} → {} (clamped)", blend, blend_clamped);
-            reranker_config.blend = blend_clamped;
         }
         config.search.reranker = Some(reranker_config);
     }

@@ -502,32 +502,22 @@ async fn apply_reranker(
         return Ok(());
     }
 
-    // Warn if blend factor is not 1.0 (deprecated behavior)
-    if (config.blend - 1.0).abs() > 0.01 {
-        tracing::warn!(
-            "Reranker blend factor {} is deprecated. Using pure reranker scores (blend=1.0) instead. \
-             Remove 'blend' from config to suppress this warning.",
-            config.blend
-        );
-    }
-
     tracing::info!("Reranker: Initializing reranking with model: {}", config.model);
-    tracing::debug!("Reranker config: apply_to_top_k={}, blend={}", config.apply_to_top_k, config.blend);
+    tracing::debug!("Reranker config: apply_to_top_k={}", config.apply_to_top_k);
     
     let reranker = crate::reranker::CrossEncoderReranker::load(&config.model).await?;
     tracing::info!("Reranker: Model '{}' loaded successfully", config.model);
     
-    // Extract documents to rerank (only top-k)
-    // CRITICAL: Cross-encoders work best on SHORT passages (100-300 chars), not full documents.
-    // Strategy: For long documents, extract the first ~400 chars to preserve context while
-    // avoiding the pathological case of truncating away all query-relevant content.
-    // This is a compromise: cross-encoders aren't designed for full-doc reranking, but this
-    // helps with typical memory content without completely losing relevance signals.
-    const RERANKER_MAX_DOC_LEN: usize = 400;
+    // Extract passages using intelligent passage extraction
     let docs_to_rerank: Vec<String> = results[..apply_to_k]
         .iter()
-        .map(|r| safe_truncate(&r.content, RERANKER_MAX_DOC_LEN).to_string())
+        .map(|r| crate::passage::extract_best_passage(
+            &r.content,
+            query,
+            &config.passage_extraction,
+        ))
         .collect();
+    
     let docs_to_rerank_refs: Vec<&str> = docs_to_rerank.iter().map(|s| s.as_str()).collect();
 
     tracing::debug!("Reranker: Starting reranking of top-{} results (from {} total)", apply_to_k, results.len());

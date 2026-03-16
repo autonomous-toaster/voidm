@@ -20,6 +20,7 @@ pub mod auto_tagger;
 pub mod tag_linker;
 pub mod redactor;
 pub mod graph_retrieval;
+pub mod passage;
 
 pub use config::Config;
 pub use config::config_path_display;

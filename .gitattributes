@@ -1,0 +1,40 @@
+# Auto normalize line endings for all text files
+* text=auto
+
+# Explicitly set line endings for cross-platform consistency
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+
+# Shell scripts (always LF)
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows batch files (CRLF)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell scripts (CRLF on Windows, but we use LF for consistency)
+*.ps1 text eol=lf
+
+# Binary files (no conversion)
+*.db binary
+*.sqlite binary
+*.so binary
+*.dylib binary
+*.exe binary
+*.dll binary
+*.rlib binary
+
+# License files
+LICENSE text eol=lf
+COPYING text eol=lf
+
+# Git-specific
+.gitattributes text eol=lf
+.gitignore text eol=lf

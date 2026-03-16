@@ -17,6 +17,10 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-apple-darwin
             os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -41,13 +45,23 @@ jobs:
         env:
           MACOSX_DEPLOYMENT_TARGET: "10.13"
 
-      - name: Package
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           BINARY=target/${{ matrix.target }}/release/voidm
           ARCHIVE=voidm-${{ matrix.target }}.tar.gz
           tar -czf $ARCHIVE -C $(dirname $BINARY) $(basename $BINARY)
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = "target\${{ matrix.target }}\release\voidm.exe"
+          $archive = "voidm-${{ matrix.target }}.zip"
+          Compress-Archive -Path $binary -DestinationPath $archive
+          echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -72,5 +86,5 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*.tar.gz
+          files: artifacts/**/*
           generate_release_notes: true

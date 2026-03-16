@@ -421,13 +421,26 @@ pub fn config_path_display() -> String {
 }
 
 fn config_path() -> Option<PathBuf> {
-    // XDG_CONFIG_HOME/voidm/config.toml
+    // 1. Custom config home via environment variable (cross-platform)
+    if let Ok(config_home) = std::env::var("VOIDM_CONFIG_HOME") {
+        if !config_home.is_empty() {
+            return Some(PathBuf::from(config_home).join("config.toml"));
+        }
+    }
+    
+    // 2. Platform-specific config directory (macOS: ~/Library/Application Support, Windows: %APPDATA%, Linux: ~/.config)
+    if let Some(config_dir) = dirs::config_dir() {
+        return Some(config_dir.join("voidm/config.toml"));
+    }
+    
+    // 3. Fallback: XDG_CONFIG_HOME (Linux)
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         if !xdg.is_empty() {
             return Some(PathBuf::from(xdg).join("voidm/config.toml"));
         }
     }
-    // ~/.config/voidm/config.toml
+    
+    // 4. Last resort: ~/.config/voidm/config.toml
     dirs::home_dir().map(|h| h.join(".config/voidm/config.toml"))
 }
 

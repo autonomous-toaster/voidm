@@ -63,6 +63,129 @@ If you change the embedding model later via `voidm config set embeddings.model <
 
 ---
 
+## Configuration
+
+voidm supports a **three-level configuration hierarchy** (lowest to highest priority):
+
+1. **File** (`~/.config/voidm/config.toml`) - Persistent configuration
+2. **Environment variables** (VOIDM_*) - Override file settings
+3. **CLI arguments** (--flags) - Override both file and env vars
+
+### Configuration Priority
+
+Any configuration parameter can be set at all three levels. Higher priority levels override lower ones:
+
+```bash
+# Example: Three ways to set search mode
+# 1. File (lowest priority)
+# ~/.config/voidm/config.toml: search.mode = "hybrid"
+
+# 2. Environment variable (middle priority)
+$ VOIDM_SEARCH_MODE=semantic voidm search "query"
+
+# 3. CLI argument (highest priority - wins over all)
+$ voidm search "query" --search-mode keyword
+```
+
+### Environment Variables
+
+All configuration parameters support environment variable overrides with the `VOIDM_` prefix.
+
+**Naming pattern**: `VOIDM_SECTION_SUBSECTION_PARAM` (uppercase, underscores)
+
+**Common env vars**:
+
+```bash
+# Database
+VOIDM_DATABASE_BACKEND=neo4j            # sqlite (default) or neo4j
+VOIDM_DATABASE_SQLITE_PATH=/path/to/db
+
+# Embeddings
+VOIDM_EMBEDDINGS_ENABLED=true
+VOIDM_EMBEDDINGS_MODEL=Xenova/all-MiniLM-L6-v2
+
+# Search
+VOIDM_SEARCH_MODE=hybrid-rrf            # hybrid-rrf, hybrid, semantic, keyword, fuzzy, bm25
+VOIDM_SEARCH_DEFAULT_LIMIT=20
+VOIDM_SEARCH_MIN_SCORE=0.5
+
+# Reranker
+VOIDM_SEARCH_RERANKER_ENABLED=true
+VOIDM_SEARCH_RERANKER_MODEL=bge-reranker-base
+VOIDM_SEARCH_RERANKER_TOP_K=15
+
+# Query Expansion
+VOIDM_SEARCH_QE_ENABLED=true
+VOIDM_SEARCH_QE_TIMEOUT_MS=5000
+
+# Graph Retrieval
+VOIDM_SEARCH_GR_ENABLED=true
+VOIDM_SEARCH_GR_MAX_HOPS=2
+
+# Insert
+VOIDM_INSERT_AUTO_LINK_THRESHOLD=0.85
+VOIDM_INSERT_DUPLICATE_THRESHOLD=0.95
+
+# Redaction
+VOIDM_REDACTION_ENABLED=false
+```
+
+### CLI Arguments
+
+Most configuration settings can also be overridden via CLI flags:
+
+```bash
+# Global flags (apply to all commands)
+voidm --search-mode semantic search "query"
+voidm --embeddings-model my-model search "query"
+voidm --reranker-enabled true search "query"
+
+# View all available flags
+voidm --help
+```
+
+### Configuration File
+
+Edit `~/.config/voidm/config.toml` for persistent configuration:
+
+```toml
+[database]
+backend = "sqlite"
+
+[embeddings]
+enabled = true
+model = "Xenova/all-MiniLM-L6-v2"
+
+[search]
+mode = "hybrid-rrf"
+default_limit = 10
+min_score = 0.3
+
+[search.reranker]
+enabled = true
+model = "ms-marco-MiniLM-L-6-v2"
+apply_to_top_k = 15
+
+[search.query_expansion]
+enabled = false
+model = "Xenova/gte-small"
+timeout_ms = 300
+
+[search.graph_retrieval]
+enabled = true
+max_concept_hops = 2
+
+[insert]
+auto_link_threshold = 0.80
+duplicate_threshold = 0.95
+auto_link_limit = 10
+
+[redaction]
+enabled = false
+```
+
+---
+
 ## Usage
 
 ### Add memories

@@ -49,6 +49,18 @@ cp target/release/voidm ~/.local/bin/
 > Requires Rust 1.94.0+. SQLite is bundled — no system dependencies.  
 > ML models are downloaded on first use to `~/.cache/voidm/`.
 
+### Platform Support
+
+voidm is fully cross-platform and tested on:
+
+| Platform | Status | Downloads |
+|----------|--------|-----------|
+| **Linux** (x86_64) | ✅ Fully Supported | [Releases](https://github.com/autonomous-toaster/voidm/releases) |
+| **macOS** (x86_64, ARM64) | ✅ Fully Supported | [Releases](https://github.com/autonomous-toaster/voidm/releases) |
+| **Windows** (x86_64) | ✅ Fully Supported | [Releases](https://github.com/autonomous-toaster/voidm/releases) |
+
+**Windows-specific setup?** See [Windows Setup Guide](docs/WINDOWS_SETUP.md) for configuration file locations, database paths, and troubleshooting.
+
 ### Model Initialization (Optional)
 
 To pre-download models for offline use (useful for CI):

@@ -197,7 +197,7 @@ voidm search "migration" --min-score 0 --limit 20 --json
 
 `voidm` automatically expands your search queries to improve recall. When you search for "Docker", the system expands to "Docker, docker-compose, Kubernetes, containerization" and searches for all variants. This finds more relevant results.
 
-Query expansion uses small local LLMs (tinyllama by default) — no internet required after first use.
+Query expansion uses small local LLMs (tinyllama by default) — no internet required after first use. This approach is inspired by the [QMD project](https://github.com/tobil/qmd), which uses the same strategy of local LLM-based query expansion to improve search recall.
 
 ```bash
 # Automatic expansion (enabled by default, uses tinyllama)
@@ -254,7 +254,7 @@ default_intent = null       # Optional default intent (e.g., "general", "technic
 - Subsequent searches: <300ms per query (within timeout)
 
 **Models:**
-- `tinyllama` (1.1B, default) — balance of speed and quality
+- `tinyllama` (1.1B, default) — balance of speed and quality. Same approach as QMD project: proven, reliable, good balance of speed and expansion quality
 - `phi-2` (2.7B, recommended for accuracy) — highest quality expansions
 - `gpt2-small` (124M, fastest) — lightweight, acceptable quality
 
@@ -866,7 +866,7 @@ Defaults: `Xenova/all-MiniLM-L6-v2` (384d, 50MB, fast), `Xenova/multilingual-e5-
 | `VOIDM_SEARCH_GRAPH_RETRIEVAL_ENABLED` | `true` | `true`, `false` | Enable graph-aware retrieval |
 | `VOIDM_SEARCH_GRAPH_RETRIEVAL_MAX_CONCEPT_HOPS` | `2` | Integer 1-5 | Max concept traversal depth |
 | `VOIDM_SEARCH_QUERY_EXPANSION_ENABLED` | `false` | `true`, `false` | Enable query expansion |
-| `VOIDM_SEARCH_QUERY_EXPANSION_MODEL` | `tinyllama` | `tinyllama`, `phi-2`, `gpt2-small` | Query expansion model |
+| `VOIDM_SEARCH_QUERY_EXPANSION_MODEL` | `tinyllama` | `tinyllama`, `phi-2`, `gpt2-small` | Query expansion model (tinyllama is same approach as QMD project) |
 | `VOIDM_SEARCH_QUERY_EXPANSION_TIMEOUT_MS` | `300` | Integer 100-5000 | Expansion timeout (milliseconds) |
 | `VOIDM_SEARCH_RERANKER_ENABLED` | `false` | `true`, `false` | Enable cross-encoder reranking |
 | `VOIDM_SEARCH_RERANKER_MODEL` | `ms-marco-MiniLM-L-6-v2` | Model name | Reranking model |

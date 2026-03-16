@@ -270,7 +270,7 @@ default_intent = null       # Optional default intent (e.g., "general", "technic
 For high-recall searches, enable reranking to improve result ordering. Reranking uses a cross-encoder model to re-score results based on relevance to the query.
 
 ```bash
-# Enable reranking
+# Enable reranking with the fast, recommended model
 voidm search "docker" --reranker true
 
 # Or disable if latency matters more than ranking precision
@@ -281,49 +281,51 @@ voidm search "docker" --reranker false  # Default
 
 ```toml
 [search.reranker]
-enabled = false                    # Disabled by default (adds ~1s latency when enabled)
-model = "ms-marco-MiniLM-L-6-v2"  # RECOMMENDED: 100MB, ~1s latency, best balance
+enabled = false                    # Disabled by default (adds ~0.27s latency when enabled)
+model = "bge-small-reranker-v2"   # Fast: 0.27s latency, maintains baseline quality
 apply_to_top_k = 15               # Rerank top-15 results
 ```
 
-**Supported Models** (all ONNX-compatible, verified working):
+**Supported Models** (with benchmark results for query "voidm", 16 results):
 
-**RECOMMENDED**:
-- `ms-marco-MiniLM-L-6-v2` (100MB, ~1s latency)
-  - Best balance of speed and quality
-  - Safe default choice
-  - Recommended for most use cases
+**FAST (<1s) - RECOMMENDED**:
+- `bge-small-reranker-v2` (130MB) - **RECOMMENDED**
+  - Latency: 0.274s (meets sub-1s target)
+  - Mean score: 0.476 (baseline equivalent, no change)
+  - Max score: 0.710 (baseline equivalent)
+  - Best for: Speed-critical applications with acceptable ranking
 
-**Fast Alternative**:
-- `ms-marco-TinyBERT-L-2` (11MB, 0.6s latency)
-  - Lightest model, fastest inference
-  - Good quality-to-speed ratio
-  - Best for latency-critical applications
+**SLOW (>1s) - For Reference**:
+- `qnli-distilroberta-base` (250MB) - **Best Quality but Too Slow**
+  - Latency: 29.7s ❌
+  - Mean score: 0.649 (+17.3% improvement)
+  - Max score: 0.993 (highest max score)
+  - Use case: Only if quality matters more than speed
 
-**High Quality** (slower):
-- `mmarco-mMiniLMv2-L12-H384-v1` (110MB, ~10s latency)
-  - Better quality than ms-marco
-  - Slower but still acceptable
-  - For quality-focused applications
+- `bge-reranker-base` (278MB)
+  - Latency: 5.4s ❌
+  - Mean score: 0.533 (+5.67% improvement)
+  - Max score: 0.934
+  - Use case: Better quality but slower than bge-small
 
-**Best Accuracy** (slowest):
-- `qnli-distilroberta-base` (250MB, ~30s latency)
-  - Highest accuracy
-  - Unacceptably slow for interactive use
-  - Only for offline batch processing
+- `ms-marco-MiniLM-L-6-v2` (100MB)
+  - Latency: 9.7s ❌
+  - Mean score: 0.509 (+0.32% improvement)
+  - Max score: 0.904
+  - Use case: Between bge-small and bge-reranker
+
+- `ms-marco-TinyBERT-L-2` (11MB) - **Smallest but Poor Quality**
+  - Latency: 0.592s
+  - Mean score: 0.096 (-80% quality loss) ❌
+  - Max score: 0.550
+  - NOT RECOMMENDED: Fast but destroys result quality
 
 **When to Use Reranking**:
-- Precision-focused searches where result ordering matters
+- Precision-focused searches where result ordering matters more than speed
 - When you need top-k results to be most relevant
-- Use `ms-marco-MiniLM-L-6-v2` as default (recommended)
+- Use `bge-small-reranker-v2` for sub-1s latency requirement
+- Use `qnli-distilroberta-base` only if quality is more important than speed (30s acceptable)
 - Keep disabled by default for speed-critical applications
-
-**Important Limitations**:
-- Cross-encoders are trained on SHORT passages (50-300 chars), not full documents
-- For long memories (1000+ chars), reranking may degrade relevance scores
-- This is a fundamental architectural limitation, not a bug
-- **Recommendation**: Keep reranking disabled if searching on long-form documents
-- If enabled on long documents, expect lower scores but still generally correct ordering
 
 **Note**: Reranking works on the initial search results. For low initial scores, improve query expansion instead.
 

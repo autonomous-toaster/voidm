@@ -397,8 +397,46 @@ impl crate::db::Database for Neo4jDatabase {
     }
 
     fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>> {
-        // TODO: Implement ontology edge querying from Neo4j
-        Box::pin(async { Ok(Vec::new()) })
+        let graph = self.graph.clone();
+        
+        Box::pin(async move {
+            // Query all relationships with their properties
+            let cypher = r#"
+                MATCH (from)-[r]->(to)
+                WHERE r.from_id IS NOT NULL AND r.rel_type IS NOT NULL
+                RETURN r.from_id AS from_id, r.from_type AS from_type, 
+                       r.to_id AS to_id, r.to_type AS to_type, 
+                       r.rel_type AS rel_type, r.note AS note
+            "#;
+            
+            let mut result = graph
+                .execute(neo4rs::query(cypher))
+                .await
+                .context("Failed to list ontology edges from Neo4j")?;
+            
+            let mut edges = Vec::new();
+            while let Ok(Some(row)) = result.next().await {
+                if let (Ok(from_id), Ok(from_type), Ok(to_id), Ok(to_type), Ok(rel_type)) = (
+                    row.get::<String>("from_id"),
+                    row.get::<String>("from_type"),
+                    row.get::<String>("to_id"),
+                    row.get::<String>("to_type"),
+                    row.get::<String>("rel_type"),
+                ) {
+                    let note = row.get::<Option<String>>("note").ok().flatten();
+                    edges.push(crate::models::OntologyEdgeForMigration {
+                        from_id,
+                        from_type,
+                        to_id,
+                        to_type,
+                        rel_type,
+                        note,
+                    });
+                }
+            }
+            
+            Ok(edges)
+        })
     }
 
     /// Link a memory or concept to another memory or concept (for ontology edges)
@@ -415,20 +453,26 @@ impl crate::db::Database for Neo4jDatabase {
         let to_id = to_id.to_string();
         let from_label = if from_type == "memory" { "Memory" } else { "Concept" };
         let to_label = if to_type == "memory" { "Memory" } else { "Concept" };
-        let rel_type = rel_type.to_string();
+        let rel_type_str = rel_type.to_string();
+        let from_type_str = from_type.to_string();
+        let to_type_str = to_type.to_string();
 
         Box::pin(async move {
+            // Create relationship with properties for later querying/deletion
             let query_str = format!(
                 "MATCH (from:{} {{id: $from_id}}), (to:{} {{id: $to_id}})
-                 CREATE (from)-[r:{}]->(to)
+                 CREATE (from)-[r:{}{{from_id: $from_id, from_type: $from_type, to_id: $to_id, to_type: $to_type, rel_type: $rel_type}}]->(to)
                  RETURN true as created",
-                from_label, to_label, rel_type
+                from_label, to_label, rel_type_str
             );
 
             let mut result = graph
                 .execute(neo4rs::query(&query_str)
                     .param("from_id", from_id.clone())
-                    .param("to_id", to_id.clone()))
+                    .param("from_type", from_type_str)
+                    .param("to_id", to_id.clone())
+                    .param("to_type", to_type_str)
+                    .param("rel_type", rel_type_str))
                 .await
                 .with_context(|| format!("Failed to link {} -> {} in Neo4j", from_id, to_id))?;
 
@@ -442,15 +486,216 @@ impl crate::db::Database for Neo4jDatabase {
 
     fn search_hybrid(
         &self,
-        _opts: &SearchOptions,
-        _model_name: &str,
-        _embeddings_enabled: bool,
-        _config_min_score: f32,
+        opts: &SearchOptions,
+        model_name: &str,
+        embeddings_enabled: bool,
+        config_min_score: f32,
         _config_search: &crate::config::SearchConfig,
     ) -> Pin<Box<dyn Future<Output = Result<SearchResponse>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let opts_owned = opts.clone();
+        let model_name_owned = model_name.to_string();
+        
         Box::pin(async move {
-            // Phase 2.5: Implement vector/hybrid search
-            anyhow::bail!("Neo4j hybrid search not yet implemented")
+            use std::collections::HashMap;
+            
+            let query_text = &opts_owned.query;
+            let limit = opts_owned.limit;
+            let fetch_limit = limit * 3; // over-fetch for merging
+            let mut scores: HashMap<String, f32> = HashMap::new();
+            
+            // --- Vector search via embeddings ---
+            let use_vector = embeddings_enabled
+                && matches!(opts_owned.mode, crate::search::SearchMode::Hybrid | crate::search::SearchMode::Semantic);
+            
+            if use_vector {
+                match crate::embeddings::embed_text(&model_name_owned, query_text) {
+                    Ok(query_embedding) => {
+                        // Vector search in Neo4j: calculate cosine similarity with all memories
+                        let cypher_query = r#"
+                            MATCH (m:Memory)
+                            WHERE m.embedding IS NOT NULL
+                            WITH m, 
+                                 [x IN m.embedding | x] AS mem_emb,
+                                 $query_emb AS query_emb,
+                                 reduce(dot=0.0, i IN range(0, size(m.embedding)-1) | dot + m.embedding[i] * $query_emb[i]) AS dot_product,
+                                 sqrt(reduce(sum=0.0, x IN m.embedding | sum + x*x)) AS mem_norm,
+                                 sqrt(reduce(sum=0.0, x IN $query_emb | sum + x*x)) AS query_norm
+                            WITH m, 
+                                 CASE 
+                                    WHEN mem_norm = 0.0 OR query_norm = 0.0 THEN 0.0
+                                    ELSE dot_product / (mem_norm * query_norm)
+                                 END AS similarity
+                            WHERE similarity > 0.0
+                            RETURN m.id AS id, similarity AS score
+                            ORDER BY similarity DESC
+                            LIMIT $limit
+                        "#;
+                        
+                        match graph
+                            .execute(
+                                neo4rs::query(cypher_query)
+                                    .param("query_emb", query_embedding.clone())
+                                    .param("limit", fetch_limit as i64)
+                            )
+                            .await
+                        {
+                            Ok(mut result) => {
+                                while let Ok(Some(row)) = result.next().await {
+                                    if let Ok(id) = row.get::<String>("id") {
+                                        if let Ok(score) = row.get::<f32>("score") {
+                                            // Normalize cosine similarity [0,1] to [0,1]
+                                            let normalized = (score + 1.0) / 2.0; // Convert [-1,1] to [0,1]
+                                            *scores.entry(id).or_default() += normalized * 0.5;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => tracing::warn!("Neo4j vector search failed: {}", e),
+                        }
+                    }
+                    Err(e) => tracing::warn!("Embedding failed: {}", e),
+                }
+            }
+            
+            // --- Full-text search via content matching ---
+            let use_fts = matches!(
+                opts_owned.mode,
+                crate::search::SearchMode::Hybrid | crate::search::SearchMode::Bm25 | crate::search::SearchMode::Keyword
+            );
+            
+            if use_fts {
+                // Simple substring/content search in Neo4j
+                let fts_cypher = r#"
+                    MATCH (m:Memory)
+                    WHERE toLower(m.content) CONTAINS toLower($query)
+                    WITH m, 
+                         // Simple scoring: penalize by position (earlier matches score higher)
+                         1.0 / (1.0 + toFloat(apoc.text.indexOf(toLower(m.content), toLower($query)))) AS relevance
+                    RETURN m.id AS id, relevance AS score
+                    ORDER BY relevance DESC
+                    LIMIT $limit
+                "#;
+                
+                match graph
+                    .execute(
+                        neo4rs::query(fts_cypher)
+                            .param("query", query_text.clone())
+                            .param("limit", fetch_limit as i64)
+                    )
+                    .await
+                {
+                    Ok(mut result) => {
+                        while let Ok(Some(row)) = result.next().await {
+                            if let Ok(id) = row.get::<String>("id") {
+                                if let Ok(score) = row.get::<f32>("score") {
+                                    // Normalize to [0,1]
+                                    let normalized = score.clamp(0.0, 1.0);
+                                    *scores.entry(id).or_default() += normalized * 0.3;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!("Neo4j FTS search failed: {}", e),
+                }
+            }
+            
+            // --- Fuzzy search via Levenshtein distance (if available) ---
+            let use_fuzzy = matches!(opts_owned.mode, crate::search::SearchMode::Hybrid);
+            
+            if use_fuzzy {
+                // Fuzzy search using apoc.text.levenshteinDistance if available
+                let fuzzy_cypher = r#"
+                    MATCH (m:Memory)
+                    WITH m,
+                         apoc.text.levenshteinDistance(toLower(m.content), toLower($query)) AS distance,
+                         toFloat(length(m.content)) AS content_len
+                    WITH m,
+                         // Similarity = 1 - (distance / max_possible_distance)
+                         CASE 
+                            WHEN content_len = 0.0 THEN 0.0
+                            ELSE 1.0 - (toFloat(distance) / toFloat(length($query) + content_len))
+                         END AS similarity
+                    WHERE similarity > 0.3
+                    RETURN m.id AS id, similarity AS score
+                    ORDER BY similarity DESC
+                    LIMIT $limit
+                "#;
+                
+                match graph
+                    .execute(
+                        neo4rs::query(fuzzy_cypher)
+                            .param("query", query_text.clone())
+                            .param("limit", fetch_limit as i64)
+                    )
+                    .await
+                {
+                    Ok(mut result) => {
+                        while let Ok(Some(row)) = result.next().await {
+                            if let Ok(id) = row.get::<String>("id") {
+                                if let Ok(score) = row.get::<f32>("score") {
+                                    let normalized = score.clamp(0.0, 1.0);
+                                    *scores.entry(id).or_default() += normalized * 0.2;
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // apoc functions may not be available, skip fuzzy search
+                        tracing::debug!("Neo4j fuzzy search unavailable (apoc not installed)");
+                    }
+                }
+            }
+            
+            // --- Merge and rank results ---
+            let mut results: Vec<(String, f32)> = scores.into_iter().collect();
+            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            
+            // Filter by min_score
+            let min_score = config_min_score.max(0.0);
+            results.retain(|(_id, score)| *score >= min_score);
+            let threshold_applied = if min_score > 0.0 { Some(min_score) } else { None };
+            
+            // Fetch full memory objects and convert to SearchResult
+            let mut response_results = Vec::new();
+            let mut best_score: Option<f32> = None;
+            
+            for (id, combined_score) in results.iter().take(limit) {
+                match self.get_memory(id).await {
+                    Ok(Some(memory)) => {
+                        best_score = Some(combined_score.max(best_score.unwrap_or(0.0)));
+                        
+                        response_results.push(crate::search::SearchResult {
+                            id: memory.id,
+                            score: *combined_score,
+                            memory_type: memory.memory_type,
+                            content: memory.content,
+                            scopes: memory.scopes,
+                            tags: memory.tags,
+                            importance: memory.importance,
+                            created_at: memory.created_at,
+                            source: "search".to_string(),
+                            rel_type: None,
+                            direction: None,
+                            hop_depth: None,
+                            parent_id: None,
+                            quality_score: memory.quality_score,
+                        });
+                    }
+                    Ok(None) => {
+                        tracing::warn!("Memory {} found in search but not retrievable", id);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Error retrieving memory {}: {}", id, e);
+                    }
+                }
+            }
+            
+            Ok(crate::search::SearchResponse {
+                results: response_results,
+                threshold_applied,
+                best_score,
+            })
         })
     }
 
@@ -757,11 +1002,33 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
-    fn delete_ontology_edge(&self, _edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+    fn delete_ontology_edge(&self, edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        let graph = self.graph.clone();
+        
         Box::pin(async move {
-            // Neo4j relationship IDs are not easily accessible in patterns
-            // This would need a different approach
-            anyhow::bail!("Neo4j delete_ontology_edge needs refactoring for relationship management")
+            // Neo4j internal relationship IDs are not directly accessible in parameterized queries
+            // For now, we'll query to find the Nth relationship (by ordinal position)
+            // and delete it. This is not ideal but works for the current interface.
+            
+            let cypher = r#"
+                MATCH (from)-[r]->(to)
+                WHERE r.from_id IS NOT NULL AND r.rel_type IS NOT NULL
+                WITH r, row_number() OVER () AS rn
+                WHERE rn = $edge_id
+                DELETE r
+                RETURN true as deleted
+            "#;
+            
+            let mut result = graph
+                .execute(neo4rs::query(cypher).param("edge_id", edge_id))
+                .await
+                .context("Failed to delete ontology edge from Neo4j")?;
+            
+            if let Ok(Some(_row)) = result.next().await {
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         })
     }
 

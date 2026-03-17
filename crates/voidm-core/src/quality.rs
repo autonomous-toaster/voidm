@@ -138,14 +138,22 @@ pub fn compute_quality_score(
     let has_status_prefix = is_status_prefix_line(content);
     let has_todo_refs = content.contains("TODO-") && contains_hex_after_todo(&content);
     
-    let mut task_independence: f32 = 0.95;
+    // Count task-related indicators for graduated penalty
+    let mut task_issues = 0;
     if has_status_prefix {
-        task_independence -= 0.3;
+        task_issues += 2;  // Heavy penalty
     }
     if has_todo_refs {
-        task_independence -= 0.2;
+        task_issues += 1;
     }
-    task_independence = task_independence.max(0.0);
+    
+    let task_independence = match task_issues {
+        0 => 0.95,      // No task references - excellent
+        1 => 0.75,      // One TODO - moderate
+        2 => 0.50,      // Status prefix - significant penalty
+        3 => 0.30,      // Both - very poor
+        _ => 0.10,
+    };
 
     // 5. Task language penalty (context-aware: skip for procedural/conceptual)
     let task_language_keywords = &["completed", "finished", "done", "fixed", "milestone"];

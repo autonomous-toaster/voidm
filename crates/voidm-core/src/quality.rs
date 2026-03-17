@@ -146,17 +146,36 @@ pub fn compute_quality_score(
         }
     }
 
-    // 6. Content substance: prefer 50+ words
+    // 6. Content substance: prefer 50+ words (per-type optimization)
     // Aggressively penalize very short content (< 20 words is nearly useless)
-    let substance = if word_count < 15 {
-        0.0
-    } else if word_count < 50 {
-        0.3
-    } else if word_count < 300 {
-        0.95
-    } else {
-        // Too long: encourages splitting into atomic memories
-        0.3
+    // Procedural/Conceptual can be shorter (actions, rules are concise)
+    // Episodic/Semantic/Contextual should be more substantial
+    let substance = match memory_type {
+        MemoryType::Procedural | MemoryType::Conceptual => {
+            // Actions and rules can be concise: 30+ words preferred
+            if word_count < 10 {
+                0.0
+            } else if word_count < 30 {
+                0.4
+            } else if word_count < 500 {
+                0.95
+            } else {
+                0.2  // Too long for procedural
+            }
+        }
+        _ => {
+            // Episodic, Semantic, Contextual: 50+ words preferred
+            if word_count < 15 {
+                0.0
+            } else if word_count < 50 {
+                0.3
+            } else if word_count < 300 {
+                0.95
+            } else {
+                // Too long: encourages splitting into atomic memories
+                0.3
+            }
+        }
     };
 
     // 7. Entity specificity: measure named entity density

@@ -383,7 +383,8 @@ fn is_status_prefix_line(content: &str) -> bool {
     let prefixes = &[
         "date:", "status:", "update:", "milestone:", "session:",
         "todo:", "fix:", "issue:", "pr:", "commit:", "plan:",
-        "result:", "outcome:", "completion:",
+        "result:", "outcome:", "completion:", "resolved:", "addressed:",
+        "fixed:", "note:", "summary:", "progress:", "done:",
     ];
     content
         .lines()

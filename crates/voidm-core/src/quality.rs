@@ -93,9 +93,17 @@ pub fn compute_quality_score(
     let has_personal_action = content_lower.contains("i did")
         || content_lower.contains("i built")
         || content_lower.contains("i fixed")
+        || content_lower.contains("i created")
+        || content_lower.contains("i implemented")
         || content_lower.contains("we did")
         || content_lower.contains("we built")
-        || content_lower.contains("we fixed");
+        || content_lower.contains("we fixed")
+        || content_lower.contains("we created")
+        || content_lower.contains("we implemented")
+        || content_lower.contains("i worked")
+        || content_lower.contains("we worked")
+        || content_lower.contains("completed")
+        || content_lower.contains("finished the");
     let abstraction = if has_personal_action { 0.2 } else { 0.95 };
 
     // 3. Temporal independence: penalize temporal markers

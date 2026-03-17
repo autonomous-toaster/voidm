@@ -111,7 +111,19 @@ pub fn compute_quality_score(
         || content_lower.contains("we worked")
         || content_lower.contains("completed")
         || content_lower.contains("finished the");
-    let abstraction = if has_personal_action { 0.2 } else { 0.95 };
+    
+    // Also check for instance-specific markers (UUIDs, timestamps, session IDs)
+    let has_instance_markers = content.contains("TODO-")
+        || content.contains("session-")
+        || content.contains("2026-03-")
+        || content.contains("2025-")
+        || content.contains("2024-");
+    
+    let abstraction = match (has_personal_action, has_instance_markers) {
+        (true, _) => 0.2,
+        (false, true) => 0.5,
+        _ => 0.95,
+    };
 
     // 3. Temporal independence: penalize temporal markers
     let temporal_keywords = &[

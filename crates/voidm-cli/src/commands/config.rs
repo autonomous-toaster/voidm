@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::Subcommand;
-use voidm_core::{Config, config::save_config};
+use std::path::PathBuf;
+use voidm_core::{Config, config::save_config, config_path_display, DEFAULT_CONFIG_CONTENT};
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {
@@ -12,6 +13,13 @@ pub enum ConfigCommands {
         key: String,
         /// New value
         value: String,
+    },
+    /// Install default configuration file
+    #[command(about = "Install default configuration file in config directory")]
+    Install {
+        /// Override existing config file
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -31,7 +39,38 @@ pub async fn run(cmd: &ConfigCommands, json: bool) -> Result<()> {
             save_config(&config)?;
             eprintln!("Set {} = {}", key, value);
         }
+        ConfigCommands::Install { force } => {
+            install_config(*force)?;
+        }
     }
+    Ok(())
+}
+
+fn install_config(force: bool) -> Result<()> {
+    let config_path_str = config_path_display();
+    let config_path = PathBuf::from(&config_path_str);
+    
+    // Check if config already exists
+    if config_path.exists() && !force {
+        return Err(anyhow!(
+            "Config file already exists at: {}\nUse --force to override",
+            config_path.display()
+        ));
+    }
+    
+    // Create parent directories
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    
+    // Write default config
+    std::fs::write(&config_path, DEFAULT_CONFIG_CONTENT)?;
+    
+    eprintln!("✓ Config installed at: {}", config_path.display());
+    if force {
+        eprintln!("  (existing config was overridden with --force)");
+    }
+    
     Ok(())
 }
 

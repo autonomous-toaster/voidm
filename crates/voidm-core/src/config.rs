@@ -463,6 +463,268 @@ pub fn save_config(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Default configuration file content for `voidm config install`
+/// All parameters are commented with examples and descriptions
+pub const DEFAULT_CONFIG_CONTENT: &str = r#"# voidm Configuration File
+# Location: ~/.config/voidm/config.toml (or platform-specific config directory)
+# 
+# This file configures all aspects of voidm: database, embeddings, search,
+# and advanced features like reranking and semantic deduplication.
+
+# ============================================================================
+# DATABASE CONFIGURATION
+# ============================================================================
+# voidm supports two database backends: SQLite (default) and Neo4j
+
+[database]
+# Backend choice: "sqlite" (default) or "neo4j"
+backend = "sqlite"
+
+# SQLite configuration (used when backend = "sqlite")
+[database.sqlite]
+# Path to SQLite database file
+# Supports ~ for home directory expansion
+# Default: ~/.local/share/voidm/memories.db (macOS/Linux)
+#          %APPDATA%\voidm\memories.db (Windows)
+path = "~/.local/share/voidm/memories.db"
+
+# Neo4j configuration (uncomment to use Neo4j instead of SQLite)
+# [database.neo4j]
+# uri = "bolt://localhost:7687"
+# username = "neo4j"
+# password = "password"
+
+# ============================================================================
+# EMBEDDINGS CONFIGURATION
+# ============================================================================
+# Controls semantic search via embeddings
+
+[embeddings]
+# Enable/disable embeddings for semantic search
+enabled = true
+
+# Embedding model to use
+# Recommended: "Xenova/all-MiniLM-L6-v2" (384 dimensions, fast, good quality)
+# Alternatives:
+#   - "Xenova/all-mpnet-base-v2" (768 dims, slower, higher quality)
+#   - "intfloat/e5-small" (384 dims, fast)
+#   - "intfloat/e5-large" (1024 dims, slower, best quality)
+model = "Xenova/all-MiniLM-L6-v2"
+
+# ============================================================================
+# SEARCH CONFIGURATION
+# ============================================================================
+# Controls how search results are ranked and returned
+
+[search]
+# Search ranking mode:
+#   - "hybrid-rrf": Reciprocal Rank Fusion (vector + BM25 + fuzzy) [RECOMMENDED]
+#   - "hybrid": Weighted average (vector 0.5 + BM25 0.3 + fuzzy 0.2)
+#   - "semantic": Vector search only
+#   - "keyword" or "bm25": Full-text BM25 search only
+#   - "fuzzy": Fuzzy string matching only
+mode = "hybrid-rrf"
+
+# Default number of results to return
+default_limit = 10
+
+# Minimum relevance score (0.0-1.0) to include a result
+# Lower = more results, higher = fewer but more relevant results
+min_score = 0.3
+
+# Graph retrieval: Find related memories through tags and concepts
+[search.graph_retrieval]
+# Enable/disable graph-aware retrieval
+enabled = true
+
+# Maximum hops for concept traversal (1-3 recommended)
+# 1 hop: ~10 results per query, <100ms
+# 2 hops: ~50 results per query, <500ms [RECOMMENDED]
+# 3+ hops: exponential growth, >1s latency (not recommended)
+max_concept_hops = 2
+
+# Tag-based retrieval: Find memories sharing similar tags
+[search.graph_retrieval.tags]
+enabled = true
+# Minimum overlapping tags required
+min_overlap = 3
+# Minimum percentage overlap (overlap_count / max(query_tags, memory_tags) * 100)
+min_percentage = 50.0
+# Score multiplier for tag-related results (0.0-1.0)
+decay_factor = 0.7
+# Max tag-related results per direct result
+limit = 5
+
+# Concept-based retrieval: Find memories through ontology relationships
+[search.graph_retrieval.concepts]
+enabled = true
+# Optional: override global max_concept_hops for concepts only
+# max_hops = 2
+# Score multiplier per hop: score = decay_factor^hops
+decay_factor = 0.7
+# Max concept-related results per direct result
+limit = 3
+
+# Reranker: Cross-encoder for better search quality (optional, slower)
+[search.reranker]
+# Enable/disable reranking
+enabled = false
+
+# ONNX-compatible reranker models:
+#   - "ms-marco-TinyBERT-L-2": Fast (11MB, 0.6s) [FASTEST]
+#   - "ms-marco-MiniLM-L-6-v2": Balanced (100MB, ~1s) [RECOMMENDED]
+#   - "mmarco-mMiniLMv2-L12-H384-v1": Multilingual (110MB, ~10s)
+#   - "qnli-distilroberta-base": High quality (250MB, ~30s) [BEST QUALITY]
+model = "ms-marco-MiniLM-L-6-v2"
+
+# Rerank only top-k results (0-100, higher = more thorough but slower)
+apply_to_top_k = 15
+
+# Passage extraction: Extract relevant sentences from results
+[search.reranker.passage_extraction]
+enabled = true
+# Include ±N sentences around matched terms for context
+context_sentences = 1
+# If no query terms found, use first N characters
+fallback_length = 400
+# Don't return passages shorter than this
+min_passage_length = 50
+
+# Query expansion: Expand queries with synonyms and related terms
+[search.query_expansion]
+# Enable/disable automatic query expansion
+enabled = false
+
+# Expansion model:
+#   - "tinyllama": 1.1B, good quality + fast [RECOMMENDED]
+#   - "phi-2": 2.7B, highest quality but slower
+#   - "gpt2-small": Lightweight, acceptable quality [FASTEST]
+#   - "tobil/qmd-query-expansion-1.7B": Custom GGUF model
+model = "tinyllama"
+
+# Maximum time to wait for query expansion (milliseconds)
+timeout_ms = 300
+
+# Intent-aware expansion: guide expansion toward specific context
+[search.query_expansion.intent]
+enabled = true
+# Use --scope parameter as fallback intent
+use_scope_as_fallback = true
+
+# ============================================================================
+# INSERT CONFIGURATION
+# ============================================================================
+# Controls behavior when adding new memories
+
+[insert]
+# Auto-link threshold: automatically link memories with similarity >= this value
+# (0.0-1.0, higher = stricter)
+auto_link_threshold = 0.7
+
+# Duplicate threshold: mark memories as duplicates if similarity >= this value
+# (0.0-1.0, typically 0.95+)
+duplicate_threshold = 0.95
+
+# Maximum number of auto-links to create per memory
+auto_link_limit = 5
+
+# ============================================================================
+# ENRICHMENT CONFIGURATION
+# ============================================================================
+# Advanced features: semantic dedup, NLI reasoning
+
+# Semantic deduplication: use embeddings to improve concept merging
+[enrichment.semantic_dedup]
+enabled = true
+# Model identifier (for caching)
+model = "minilm-l6-v2"
+# Semantic similarity threshold (0.0-1.0)
+# 0.50-0.65: Liberal merging (more merges, some false positives)
+# 0.70-0.80: Balanced [RECOMMENDED default 0.75]
+# 0.85-0.95: Conservative (fewer merges, higher confidence)
+threshold = 0.75
+# Use ONNX runtime optimization (future)
+use_onnx = false
+
+# NLI (Natural Language Inference): auto-suggest relation types between concepts
+[enrichment.nli]
+# Enable/disable NLI reasoning (slow, ~300MB model)
+enabled = false
+# Number of relation candidates to suggest
+top_k = 5
+
+# ============================================================================
+# REDACTION CONFIGURATION
+# ============================================================================
+# Automatically redact sensitive secrets from memory content
+# Prevents API keys, passwords, tokens from leaking into search results
+
+[redaction]
+# Master switch: enable/disable all redaction
+enabled = true
+
+# API keys redaction (OpenAI sk-..., AWS AKIA..., etc.)
+[redaction.api_keys]
+enabled = true
+strategy = "mask"       # "mask" (preserve edges) or "remove" (delete)
+prefix_length = 3       # Keep first N characters
+suffix_length = 2       # Keep last N characters
+
+# JWT tokens redaction (eyJ... format)
+[redaction.jwt_tokens]
+enabled = true
+strategy = "mask"
+prefix_length = 3
+suffix_length = 3
+
+# Database connection strings redaction
+[redaction.db_connections]
+enabled = true
+strategy = "mask"       # Special: hides credentials, shows host/db
+
+# Auth tokens redaction (Bearer tokens, session_id=...)
+[redaction.auth_tokens]
+enabled = true
+strategy = "mask"
+prefix_length = 2
+suffix_length = 2
+
+# Email addresses redaction
+[redaction.emails]
+enabled = true
+strategy = "mask"
+prefix_length = 1
+suffix_length = 3
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+#
+# Show current configuration:
+#   voidm config show
+#
+# Install default config:
+#   voidm config install
+#   voidm config install --force      # Override existing
+#
+# Modify single setting:
+#   voidm config set search.mode hybrid-rrf
+#   voidm config set embeddings.enabled true
+#   voidm config set search.default_limit 20
+#
+# Search with options:
+#   voidm search "query"
+#   voidm search "query" --graph-retrieval      # Force enable
+#   voidm search "query" --no-graph-retrieval   # Force disable
+#   voidm search "query" --query-expand true    # Override config
+#   voidm search "query" --reranker             # Use reranking
+#
+# Add memory with auto-linking:
+#   voidm add -t episodic "content" --importance 5
+#
+# ============================================================================
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;

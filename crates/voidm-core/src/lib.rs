@@ -25,6 +25,7 @@ pub mod passage;
 
 pub use config::Config;
 pub use config::config_path_display;
+pub use config::DEFAULT_CONFIG_CONTENT;
 pub use db::sqlite::open_pool;  // Re-export for backward compatibility
 pub use crud::resolve_id;
 pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning, MemoryEdge, OntologyEdgeForMigration};

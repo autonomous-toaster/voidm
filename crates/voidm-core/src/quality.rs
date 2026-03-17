@@ -120,9 +120,19 @@ pub fn compute_quality_score(
         "recently", "last session", "this sprint", "this quarter", "last week", "last month",
         "last year", "2026-", "2025-", "2024-", " now ", "earlier today",
     ];
-    let has_temporal = temporal_keywords.iter().any(|kw| content_lower.contains(kw));
-    // Penalty: 0.4 instead of 0.05 to allow some legitimate temporal context in examples
-    let temporal_independence = if has_temporal { 0.4 } else { 0.95 };
+    
+    // Count temporal markers for severity scoring
+    let temporal_count = temporal_keywords.iter()
+        .filter(|kw| content_lower.contains(*kw))
+        .count();
+    
+    let temporal_independence = match temporal_count {
+        0 => 0.95,      // No temporal markers - excellent
+        1 => 0.65,      // One marker - mild penalty
+        2 => 0.45,      // Two markers - moderate penalty
+        3 => 0.25,      // Three markers - strong penalty
+        _ => 0.10,      // Many markers - very poor
+    };
 
     // 4. Task independence: penalize task/TODO references and status prefixes
     let has_status_prefix = is_status_prefix_line(content);

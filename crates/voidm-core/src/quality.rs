@@ -386,8 +386,7 @@ pub fn compute_quality_score(
         || content.contains("for instance")
         || content.contains("such as")
         || content.contains("like ")
-        || content.contains("```")  // Code blocks
-        || content.contains("```");  // Markdown code
+        || content.contains("```");  // Code blocks
     
     let actionable_bonus = match (has_actionable_pattern, has_structured_format, has_citations, has_cross_references, has_knowledge_markers, has_examples) {
         (true, true, true, true, true, true) => 0.13,   // Excellent: all features + examples

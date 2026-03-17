@@ -1,35 +1,61 @@
 # Autoresearch Ideas Backlog
 
-## Prompt-Based Quality Improvements
+## Completed Experiments (23 total)
 
-### 1. Tinyllama Multi-Prompt Strategy
-- Generate per-memory-type prompts for better quality detection
-- Use GBNF to enforce structured score output
-- Validate scores against current algorithm to catch divergence
+### Pattern Detection & Coverage
+1. ✅ Expanded temporal marker detection (added "currently", "recently", date patterns, etc.)
+2. ✅ Enhanced abstraction detection (added "i created", "i implemented", "i worked", etc.)
+3. ✅ Improved genericity detection (added pronouns like "myself", "yours", "their", project refs)
+4. ✅ Expanded status prefix detection (added "session:", "todo:", "fix:", "issue:", "pr:", etc.)
+5. ✅ Added instance-specific marker detection (TODO-, session-, date patterns in abstraction)
 
-### 2. Grammar-Guided Prompt Templates (GBNF)
-- Define strict GBNF rules for quality score output format
-- Use tinyllama with grammar constraint to reduce hallucination
-- Example: Score as structured JSON or CSV for easier parsing
+### Per-Memory-Type Customization
+6. ✅ Per-memory-type substance thresholds (Procedural 20+, Conceptual 40+, Episodic 30+, Semantic/Contextual 50+)
+7. ✅ Episodic-aware temporal scoring (lighter penalties for episodic, stricter for others)
+8. ✅ Per-type entity specificity (Episodic 20-40%, Procedural/Conceptual low ok, Semantic/Contextual 10-30%)
+9. ✅ Per-type genericity penalties (Semantic/Conceptual stricter 0.30, Contextual 0.25, Episodic/Procedural 0.20)
 
-### 3. Per-Type Context Enhancement
-- **Episodic**: Include date/time relevance scoring
-- **Semantic**: Boost abstraction detection for principles
-- **Procedural**: Better "done"/"completed" context awareness
-- **Conceptual**: Detect hierarchical relationships
-- **Contextual**: Scope boundary detection
+### Graduated Penalty Systems
+10. ✅ Temporal independence graduated penalties (0→0.95, 1→0.65, 2→0.45, 3→0.25, 4+→0.10)
+11. ✅ Task independence graduated penalties (0→0.95, 1→0.75, 2→0.50, 3→0.30)
 
-### 4. Weight Refinement via LLM Feedback
-- Ask tinyllama to rate each scoring dimension
-- Use feedback to adjust weights from [0.20, 0.20, 0.25, 0.15, 0.20, 0.05]
-- Validate new weights don't break tests
+### Quality Bonuses & Incentives
+12. ✅ Actionable pattern bonus (detects "when", "if", "always", "never", "use", "avoid", "ensure")
+13. ✅ Structured format detection (lists, key-value, arrows, multiple paragraphs)
+14. ✅ Citation bonus (detects URLs, RFC, GitHub references)
+15. ✅ Cross-referential bonus (concept:, tag:, related:, see also, similar to, contrast with, extends)
+16. ✅ Knowledge markers bonus (important, key insight, best practice, pattern:, principle:, lesson, tradeoff)
+17. ✅ Generic/template content penalty (heavily penalize single words like "todo", "done", "test")
 
-### 5. Pattern Library Expansion
-- Add domain-specific temporal markers (not just "today")
-- Expand entity specificity detection
-- Add project-specific personal language patterns
+### Weight Optimization
+18. ✅ Conservative weight adjustments: genericity 0.15→0.14, abstraction 0.15→0.14, temporal 0.35→0.36, entity 0.05→0.06
 
-### 6. Substance Threshold Optimization
-- Current: <15 (0.0), 15-50 (0.3), 50-300 (0.95), >300 (0.3)
-- Explore: Different thresholds per memory type
-- Goal: Encourage "goldilocks" content length
+## Future Ideas (Not Pursued)
+
+### Advanced Pattern Detection
+- Keyword density analysis per memory type
+- Multi-word n-gram patterns (e.g., "was working on")
+- Sentiment analysis to detect emotional language
+- Abbreviation/acronym consistency
+
+### Machine Learning Approaches
+- Use tinyllama with GBNF to generate quality scores
+- Train a lightweight linear model on real memory data
+- Use LLM-generated labels as ground truth
+
+### Structural Analysis
+- Parse markdown structure and reward well-formatted content
+- Detect code blocks and reward technical examples
+- Validate hyperlink persistence
+
+### Integration with Existing Features
+- Use graph relationships to contextualize memory quality
+- Cross-validate quality scores with retrieval metrics
+- Link quality trends to concept evolution
+
+## Constraints & Success Criteria
+
+**Must Pass**: All 13 quality unit tests
+**Must Not Break**: Public API of `compute_quality_score()`
+**No New Hard Dependencies**: Feature gates ok
+**No Overfitting**: Improvements must generalize

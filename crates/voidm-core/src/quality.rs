@@ -333,6 +333,25 @@ pub fn compute_quality_score(
         || content.contains("→")   // Arrows (flow)
         || content.lines().count() > 3;  // Multiple paragraphs
     
+    // Penalty for repetitive content (same word or phrase repeated many times)
+    let words: Vec<&str> = content_lower.split_whitespace().collect();
+    let total_words = words.len();
+    let unique_words = words.iter().collect::<std::collections::HashSet<_>>().len();
+    
+    // Calculate repetitiveness: unique_words / total_words ratio
+    let repetitive_penalty = if total_words > 10 {
+        let diversity_ratio = unique_words as f32 / total_words as f32;
+        if diversity_ratio < 0.4 {
+            0.08  // Very repetitive
+        } else if diversity_ratio < 0.5 {
+            0.03  // Somewhat repetitive
+        } else {
+            0.0   // Good diversity
+        }
+    } else {
+        0.0
+    };
+    
     // 10. Bonus for citations/references (external anchors)
     let has_citations = content.contains("http://")
         || content.contains("https://")
@@ -400,7 +419,7 @@ pub fn compute_quality_score(
         + temporal_independence * 0.36
         + task_independence * 0.10
         + substance * 0.20
-        + entity_specificity * 0.06) - task_language_penalty + actionable_bonus;
+        + entity_specificity * 0.06) - task_language_penalty - repetitive_penalty + actionable_bonus;
 
     QualityScore {
         score: score.max(0.0).min(1.0),

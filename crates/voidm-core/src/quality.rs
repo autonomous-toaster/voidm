@@ -211,20 +211,44 @@ pub fn compute_quality_score(
     // Procedural/Conceptual can be shorter (actions, rules are concise)
     // Episodic/Semantic/Contextual should be more substantial
     let substance = match memory_type {
-        MemoryType::Procedural | MemoryType::Conceptual => {
-            // Actions and rules can be concise: 30+ words preferred
+        MemoryType::Procedural => {
+            // Actions and rules can be concise: 20+ words preferred
+            if word_count < 8 {
+                0.0
+            } else if word_count < 20 {
+                0.5
+            } else if word_count < 400 {
+                0.95
+            } else {
+                0.3  // Too long for procedural
+            }
+        }
+        MemoryType::Conceptual => {
+            // Concepts should be well-explained: 40+ words preferred
             if word_count < 10 {
                 0.0
-            } else if word_count < 30 {
+            } else if word_count < 40 {
                 0.4
             } else if word_count < 500 {
                 0.95
             } else {
-                0.2  // Too long for procedural
+                0.2
+            }
+        }
+        MemoryType::Episodic => {
+            // Episodes can be shorter (specific events): 30+ words
+            if word_count < 12 {
+                0.0
+            } else if word_count < 30 {
+                0.4
+            } else if word_count < 400 {
+                0.95
+            } else {
+                0.4
             }
         }
         _ => {
-            // Episodic, Semantic, Contextual: 50+ words preferred
+            // Semantic, Contextual: 50+ words preferred
             if word_count < 15 {
                 0.0
             } else if word_count < 50 {

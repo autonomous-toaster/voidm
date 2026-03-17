@@ -19,14 +19,14 @@ pub struct QualityScore {
 /// (product names, locations, people) with generic principles. Too few entities (generic),
 /// too many (overly specific instance narrative).
 ///
-/// Scoring:
-/// - <10% density: 0.95 (mostly generic with few anchors)
-/// - 10-30% density: 1.0 (ideal sweet spot)
-/// - 30-50% density: 0.8 (getting specific)
-/// - >50% density: 0.5 (too entity-heavy, instance-focused)
+/// Scoring varies by memory type:
+/// - Episodic: higher entity density acceptable (specific events need concrete details)
+/// - Semantic/Conceptual: 10-30% ideal (principles with anchors)
+/// - Procedural: low density ok (generic instructions)
+/// - Contextual: balanced (scope-aware)
 ///
 /// Note: If NER model is not loaded, returns neutral score (0.95).
-fn entity_specificity_score(content: &str) -> f32 {
+fn entity_specificity_score(content: &str, memory_type: &MemoryType) -> f32 {
     // Try to extract entities; if NER is not loaded, default to neutral score
     let entities = match crate::ner::extract_entities(content) {
         Ok(e) => e,
@@ -39,7 +39,10 @@ fn entity_specificity_score(content: &str) -> f32 {
 
     if entities.is_empty() {
         // No entities found = generic content = good for quality
-        return 0.95;
+        return match memory_type {
+            MemoryType::Episodic => 0.85,  // Episodic typically needs entities
+            _ => 0.95,
+        };
     }
 
     let word_count = content.split_whitespace().count();
@@ -54,15 +57,44 @@ fn entity_specificity_score(content: &str) -> f32 {
 
     let entity_density = entity_token_count as f32 / word_count as f32;
 
-    // Score based on density distribution
-    if entity_density < 0.1 {
-        0.95  // Low density but has some anchors
-    } else if entity_density < 0.3 {
-        1.0   // Sweet spot: balanced concrete + generic
-    } else if entity_density < 0.5 {
-        0.8   // Getting specific
-    } else {
-        0.5   // Too entity-heavy, overly specific/instance-focused
+    // Score based on memory type and density distribution
+    match memory_type {
+        MemoryType::Episodic => {
+            // Episodes need concrete details: 20-40% entity density ideal
+            if entity_density < 0.15 {
+                0.75  // Too few entities for specific event
+            } else if entity_density < 0.40 {
+                1.0   // Ideal range
+            } else if entity_density < 0.60 {
+                0.8   // Getting very specific
+            } else {
+                0.5   // Too specific, reads like narrative
+            }
+        }
+        MemoryType::Procedural | MemoryType::Conceptual => {
+            // Procedures and concepts can have low entity density
+            if entity_density < 0.1 {
+                0.95  // Ideal for generic instructions
+            } else if entity_density < 0.25 {
+                1.0   // Still good
+            } else if entity_density < 0.40 {
+                0.85  // Getting specific
+            } else {
+                0.6   // Too instance-specific for procedural
+            }
+        }
+        _ => {
+            // Semantic, Contextual: 10-30% ideal
+            if entity_density < 0.1 {
+                0.95  // Low density but acceptable
+            } else if entity_density < 0.3 {
+                1.0   // Sweet spot: balanced concrete + generic
+            } else if entity_density < 0.5 {
+                0.8   // Getting specific
+            } else {
+                0.5   // Too entity-heavy, overly specific/instance-focused
+            }
+        }
     }
 }
 
@@ -280,8 +312,8 @@ pub fn compute_quality_score(
         }
     };
 
-    // 7. Entity specificity: measure named entity density
-    let entity_specificity = entity_specificity_score(content);
+    // 7. Entity specificity: measure named entity density (memory-type-aware)
+    let entity_specificity = entity_specificity_score(content, memory_type);
 
     // 8. Bonus for actionable/structural patterns (imperative forms, conditionals)
     let has_actionable_pattern = content_lower.contains("when ")

@@ -241,6 +241,19 @@ pub fn compute_quality_score(
     // 7. Entity specificity: measure named entity density
     let entity_specificity = entity_specificity_score(content);
 
+    // 8. Bonus for actionable/structural patterns (imperative forms, conditionals)
+    let has_actionable_pattern = content_lower.contains("when ")
+        || content_lower.contains("if ")
+        || content_lower.contains("always ")
+        || content_lower.contains("never ")
+        || content_lower.contains("use ")
+        || content_lower.contains("avoid ")
+        || content_lower.contains("ensure ")
+        || content_lower.contains("pattern:")
+        || content_lower.contains("rule:");
+    
+    let actionable_bonus = if has_actionable_pattern { 0.05 } else { 0.0 };
+
     // Weighted score - substance weight matters for short content
     // Adjusted weights to prioritize temporal independence (content-age) over other factors
     let score = (genericity * 0.15
@@ -248,7 +261,7 @@ pub fn compute_quality_score(
         + temporal_independence * 0.35
         + task_independence * 0.10
         + substance * 0.20
-        + entity_specificity * 0.05) - task_language_penalty;
+        + entity_specificity * 0.05) - task_language_penalty + actionable_bonus;
 
     QualityScore {
         score: score.max(0.0).min(1.0),

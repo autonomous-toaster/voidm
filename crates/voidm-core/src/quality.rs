@@ -132,7 +132,10 @@ pub fn compute_quality_score(
         || content_lower == "todo"
         || content_lower == "done"
         || content_lower == "test"
-        || content_lower == "fix";
+        || content_lower == "fix"
+        || content_lower == "wip"
+        || content_lower == "tbd"
+        || (word_count == 1 && !content_lower.contains("http")); // Single word (except URLs)
     
     // Per-type sensitivity to personal language
     let genericity = if is_very_generic {
@@ -169,9 +172,13 @@ pub fn compute_quality_score(
         || content.contains("2025-")
         || content.contains("2024-");
     
-    let abstraction = match (has_personal_action, has_instance_markers) {
-        (true, _) => 0.2,
-        (false, true) => 0.5,
+    // Degenerate single-word content is also non-abstract (it's just a label)
+    let is_degenerate_word = word_count == 1 && !content_lower.contains("http");
+    
+    let abstraction = match (has_personal_action, has_instance_markers, is_degenerate_word) {
+        (true, _, _) => 0.2,
+        (false, true, _) => 0.5,
+        (false, false, true) => 0.1,  // Single word
         _ => 0.95,
     };
 
@@ -226,20 +233,25 @@ pub fn compute_quality_score(
     
     let task_independence = match task_issues {
         0 => 0.95,      // No task references - excellent
-        1 => 0.75,      // One TODO - moderate
-        2 => 0.50,      // Status prefix - significant penalty
-        3 => 0.30,      // Both - very poor
-        _ => 0.10,
+        1 => 0.65,      // One TODO - moderate (was 0.75)
+        2 => 0.35,      // Status prefix - significant penalty (was 0.50)
+        3 => 0.15,      // Both - very poor (was 0.30)
+        _ => 0.05,
     };
 
     // 5. Task language penalty (context-aware: skip for procedural/conceptual)
-    let task_language_keywords = &["completed", "finished", "done", "fixed", "milestone"];
+    let task_language_keywords = &["completed", "finished", "done", "fixed", "milestone", "accomplished"];
     let has_task_language = task_language_keywords.iter().any(|kw| {
-        // Check for word boundaries more flexibly
+        // Check for word boundaries more carefully
+        let word_pattern = format!(r"\b{}\b", kw);
+        // Simple word boundary check: look for space-word-space, or punctuation-word-space, etc.
         content_lower.contains(&format!(" {}", kw))
             || content_lower.contains(&format!("{} ", kw))
             || content_lower.ends_with(kw)
             || content_lower.starts_with(kw)
+            || content_lower.contains(&format!("{}.", kw))    // done. sentence ending
+            || content_lower.contains(&format!("{},", kw))    // done, in list
+            || content_lower.contains(&format!("{}!", kw))    // done! emphatic
     });
     
     let mut task_language_penalty = 0.0;
@@ -341,12 +353,16 @@ pub fn compute_quality_score(
     // Calculate repetitiveness: unique_words / total_words ratio
     let repetitive_penalty = if total_words > 10 {
         let diversity_ratio = unique_words as f32 / total_words as f32;
-        if diversity_ratio < 0.4 {
-            0.08  // Very repetitive
+        if diversity_ratio < 0.1 {
+            0.45  // Catastrophically repetitive (< 10% unique)
+        } else if diversity_ratio < 0.2 {
+            0.30  // Extremely repetitive (10-20% unique)
+        } else if diversity_ratio < 0.35 {
+            0.15  // Very repetitive (20-35% unique)
         } else if diversity_ratio < 0.5 {
-            0.03  // Somewhat repetitive
+            0.05  // Somewhat repetitive (35-50% unique)
         } else {
-            0.0   // Good diversity
+            0.0   // Good diversity (>50% unique)
         }
     } else {
         0.0
@@ -457,8 +473,15 @@ pub fn compute_quality_score(
         + substance * 0.20
         + entity_specificity * 0.08) - task_language_penalty - repetitive_penalty + actionable_bonus;
 
+    let final_score = if word_count <= 1 && !content_lower.contains("http") {
+        // Single word (non-URL): hard cap at 0.15
+        score.max(0.0).min(1.0).min(0.15)
+    } else {
+        score.max(0.0).min(1.0)
+    };
+
     QualityScore {
-        score: score.max(0.0).min(1.0),
+        score: final_score,
         genericity,
         abstraction,
         temporal_independence,
@@ -481,6 +504,7 @@ fn is_status_prefix_line(content: &str) -> bool {
         "todo:", "fix:", "issue:", "pr:", "commit:", "plan:",
         "result:", "outcome:", "completion:", "resolved:", "addressed:",
         "fixed:", "note:", "summary:", "progress:", "done:",
+        "completed:", "finished:",
     ];
     content
         .lines()
@@ -488,6 +512,8 @@ fn is_status_prefix_line(content: &str) -> bool {
         .map(|line| {
             let line_lower = line.to_lowercase();
             prefixes.iter().any(|prefix| line_lower.starts_with(prefix))
+                || line_lower.starts_with("update:")
+                || line_lower.starts_with("working on")
         })
         .unwrap_or(false)
 }

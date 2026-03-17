@@ -101,7 +101,9 @@ pub fn compute_quality_score(
     // 3. Temporal independence: penalize temporal markers
     let temporal_keywords = &[
         "today", "tomorrow", "yesterday", "this session", "this morning", "this afternoon",
-        "this week", "this month", "this year", "right now",
+        "this week", "this month", "this year", "right now", "currently", "just now",
+        "recently", "last session", "this sprint", "this quarter", "last week", "last month",
+        "last year", "2026-", "2025-", "2024-", " now ", "earlier today",
     ];
     let has_temporal = temporal_keywords.iter().any(|kw| content_lower.contains(kw));
     // Penalty: 0.4 instead of 0.05 to allow some legitimate temporal context in examples

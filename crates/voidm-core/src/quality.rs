@@ -242,16 +242,17 @@ pub fn compute_quality_score(
     // 5. Task language penalty (context-aware: skip for procedural/conceptual)
     let task_language_keywords = &["completed", "finished", "done", "fixed", "milestone", "accomplished"];
     let has_task_language = task_language_keywords.iter().any(|kw| {
-        // Check for word boundaries more carefully
-        let word_pattern = format!(r"\b{}\b", kw);
-        // Simple word boundary check: look for space-word-space, or punctuation-word-space, etc.
-        content_lower.contains(&format!(" {}", kw))
-            || content_lower.contains(&format!("{} ", kw))
-            || content_lower.ends_with(kw)
-            || content_lower.starts_with(kw)
-            || content_lower.contains(&format!("{}.", kw))    // done. sentence ending
-            || content_lower.contains(&format!("{},", kw))    // done, in list
-            || content_lower.contains(&format!("{}!", kw))    // done! emphatic
+        // Check for word boundaries very carefully, including sentence endings
+        content_lower.contains(&format!(" {} ", kw))      // "  done  "
+            || content_lower.contains(&format!(" {}.", kw)) // " done."
+            || content_lower.contains(&format!(" {},", kw)) // " done,"
+            || content_lower.contains(&format!(" {}!", kw)) // " done!"
+            || content_lower.contains(&format!(" {}?", kw)) // " done?"
+            || content_lower.starts_with(&format!("{}.", kw)) // "done." at start
+            || content_lower.ends_with(&format!(" {}", kw)) // ends with " done"
+            || content_lower.as_str() == *kw                // just the word
+            || (content_lower.contains(&format!("{}.\n", kw)) // "done.\n"
+                || content_lower.contains(&format!("{}. ", kw))) // "done. "
     });
     
     let mut task_language_penalty = 0.0;
@@ -506,16 +507,19 @@ fn is_status_prefix_line(content: &str) -> bool {
         "fixed:", "note:", "summary:", "progress:", "done:",
         "completed:", "finished:",
     ];
-    content
-        .lines()
-        .next()
-        .map(|line| {
-            let line_lower = line.to_lowercase();
-            prefixes.iter().any(|prefix| line_lower.starts_with(prefix))
-                || line_lower.starts_with("update:")
-                || line_lower.starts_with("working on")
-        })
-        .unwrap_or(false)
+    
+    // Check ALL lines, not just the first one
+    for line in content.lines() {
+        let line_lower = line.to_lowercase();
+        let trimmed = line_lower.trim();
+        if prefixes.iter().any(|prefix| trimmed.starts_with(prefix))
+            || trimmed.starts_with("update:")
+            || trimmed.starts_with("working on")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn contains_hex_after_todo(content: &str) -> bool {

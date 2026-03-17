@@ -45,3 +45,4 @@ path = "src/bin/gguf_bench.rs"
 [features]
 default = []
 gguf = ["llama-gguf"]
+tinyllama-quality = ["gguf"]

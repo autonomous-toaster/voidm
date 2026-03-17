@@ -1,0 +1,24 @@
+# GBNF Grammar for Quality Feature Extraction
+# Structured JSON output for memory quality dimensions
+
+root ::= object
+
+object ::= "{" ws (
+  "\"genericity\"" ws ":" ws score "," ws
+  "\"abstraction\"" ws ":" ws score "," ws
+  "\"temporal_independence\"" ws ":" ws score "," ws
+  "\"task_independence\"" ws ":" ws score "," ws
+  "\"substance\"" ws ":" ws score "," ws
+  "\"entity_specificity\"" ws ":" ws score "," ws
+  "\"reasoning\"" ws ":" ws string
+) "}" ws
+
+score ::= ("0" | "1") ("." [0-9]{1,2})? ws
+
+string ::= "\"" (
+  [^"\\\x7F\x00-\x1F] |
+  "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+)* "\"" ws
+
+# Whitespace
+ws ::= ([ \t\n] ws)?

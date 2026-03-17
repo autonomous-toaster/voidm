@@ -22,6 +22,7 @@ pub mod redactor;
 pub mod graph_retrieval;
 pub mod rrf_fusion;
 pub mod passage;
+pub mod tinyllama_quality;
 
 pub use config::Config;
 pub use config::config_path_display;

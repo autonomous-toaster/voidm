@@ -94,7 +94,19 @@ pub fn compute_quality_score(
         || content_lower.contains("my implementation")
         || content_lower.contains("our team");
     let personal_count = personal_pronouns + (if has_this_project { 1 } else { 0 });
-    let genericity = (1.0 - (personal_count as f32 * 0.25).min(1.0)).max(0.0);
+    
+    // Penalize overly generic/template content
+    let is_very_generic = (content.len() < 30 && word_count < 10)
+        || content_lower == "todo"
+        || content_lower == "done"
+        || content_lower == "test"
+        || content_lower == "fix";
+    
+    let genericity = if is_very_generic {
+        0.1  // Heavily penalize
+    } else {
+        (1.0 - (personal_count as f32 * 0.25).min(1.0)).max(0.0)
+    };
 
     // 2. Abstraction: penalize instance-specific language
     let has_personal_action = content_lower.contains("i did")

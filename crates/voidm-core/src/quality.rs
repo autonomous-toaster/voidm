@@ -102,10 +102,16 @@ pub fn compute_quality_score(
         || content_lower == "test"
         || content_lower == "fix";
     
+    // Per-type sensitivity to personal language
     let genericity = if is_very_generic {
         0.1  // Heavily penalize
     } else {
-        (1.0 - (personal_count as f32 * 0.25).min(1.0)).max(0.0)
+        let base_penalty = match memory_type {
+            MemoryType::Semantic | MemoryType::Conceptual => 0.30,  // Stricter
+            MemoryType::Contextual => 0.25,
+            _ => 0.20,  // Episodic, Procedural more lenient
+        };
+        (1.0 - (personal_count as f32 * base_penalty).min(1.0)).max(0.0)
     };
 
     // 2. Abstraction: penalize instance-specific language

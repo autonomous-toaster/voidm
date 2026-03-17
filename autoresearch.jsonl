@@ -13,3 +13,4 @@
 {"run":13,"commit":"8539d21","metric":0.85,"metrics":{},"status":"keep","description":"Granular per-type substance thresholds: Procedural (20+), Conceptual (40+), Episodic (30+), Semantic/Contextual (50+)","timestamp":1773785653911,"segment":0}
 {"run":14,"commit":"78b848f","metric":0.85,"metrics":{},"status":"keep","description":"Structured format detection bonus: +0.08 for actionable+structured, +0.05 actionable, +0.03 structured","timestamp":1773785675792,"segment":0}
 {"run":15,"commit":"e010988","metric":0.85,"metrics":{},"status":"keep","description":"Added heavy penalty for very generic/template content: single words like \"todo\", \"done\", \"test\", \"fix\" now score 0.1","timestamp":1773785699583,"segment":0}
+{"run":16,"commit":"19485c9","metric":0.85,"metrics":{},"status":"keep","description":"Added citation bonus: +0.10 for actionable+structured+cited, +0.07 for actionable+cited, +0.06 for structured+cited","timestamp":1773785727575,"segment":0}

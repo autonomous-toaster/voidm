@@ -215,10 +215,11 @@ pub fn compute_quality_score(
     let entity_specificity = entity_specificity_score(content);
 
     // Weighted score - substance weight matters for short content
-    let score = (genericity * 0.20
-        + abstraction * 0.20
-        + temporal_independence * 0.25
-        + task_independence * 0.15
+    // Adjusted weights to prioritize temporal independence (content-age) over other factors
+    let score = (genericity * 0.15
+        + abstraction * 0.15
+        + temporal_independence * 0.35
+        + task_independence * 0.10
         + substance * 0.20
         + entity_specificity * 0.05) - task_language_penalty;
 

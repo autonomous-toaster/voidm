@@ -138,12 +138,27 @@ pub fn compute_quality_score(
         .filter(|kw| content_lower.contains(*kw))
         .count();
     
-    let temporal_independence = match temporal_count {
-        0 => 0.95,      // No temporal markers - excellent
-        1 => 0.65,      // One marker - mild penalty
-        2 => 0.45,      // Two markers - moderate penalty
-        3 => 0.25,      // Three markers - strong penalty
-        _ => 0.10,      // Many markers - very poor
+    // Episodic memories naturally have temporal markers - lighter penalty
+    let temporal_independence = match memory_type {
+        MemoryType::Episodic => {
+            match temporal_count {
+                0 => 0.85,      // Even episodic should ideally be timeless
+                1 => 0.75,      // One temporal marker is acceptable for episodic
+                2 => 0.60,      // Two markers - ok but still penalize
+                3 => 0.45,
+                _ => 0.30,
+            }
+        }
+        _ => {
+            // Semantic, Procedural, Conceptual, Contextual should avoid temporal markers
+            match temporal_count {
+                0 => 0.95,      // No temporal markers - excellent
+                1 => 0.65,      // One marker - mild penalty
+                2 => 0.45,      // Two markers - moderate penalty
+                3 => 0.25,      // Three markers - strong penalty
+                _ => 0.10,      // Many markers - very poor
+            }
+        }
     };
 
     // 4. Task independence: penalize task/TODO references and status prefixes

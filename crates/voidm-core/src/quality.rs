@@ -350,21 +350,46 @@ pub fn compute_quality_score(
         || content.contains("contrast with")
         || content.contains("extends");
     
-    let actionable_bonus = match (has_actionable_pattern, has_structured_format, has_citations, has_cross_references) {
-        (true, true, true, true) => 0.11,   // Excellent: all features
-        (true, true, true, false) => 0.10,  // Excellent: actionable + structured + cited
-        (true, true, false, true) => 0.10,  // Excellent: actionable + structured + cross-ref
-        (true, true, false, false) => 0.08, // Good: actionable + structured
-        (true, false, true, true) => 0.08,  // Good: actionable + cited + cross-ref
-        (true, false, true, false) => 0.07, // Ok: actionable + cited
-        (false, true, true, true) => 0.07,  // Ok: structured + cited + cross-ref
-        (false, true, true, false) => 0.06, // Ok: structured + cited
-        (true, false, false, true) => 0.06, // Ok: actionable + cross-ref
-        (false, true, false, true) => 0.05, // Ok: structured + cross-ref
-        (true, false, false, false) => 0.05,// Ok: just actionable
-        (false, true, false, false) => 0.03,// Minimal: just structured
-        (false, false, true, false) => 0.04,// Minimal: just cited
-        (false, false, false, true) => 0.04,// Minimal: just cross-ref
+    // 12. Bonus for knowledge markers (e.g., "important", "key", "critical", "best practice")
+    let has_knowledge_markers = content_lower.contains("important")
+        || content_lower.contains("key insight")
+        || content_lower.contains("critical")
+        || content_lower.contains("best practice")
+        || content_lower.contains("pattern:")
+        || content_lower.contains("principle:")
+        || content_lower.contains("lesson")
+        || content_lower.contains("tradeoff");
+    
+    let actionable_bonus = match (has_actionable_pattern, has_structured_format, has_citations, has_cross_references, has_knowledge_markers) {
+        (true, true, true, true, true) => 0.12,   // Excellent: all features + knowledge markers
+        (true, true, true, true, false) => 0.11,  // Excellent: all features
+        (true, true, true, false, true) => 0.11,  // Excellent: actionable + structured + cited + knowledge
+        (true, true, true, false, false) => 0.10, // Excellent: actionable + structured + cited
+        (true, true, false, true, true) => 0.11,  // Excellent: actionable + structured + cross-ref + knowledge
+        (true, true, false, true, false) => 0.10, // Excellent: actionable + structured + cross-ref
+        (true, true, false, false, true) => 0.09, // Good: actionable + structured + knowledge
+        (true, true, false, false, false) => 0.08,// Good: actionable + structured
+        (true, false, true, true, true) => 0.09,  // Good: actionable + cited + cross-ref + knowledge
+        (true, false, true, true, false) => 0.08, // Good: actionable + cited + cross-ref
+        (true, false, true, false, true) => 0.08, // Good: actionable + cited + knowledge
+        (true, false, true, false, false) => 0.07,// Ok: actionable + cited
+        (false, true, true, true, true) => 0.08,  // Good: structured + cited + cross-ref + knowledge
+        (false, true, true, true, false) => 0.07, // Ok: structured + cited + cross-ref
+        (false, true, true, false, true) => 0.07, // Ok: structured + cited + knowledge
+        (false, true, true, false, false) => 0.06,// Ok: structured + cited
+        (true, false, false, true, true) => 0.07, // Ok: actionable + cross-ref + knowledge
+        (true, false, false, true, false) => 0.06,// Ok: actionable + cross-ref
+        (true, false, false, false, true) => 0.06,// Ok: actionable + knowledge
+        (true, false, false, false, false) => 0.05,// Ok: just actionable
+        (false, true, false, true, true) => 0.06, // Ok: structured + cross-ref + knowledge
+        (false, true, false, true, false) => 0.05,// Minimal: structured + cross-ref
+        (false, true, false, false, true) => 0.05,// Minimal: structured + knowledge
+        (false, true, false, false, false) => 0.03,// Minimal: just structured
+        (false, false, true, false, true) => 0.05,// Minimal: cited + knowledge
+        (false, false, true, false, false) => 0.04,// Minimal: just cited
+        (false, false, false, true, true) => 0.05,// Minimal: cross-ref + knowledge
+        (false, false, false, true, false) => 0.04,// Minimal: just cross-ref
+        (false, false, false, false, true) => 0.04,// Minimal: just knowledge marker
         _ => 0.0,
     };
 

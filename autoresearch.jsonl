@@ -19,3 +19,4 @@
 {"run":19,"commit":"$(git r","metric":0,"metrics":{},"status":"crash","description":"Weight rebalancing (reverted): caused test failures","timestamp":1773785826386,"segment":0}
 {"run":20,"commit":"4ee779d","metric":0.85,"metrics":{},"status":"keep","description":"Conservative weight adjustment: genericity 0.15→0.14, abstraction 0.15→0.14, temporal 0.35→0.36, entity 0.05→0.06","timestamp":1773785905692,"segment":0}
 {"run":21,"commit":"efd7c52","metric":0.85,"metrics":{},"status":"keep","description":"Expanded status prefix detection: added \"resolved:\", \"addressed:\", \"fixed:\", \"note:\", \"summary:\", \"progress:\", \"done:\"","timestamp":1773785963499,"segment":0}
+{"run":22,"commit":"50d517d","metric":0.85,"metrics":{},"status":"keep","description":"Added cross-referential bonus: +0.11 for all features, +0.10 for actionable+structured+cited/cross-ref","timestamp":1773785993142,"segment":0}

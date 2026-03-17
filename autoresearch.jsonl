@@ -23,3 +23,4 @@
 {"run":23,"commit":"c3b6682","metric":0.85,"metrics":{},"status":"keep","description":"Added knowledge markers bonus: detects \"important\", \"key insight\", \"best practice\", \"pattern:\", \"principle:\", \"lesson\", \"tradeoff\"","timestamp":1773786024560,"segment":0}
 {"run":24,"commit":"2f22131","metric":0.85,"metrics":{},"status":"keep","description":"Added repetitive content penalty: -0.08 if <40% unique words, -0.03 if <50% unique","timestamp":1773786094081,"segment":0}
 {"run":25,"commit":"2e22b66","metric":0.85,"metrics":{},"status":"keep","description":"Added examples bonus: detects \"Example:\", \"e.g.\", \"for instance\", \"such as\", code blocks; max +0.13 for complete memory","timestamp":1773786134783,"segment":0}
+{"run":26,"commit":"36eacd6","metric":0.85,"metrics":{},"status":"keep","description":"Fixed duplicate code block detection (markdown formatting fix)","timestamp":1773786166820,"segment":0}

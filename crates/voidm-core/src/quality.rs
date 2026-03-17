@@ -450,12 +450,12 @@ pub fn compute_quality_score(
 
     // Weighted score - substance weight matters for short content
     // Adjusted weights to prioritize temporal independence (content-age) over other factors
-    let score = (genericity * 0.14
-        + abstraction * 0.14
-        + temporal_independence * 0.36
-        + task_independence * 0.10
+    let score = (genericity * 0.13
+        + abstraction * 0.13
+        + temporal_independence * 0.37
+        + task_independence * 0.09
         + substance * 0.20
-        + entity_specificity * 0.06) - task_language_penalty - repetitive_penalty + actionable_bonus;
+        + entity_specificity * 0.08) - task_language_penalty - repetitive_penalty + actionable_bonus;
 
     QualityScore {
         score: score.max(0.0).min(1.0),

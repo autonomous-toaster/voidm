@@ -295,10 +295,22 @@ pub fn compute_quality_score(
         || content.contains("→")   // Arrows (flow)
         || content.lines().count() > 3;  // Multiple paragraphs
     
-    let actionable_bonus = match (has_actionable_pattern, has_structured_format) {
-        (true, true) => 0.08,   // Well-structured + actionable = +0.08
-        (true, false) => 0.05,  // Just actionable = +0.05
-        (false, true) => 0.03,  // Just structured = +0.03
+    // 10. Bonus for citations/references (external anchors)
+    let has_citations = content.contains("http://")
+        || content.contains("https://")
+        || content.contains("RFC")
+        || content.contains("GitHub")
+        || content.contains("issue")
+        || content.contains("commit");
+    
+    let actionable_bonus = match (has_actionable_pattern, has_structured_format, has_citations) {
+        (true, true, true) => 0.10,   // Excellent: actionable + structured + cited
+        (true, true, false) => 0.08,  // Good: actionable + structured
+        (true, false, true) => 0.07,  // Good: actionable + cited
+        (false, true, true) => 0.06,  // Good: structured + cited
+        (true, false, false) => 0.05, // Ok: just actionable
+        (false, true, false) => 0.03, // Ok: just structured
+        (false, false, true) => 0.04, // Ok: just cited
         _ => 0.0,
     };
 

@@ -276,7 +276,19 @@ pub fn compute_quality_score(
         || content_lower.contains("pattern:")
         || content_lower.contains("rule:");
     
-    let actionable_bonus = if has_actionable_pattern { 0.05 } else { 0.0 };
+    // 9. Bonus for well-structured content (lists, hierarchies, key-value patterns)
+    let has_structured_format = content.contains("- ")  // Lists
+        || content.contains("* ")
+        || content.contains(": ")  // Key-value
+        || content.contains("→")   // Arrows (flow)
+        || content.lines().count() > 3;  // Multiple paragraphs
+    
+    let actionable_bonus = match (has_actionable_pattern, has_structured_format) {
+        (true, true) => 0.08,   // Well-structured + actionable = +0.08
+        (true, false) => 0.05,  // Just actionable = +0.05
+        (false, true) => 0.03,  // Just structured = +0.03
+        _ => 0.0,
+    };
 
     // Weighted score - substance weight matters for short content
     // Adjusted weights to prioritize temporal independence (content-age) over other factors

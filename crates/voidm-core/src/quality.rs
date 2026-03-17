@@ -340,10 +340,18 @@ pub fn compute_quality_score(
         || content_lower.contains("rule:");
     
     // 9. Bonus for well-structured content (lists, hierarchies, key-value patterns)
+    let has_markdown_headers = content.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("# ") || trimmed.starts_with("## ") || trimmed.starts_with("### ") || trimmed.starts_with("#### ")
+    });
+    let has_inline_code = content.contains("`");
+    
     let has_structured_format = content.contains("- ")  // Lists
         || content.contains("* ")
         || content.contains(": ")  // Key-value
         || content.contains("→")   // Arrows (flow)
+        || has_markdown_headers
+        || has_inline_code
         || content.lines().count() > 3;  // Multiple paragraphs
     
     // Penalty for repetitive content (same word or phrase repeated many times)
@@ -397,13 +405,22 @@ pub fn compute_quality_score(
         || content_lower.contains("tradeoff");
     
     // 13. Bonus for examples/demonstrations (concrete applications)
+    let has_code_block = content.contains("```") 
+        || content.lines().any(|line| line.starts_with("    ") || line.starts_with("\t"));  // Indented code
+    let has_code_syntax = content.contains("function ")
+        || content.contains("class ")
+        || content.contains("fn ")
+        || (content.contains("{") && content.contains("}"))
+        || (content.contains("[") && content.contains("]"));  // JSON/arrays
+    
     let has_examples = content.contains("Example:")
         || content.contains("e.g.,")
         || content.contains("e.g.")
         || content.contains("for instance")
         || content.contains("such as")
         || content.contains("like ")
-        || content.contains("```");  // Code blocks
+        || has_code_block
+        || has_code_syntax;
     
     let actionable_bonus = match (has_actionable_pattern, has_structured_format, has_citations, has_cross_references, has_knowledge_markers, has_examples) {
         (true, true, true, true, true, true) => 0.13,   // Excellent: all features + examples

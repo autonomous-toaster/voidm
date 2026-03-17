@@ -341,14 +341,30 @@ pub fn compute_quality_score(
         || content.contains("issue")
         || content.contains("commit");
     
-    let actionable_bonus = match (has_actionable_pattern, has_structured_format, has_citations) {
-        (true, true, true) => 0.10,   // Excellent: actionable + structured + cited
-        (true, true, false) => 0.08,  // Good: actionable + structured
-        (true, false, true) => 0.07,  // Good: actionable + cited
-        (false, true, true) => 0.06,  // Good: structured + cited
-        (true, false, false) => 0.05, // Ok: just actionable
-        (false, true, false) => 0.03, // Ok: just structured
-        (false, false, true) => 0.04, // Ok: just cited
+    // 11. Bonus for conceptual cross-references (mentions of other systems/patterns)
+    let has_cross_references = content.contains("concept:")
+        || content.contains("tag:")
+        || content.contains("related:")
+        || content.contains("see also")
+        || content.contains("similar to")
+        || content.contains("contrast with")
+        || content.contains("extends");
+    
+    let actionable_bonus = match (has_actionable_pattern, has_structured_format, has_citations, has_cross_references) {
+        (true, true, true, true) => 0.11,   // Excellent: all features
+        (true, true, true, false) => 0.10,  // Excellent: actionable + structured + cited
+        (true, true, false, true) => 0.10,  // Excellent: actionable + structured + cross-ref
+        (true, true, false, false) => 0.08, // Good: actionable + structured
+        (true, false, true, true) => 0.08,  // Good: actionable + cited + cross-ref
+        (true, false, true, false) => 0.07, // Ok: actionable + cited
+        (false, true, true, true) => 0.07,  // Ok: structured + cited + cross-ref
+        (false, true, true, false) => 0.06, // Ok: structured + cited
+        (true, false, false, true) => 0.06, // Ok: actionable + cross-ref
+        (false, true, false, true) => 0.05, // Ok: structured + cross-ref
+        (true, false, false, false) => 0.05,// Ok: just actionable
+        (false, true, false, false) => 0.03,// Minimal: just structured
+        (false, false, true, false) => 0.04,// Minimal: just cited
+        (false, false, false, true) => 0.04,// Minimal: just cross-ref
         _ => 0.0,
     };
 

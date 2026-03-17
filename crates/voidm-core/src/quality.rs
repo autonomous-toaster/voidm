@@ -84,8 +84,15 @@ pub fn compute_quality_score(
     let word_count = content.split_whitespace().count();
 
     // 1. Genericity: penalize personal pronouns and project-specific language
-    let personal_pronouns = count_matches(&content_lower, &[" i ", " we ", " my ", " our ", " me ", " us "]);
-    let has_this_project = content_lower.contains("this project");
+    let personal_pronouns = count_matches(&content_lower, &[
+        " i ", " we ", " my ", " our ", " me ", " us ",
+        "myself", "yourself", "ourselves", "yourselves",
+        " mine ", " yours ", "their",
+    ]);
+    let has_this_project = content_lower.contains("this project") 
+        || content_lower.contains("our project")
+        || content_lower.contains("my implementation")
+        || content_lower.contains("our team");
     let personal_count = personal_pronouns + (if has_this_project { 1 } else { 0 });
     let genericity = (1.0 - (personal_count as f32 * 0.25).min(1.0)).max(0.0);
 

@@ -5,3 +5,5 @@
 {"type":"config","name":"SCRED Redactor Optimization: All 244 Patterns + Trie-Based Matching","metricName":"redaction_µs","metricUnit":"µs","bestDirection":"lower"}
 {"run":1,"commit":"687752d","metric":103008,"metrics":{"patterns":244,"throughput_req_per_sec":9.7},"status":"keep","description":"Baseline: All 244 patterns, sequential regex matching","timestamp":1773868345313,"segment":0}
 {"run":2,"commit":"6e4f5a1","metric":78987,"metrics":{"patterns":244,"throughput_req_per_sec":12.7},"status":"keep","description":"Optimization 1: Enable LTO (Link-Time Optimization) - 103ms → 78.99ms (23.4% faster)","timestamp":1773868782012,"segment":0}
+{"run":3,"commit":"d5e1be5","metric":75934,"metrics":{"patterns":244,"throughput_req_per_sec":13.2},"status":"keep","description":"Optimization 2: Add pattern caching with lazy_static - 78.99ms → 75.93ms (3.8% faster, cumulative 26.3%)","timestamp":1773868900779,"segment":0}
+{"type":"config","name":"SCRED Redactor Streaming Optimization - Phase 3 (Trie-Based Filtering)","metricName":"latency_ms","metricUnit":"ms","bestDirection":"lower"}

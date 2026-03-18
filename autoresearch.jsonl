@@ -1,2 +1,3 @@
 {"type":"config","name":"Optimize SCRED Redactor for Streaming Speed - Trie vs Regex","metricName":"redaction_µs","metricUnit":"µs","bestDirection":"lower"}
 {"run":1,"commit":"27e05cb","metric":115520,"metrics":{"throughput_requests_per_sec":8.6,"avg_µs_per_request":115520,"pattern_count":244},"status":"keep","description":"Baseline: REGEX-BASED streaming redactor - 115.5ms per HTTP request (99 test requests, 244 patterns)","timestamp":1773867492839,"segment":0}
+{"run":2,"commit":"ff132c9","metric":100111,"metrics":{"throughput_requests_per_sec":9.99,"avg_µs_per_request":100111,"pattern_count":244},"status":"keep","description":"+ Fast-path infrastructure: 115.5ms → 100.1ms (13.3% improvement)","timestamp":1773867715128,"segment":0}

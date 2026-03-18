@@ -1,0 +1,21 @@
+[package]
+name = "voidm-models"
+version = "0.1.0"
+edition = "2021"
+description = "Unified ONNX model management and caching for voidm ML crates"
+publish = false
+
+[dependencies]
+# Model loading & caching
+hf-hub = { version = "0.5", features = ["tokio"] }
+ort = { version = "2.0.0-rc.10", optional = true }
+tokenizers = { version = "0.22", default-features = false, features = ["onig"], optional = true }
+
+# Utilities
+anyhow = "1"
+tracing = "0.1"
+dirs = "6"
+tokio = { version = "1", features = ["sync"] }
+once_cell = "1"
+
+[dev-dependencies]

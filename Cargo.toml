@@ -2,13 +2,13 @@
 members = [
     "crates/voidm-core",
     "crates/voidm-graph",
-    "crates/voidm-cli",
+    "crates/voidm-cli", "crates/voidm-ner", "crates/voidm-nli", "crates/voidm-scoring", "crates/voidm-embeddings", "crates/voidm-redactor", "crates/voidm-reranker", "crates/voidm-query-expansion", "crates/voidm-tagging", "crates/voidm-models", "crates/voidm-db-trait", "crates/voidm-postgres", "crates/voidm-sqlite", "crates/voidm-mcp",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 # Storage
-sqlx             = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate", "uuid", "chrono"] }
+sqlx             = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "migrate", "uuid", "chrono"] }
 sqlite-vec       = "0.1.7-alpha.10"
 libsqlite3-sys   = { version = "0.30", features = ["bundled"] }
 

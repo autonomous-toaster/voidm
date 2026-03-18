@@ -106,6 +106,43 @@ pub trait Database: Send + Sync {
         config_search: &crate::config::SearchConfig,
     ) -> Pin<Box<dyn Future<Output = Result<SearchResponse>> + Send + '_>>;
     
+    /// BM25 full-text search (backend-specific implementation)
+    /// Returns ranked results as (id, normalized_score) tuples
+    /// Score normalization varies by backend:
+    /// - SQLite: FTS5 bm25() function (negative scores inverted to [0,1])
+    /// - PostgreSQL: ts_rank_cd with tsvector (already in [0,1])
+    /// - Neo4j: Full-text index scoring
+    fn search_bm25(
+        &self,
+        query: &str,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>>;
+    
+    /// Fuzzy/similarity search using Jaro-Winkler distance
+    /// Returns ranked results as (id, similarity_score) tuples where score is in [0,1]
+    /// Note: Implementation fetches raw memories and computes locally for consistency
+    /// across backends (Jaro-Winkler not natively available in all DBs)
+    fn search_fuzzy(
+        &self,
+        query: &str,
+        scope_filter: Option<&str>,
+        limit: usize,
+        threshold: f32,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>>;
+    
+    /// Fetch raw memories for custom scoring (used by fuzzy search and other algorithms)
+    /// Returns (id, content) tuples ordered by creation timestamp (newest first)
+    /// This is a low-level query used primarily by fuzzy search, but exposed for
+    /// extensibility (e.g., custom similarity metrics)
+    fn fetch_memories_raw(
+        &self,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String)>>> + Send + '_>>;
+    
     // ===== Ontology Concepts =====
     
     /// Create a new concept

@@ -144,40 +144,43 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
 
     // Handle query expansion if enabled
     let mut expanded_query = args.query.clone();
-    if let Some(expansion_config) = &config.search.query_expansion {
-        if expansion_config.enabled {
-            tracing::debug!("CLI: Query expansion is enabled in config");
-            let expander = voidm_core::query_expansion::QueryExpander::new(expansion_config.clone());
-            
-            // Use intent-aware expansion if intent is provided, otherwise use standard expansion
-            let expansion_result = if let Some(ref intent) = args.intent {
-                tracing::info!("CLI: Requesting intent-aware query expansion with intent '{}'", intent);
-                expander.expand_with_intent(&args.query, Some(intent.as_str())).await
-            } else {
-                tracing::info!("CLI: Requesting standard query expansion");
-                expander.expand(&args.query).await
-            };
-            
-            match expansion_result {
-                Ok(expanded) => {
-                    expanded_query = expanded;
-                    tracing::info!("CLI: Query expansion succeeded");
-                    if args.verbose {
-                        tracing::info!("CLI (verbose): Original: '{}' | Expanded: '{}' | Model: {} | Intent: {:?}", 
-                                       args.query, expanded_query, expansion_config.model, args.intent);
-                        eprintln!("[query-expansion] Original: {}", args.query);
-                        eprintln!("[query-expansion] Expanded: {}", expanded_query);
-                        eprintln!("[query-expansion] Model: {}", expansion_config.model);
-                        if let Some(ref intent) = args.intent {
-                            eprintln!("[query-expansion] Intent: {}", intent);
+    #[cfg(feature = "query-expansion")]
+    {
+        if let Some(expansion_config) = &config.search.query_expansion {
+            if expansion_config.enabled {
+                tracing::debug!("CLI: Query expansion is enabled in config");
+                let expander = voidm_core::query_expansion::QueryExpander::new(expansion_config.clone());
+                
+                // Use intent-aware expansion if intent is provided, otherwise use standard expansion
+                let expansion_result = if let Some(ref intent) = args.intent {
+                    tracing::info!("CLI: Requesting intent-aware query expansion with intent '{}'", intent);
+                    expander.expand_with_intent(&args.query, Some(intent.as_str())).await
+                } else {
+                    tracing::info!("CLI: Requesting standard query expansion");
+                    expander.expand(&args.query).await
+                };
+                
+                match expansion_result {
+                    Ok(expanded) => {
+                        expanded_query = expanded;
+                        tracing::info!("CLI: Query expansion succeeded");
+                        if args.verbose {
+                            tracing::info!("CLI (verbose): Original: '{}' | Expanded: '{}' | Model: {} | Intent: {:?}", 
+                                           args.query, expanded_query, expansion_config.model, args.intent);
+                            eprintln!("[query-expansion] Original: {}", args.query);
+                            eprintln!("[query-expansion] Expanded: {}", expanded_query);
+                            eprintln!("[query-expansion] Model: {}", expansion_config.model);
+                            if let Some(ref intent) = args.intent {
+                                eprintln!("[query-expansion] Intent: {}", intent);
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    // Query expansion failed - no fallback, use original query
-                    tracing::warn!("CLI: Query expansion failed, using original query: {}", e);
-                    if args.verbose {
-                        eprintln!("[query-expansion] Failed: {} (using original query)", e);
+                    Err(e) => {
+                        // Query expansion failed - no fallback, use original query
+                        tracing::warn!("CLI: Query expansion failed, using original query: {}", e);
+                        if args.verbose {
+                            eprintln!("[query-expansion] Failed: {} (using original query)", e);
+                        }
                     }
                 }
             }
@@ -202,8 +205,11 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         intent: args.intent.clone(),
     };
 
+    let db = voidm_core::db::sqlite::SqliteDatabase {
+        pool: pool.clone(),
+    };
     let resp = search(
-        pool,
+        &db,
         &opts,
         &config.embeddings.model,
         config.embeddings.enabled,

@@ -102,9 +102,27 @@ async fn main() {
         }
     };
 
-    // Logging
+    // Logging: suppress noisy ORT logs by default, but allow user to override
+    let env_filter = match std::env::var("RUST_LOG") {
+        Ok(log_env) => {
+            // User specified RUST_LOG: use it, but suppress ORT logs unless explicitly set to include them
+            if !log_env.contains("ort=") {
+                format!("{},ort=off", log_env)
+            } else {
+                log_env
+            }
+        }
+        Err(_) => {
+            // Default: suppress ORT logs, show info level for app
+            "info,ort=off,ort::logging=off".to_string()
+        }
+    };
+    
+    let env_filter = EnvFilter::try_from(env_filter.as_str())
+        .unwrap_or_else(|_| EnvFilter::new("info,ort=off,ort::logging=off"));
+    
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(env_filter)
         .with_writer(std::io::stderr)
         .init();
 

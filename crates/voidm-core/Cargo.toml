@@ -28,20 +28,66 @@ strsim           = { workspace = true }
 regex            = { workspace = true }
 lazy_static      = { workspace = true }
 voidm-graph      = { path = "../voidm-graph" }
-ort              = { version = "2.0.0-rc.10" }
-hf-hub           = { version = "0.5", features = ["tokio"] }
-tokenizers       = { version = "0.22", default-features = false, features = ["onig"] }
+voidm-db-trait   = { path = "../voidm-db-trait" }
+voidm-ner        = { path = "../voidm-ner", optional = true }
+voidm-embeddings = { path = "../voidm-embeddings" }
+voidm-redactor   = { path = "../voidm-redactor" }
+voidm-reranker   = { path = "../voidm-reranker", optional = true }
+voidm-scoring    = { path = "../voidm-scoring" }
+voidm-query-expansion = { path = "../voidm-query-expansion", optional = true }
+voidm-tagging    = { path = "../voidm-tagging" }
+ort              = { version = "2.0.0-rc.10", optional = true }
+hf-hub           = { version = "0.5", features = ["tokio"], optional = true }
+tokenizers       = { version = "0.22", default-features = false, features = ["onig"], optional = true }
 neo4rs           = "0.7"
-llama-gguf       = { version = "0.13", optional = true, features = ["huggingface"] }
 
-[[bin]]
-name = "onnx_debug"
-path = "src/bin/onnx_debug.rs"
 
-[[bin]]
-name = "gguf_bench"
-path = "src/bin/gguf_bench.rs"
 
 [features]
+# ─────────────────────────────────────────────────────────────────────────────
+# BASE INFRASTRUCTURE
+# ─────────────────────────────────────────────────────────────────────────────
 default = []
-gguf = ["llama-gguf"]
+
+# ONNX + ML infrastructure (required by all ML features)
+# Includes: FastEmbed, HuggingFace Hub, tokenizers
+ml-core = ["dep:ort", "dep:hf-hub", "dep:tokenizers"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INDIVIDUAL ML FEATURES
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Query Expansion (HyDE template + local LLM inference)
+query-expansion = ["dep:voidm-query-expansion", "ml-core"]
+
+# Natural Language Inference (relation classification + contradiction detection)
+nli = ["ml-core"]
+
+# Named Entity Recognition (entity extraction from memories)
+ner = ["dep:voidm-ner", "ml-core"]
+
+# Reranking (cross-encoder for result re-scoring)
+reranker = ["dep:voidm-reranker", "ml-core"]
+
+# TinyLLaMA auto-tagging (generates tags from memory content)
+tinyllama = []
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE PROFILES (recommended combinations)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Minimal profile: Just core (no ML)
+minimal = []
+
+# Enhanced profile: Core + vector search (embeddings included)
+enhanced = ["query-expansion"]
+
+# Smart profile: Enhanced + all ML features
+smart = ["enhanced", "nli", "ner", "reranker", "tinyllama"]
+
+# Full profile: Everything
+full = ["smart"]
+
+# Convenience group for "all ML features"
+all = ["query-expansion", "nli", "ner", "reranker", "tinyllama"]
+

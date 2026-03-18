@@ -3,6 +3,8 @@
 //! Uses `cross-encoder/nli-deberta-v3-small` (ONNX) to classify the relationship
 //! between two text fragments. Outputs entailment/neutral/contradiction scores
 //! which are mapped to voidm ontology edge types.
+
+#![cfg(feature = "nli")]
 //!
 //! Models are downloaded on first use via hf-hub and cached in the voidm model
 //! cache directory (same pattern as embeddings).

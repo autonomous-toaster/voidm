@@ -1,0 +1,16 @@
+[package]
+name = "voidm-reranker"
+version = "0.1.0"
+edition = "2021"
+description = "Cross-encoder reranking for voidm"
+
+[dependencies]
+anyhow = { workspace = true }
+ort = { version = "2.0.0-rc.10" }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+once_cell = { workspace = true }
+tokenizers = { version = "0.15" }
+hf-hub = { version = "0.3", features = ["tokio"] }
+dirs = { workspace = true }

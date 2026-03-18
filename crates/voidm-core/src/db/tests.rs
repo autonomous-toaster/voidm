@@ -127,6 +127,35 @@ mod tests {
             })
         }
 
+        fn search_bm25(
+            &self,
+            _query: &str,
+            _scope_filter: Option<&str>,
+            _type_filter: Option<&str>,
+            _limit: usize,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+
+        fn search_fuzzy(
+            &self,
+            _query: &str,
+            _scope_filter: Option<&str>,
+            _limit: usize,
+            _threshold: f32,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+
+        fn fetch_memories_raw(
+            &self,
+            _scope_filter: Option<&str>,
+            _type_filter: Option<&str>,
+            _limit: usize,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String)>>> + Send + '_>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+
         fn add_concept(
             &self,
             name: &str,

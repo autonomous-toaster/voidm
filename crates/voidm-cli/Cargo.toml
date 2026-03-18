@@ -13,8 +13,13 @@ name = "voidm"
 path = "src/main.rs"
 
 [dependencies]
-voidm-core       = { path = "../voidm-core" }
+voidm-core       = { path = "../voidm-core", default-features = false }
 voidm-graph      = { path = "../voidm-graph" }
+voidm-ner        = { path = "../voidm-ner", optional = true }
+voidm-redactor   = { path = "../voidm-redactor", optional = true }
+voidm-embeddings = { path = "../voidm-embeddings", optional = true }
+voidm-reranker   = { path = "../voidm-reranker", optional = true }
+voidm-postgres   = { path = "../voidm-postgres", optional = true }
 sqlx             = { workspace = true }
 clap             = { workspace = true }
 comfy-table      = { workspace = true }
@@ -31,3 +36,59 @@ tracing-subscriber = { workspace = true }
 reqwest          = { workspace = true }
 dirs             = { workspace = true }
 rmcp = { version = "1.1", features = ["server", "macros", "transport-io", "schemars"] }
+
+[features]
+default = ["standard"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE PROFILES (choose one)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# MINIMAL (50MB): Database + BM25 only
+# Use: embedded tools, edge devices, minimal deployments
+# Build: cargo build --release --no-default-features --features minimal
+minimal = ["database-sqlite"]
+
+# STANDARD (100MB): Core + auto-tagging [DEFAULT]
+# Use: CLI, personal use, everything by default (RECOMMENDED)
+# Build: cargo build --release (default)
+standard = ["embeddings", "query-expansion", "nli", "ner", "reranker", "tinyllama", "redactor", "database-postgres"]
+
+# ENHANCED (150MB): Reduced ML features + vector search
+# Use: knowledge work, faster builds, fewer dependencies
+# Build: cargo build --release --no-default-features --features enhanced
+enhanced = ["database-sqlite", "database-postgres", "embeddings", "vector-search", "query-expansion", "tinyllama"]
+
+# SMART (220MB): All ML features + all backends
+# Use: research, production, full capabilities
+# Build: cargo build --release --no-default-features --features smart
+smart = ["standard", "mcp"]
+
+# FULL (250MB+): Everything (same as --all-features)
+# Use: enterprise, complete system
+# Build: cargo build --release --features full
+full = ["smart"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INDIVIDUAL FEATURES (compose your own)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─ Storage Backends ────────────────────────────────────────────────────────
+database-sqlite = []
+database-postgres = ["voidm-postgres"]
+database-neo4j  = []
+
+# ─ Embeddings & Vector Search ─────────────────────────────────────────────
+embeddings      = []
+vector-search   = ["embeddings"]
+query-expansion = ["voidm-core/query-expansion"]
+
+# ─ NLP & Intelligence ─────────────────────────────────────────────────────
+nli             = ["voidm-core/nli"]
+ner             = ["voidm-core/ner", "voidm-ner"]
+reranker        = ["voidm-core/reranker", "voidm-reranker"]
+
+# ─ Integration & Safety ───────────────────────────────────────────────────
+mcp             = []
+redactor        = []
+tinyllama       = ["voidm-core/tinyllama"]

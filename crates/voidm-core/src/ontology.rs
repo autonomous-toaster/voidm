@@ -584,6 +584,7 @@ pub struct EnrichMemoriesOpts<'a> {
 ///   3. Record in ontology_ner_processed (skip on re-run unless force=true)
 ///
 /// Progress is reported via the returned Vec (caller prints it).
+#[cfg(feature = "ner")]
 pub async fn enrich_memories(
     pool: &SqlitePool,
     opts: &EnrichMemoriesOpts<'_>,
@@ -1316,7 +1317,7 @@ pub async fn find_merge_candidates_with_semantic(
             .map(|n| n.as_str())
             .unwrap_or(&candidate.target_name);
         
-        match crate::semantic_dedup::similarity(
+        match voidm_embeddings::semantic_dedup::similarity(
             source_name,
             target_name,
             embeddings_model

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use voidm_embeddings::PassageExtractionConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -113,54 +114,17 @@ pub struct SearchConfig {
     pub reranker: Option<RerankerConfig>,
     /// Query expansion configuration (optional).
     #[serde(default)]
-    pub query_expansion: Option<QueryExpansionConfig>,
+    #[cfg(feature = "query-expansion")]
+    pub query_expansion: Option<voidm_query_expansion::QueryExpansionConfig>,
+    /// Query expansion configuration (optional) - placeholder when feature disabled.
+    #[serde(default)]
+    #[cfg(not(feature = "query-expansion"))]
+    pub query_expansion: Option<()>,
     /// Graph-aware retrieval configuration (optional).
     #[serde(default)]
     pub graph_retrieval: Option<crate::graph_retrieval::GraphRetrievalConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PassageExtractionConfig {
-    /// Enable passage extraction for reranking (default: true)
-    #[serde(default = "default_passage_extraction_enabled")]
-    pub enabled: bool,
-    /// Number of context sentences before/after match (default: 1)
-    #[serde(default = "default_context_sentences")]
-    pub context_sentences: usize,
-    /// Fallback length if no match found (default: 400)
-    #[serde(default = "default_fallback_length")]
-    pub fallback_length: usize,
-    /// Minimum passage length to return (default: 50)
-    #[serde(default = "default_min_passage_length")]
-    pub min_passage_length: usize,
-}
-
-impl Default for PassageExtractionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            context_sentences: 1,
-            fallback_length: 400,
-            min_passage_length: 50,
-        }
-    }
-}
-
-fn default_passage_extraction_enabled() -> bool {
-    true
-}
-
-fn default_context_sentences() -> usize {
-    1
-}
-
-fn default_fallback_length() -> usize {
-    400
-}
-
-fn default_min_passage_length() -> usize {
-    50
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RerankerConfig {
@@ -202,8 +166,8 @@ pub struct QueryExpansionConfig {
     /// Enable query expansion (default: false).
     #[serde(default)]
     pub enabled: bool,
-    /// Model name: "tinyllama" (ONNX, default) or "tobil/qmd-query-expansion-1.7B" (GGUF, opt-in).
-    /// App auto-detects backend based on model name (models with "tobil" or "qmd" use GGUF).
+    /// Model name: "tinyllama" (ONNX backend, recommended).
+    /// Uses ONNX-compatible models from HuggingFace for efficient query expansion.
     #[serde(default = "default_query_expansion_model")]
     pub model: String,
     /// Maximum time to wait for expansion in milliseconds (default: 300).
@@ -230,7 +194,7 @@ fn default_query_expansion_model() -> String {
 }
 
 fn default_query_expansion_timeout_ms() -> u64 {
-    300
+    10000  // 10 seconds - GGUF inference + spawn_blocking overhead can take time
 }
 
 /// Intent-aware query expansion configuration.
@@ -255,6 +219,18 @@ fn default_intent_use_scope_as_fallback() -> bool {
     true
 }
 
+fn default_auto_extract_concepts() -> bool {
+    true
+}
+
+fn default_concept_min_score() -> f32 {
+    0.7
+}
+
+fn default_concept_auto_create() -> bool {
+    true
+}
+
 impl Default for IntentConfig {
     fn default() -> Self {
         Self {
@@ -270,12 +246,21 @@ pub struct InsertConfig {
     pub auto_link_threshold: f32,
     pub duplicate_threshold: f32,
     pub auto_link_limit: usize,
+    /// Enable automatic concept extraction and linking during memory add (default: true)
+    #[serde(default = "default_auto_extract_concepts")]
+    pub auto_extract_concepts: bool,
+    /// NER confidence threshold for concept extraction (0.0–1.0, default: 0.7)
+    #[serde(default = "default_concept_min_score")]
+    pub concept_min_score: f32,
+    /// Automatically create missing concepts during extraction (default: true)
+    #[serde(default = "default_concept_auto_create")]
+    pub concept_auto_create: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrichmentConfig {
     #[serde(default)]
-    pub semantic_dedup: Option<crate::semantic_dedup::SemanticDedupConfig>,
+    pub semantic_dedup: Option<voidm_embeddings::semantic_dedup::SemanticDedupConfig>,
 }
 
 impl Default for DatabaseConfig {
@@ -327,6 +312,9 @@ impl Default for InsertConfig {
             auto_link_threshold: 0.7,
             duplicate_threshold: 0.95,
             auto_link_limit: 5,
+            auto_extract_concepts: true,
+            concept_min_score: 0.7,
+            concept_auto_create: true,
         }
     }
 }
@@ -334,7 +322,7 @@ impl Default for InsertConfig {
 impl Default for EnrichmentConfig {
     fn default() -> Self {
         Self {
-            semantic_dedup: Some(crate::semantic_dedup::SemanticDedupConfig::default()),
+            semantic_dedup: Some(voidm_embeddings::semantic_dedup::SemanticDedupConfig::default()),
         }
     }
 }

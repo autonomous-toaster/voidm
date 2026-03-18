@@ -30,8 +30,6 @@ pub enum OntologyCommands {
     Benchmark,
     /// Extract named entities from text and propose them as concept candidates
     Extract(ExtractArgs),
-    /// Batch-enrich all memories with NER entity extraction, auto-linking to existing concepts
-    EnrichMemories(EnrichMemoriesArgs),
     /// Auto-improve database: enrich memories + auto-merge duplicates (one command)
     #[command(alias = "improve")]
     AutoImprove(AutoImproveArgs),
@@ -102,28 +100,6 @@ pub struct ExtractArgs {
     /// Scope to assign to auto-added concepts
     #[arg(long)]
     pub scope: Option<String>,
-}
-
-#[derive(Args)]
-pub struct EnrichMemoriesArgs {
-    /// Only process memories with this scope prefix
-    #[arg(long, short)]
-    pub scope: Option<String>,
-    /// Minimum NER confidence score (default: 0.7)
-    #[arg(long, default_value = "0.7")]
-    pub min_score: f32,
-    /// Automatically create missing concepts (otherwise only links to existing ones)
-    #[arg(long)]
-    pub add: bool,
-    /// Re-process memories already enriched (default: skip them)
-    #[arg(long)]
-    pub force: bool,
-    /// Show what would be done without writing anything
-    #[arg(long)]
-    pub dry_run: bool,
-    /// Max number of memories to process (default: all)
-    #[arg(long, default_value = "0")]
-    pub limit: usize,
 }
 
 #[derive(Args)]
@@ -294,7 +270,6 @@ pub async fn run(cmd: OntologyCommands, pool: &SqlitePool, config: &Config, json
         OntologyCommands::Enrich(args) => run_enrich(args, pool, config, json).await,
         OntologyCommands::Benchmark => run_benchmark(json).await,
         OntologyCommands::Extract(args) => run_extract(args, pool, json).await,
-        OntologyCommands::EnrichMemories(args) => run_enrich_memories(args, pool, json).await,
         OntologyCommands::AutoImprove(args) => run_auto_improve(args, pool, json).await,
     }
 }
@@ -527,7 +502,7 @@ async fn run_edges(args: OntologyEdgesArgs, pool: &SqlitePool, json: bool) -> Re
     // Try to resolve as concept first, then as memory
     let full_id = match ontology::resolve_concept_id(pool, &args.id).await {
         Ok(id) => id,
-        Err(_) => voidm_core::resolve_id(pool, &args.id).await?,
+        Err(_) => voidm_core::resolve_id_sqlite(pool, &args.id).await?,
     };
     let edges = ontology::list_ontology_edges(pool, &full_id).await?;
     if json {
@@ -632,7 +607,7 @@ async fn run_instances(args: InstancesArgs, pool: &SqlitePool, json: bool) -> Re
 async fn resolve_node_id(pool: &SqlitePool, id: &str, kind: &NodeKind) -> Result<String> {
     match kind {
         NodeKind::Concept => ontology::resolve_concept_id(pool, id).await,
-        NodeKind::Memory => voidm_core::resolve_id(pool, id).await,
+        NodeKind::Memory => voidm_core::resolve_id_sqlite(pool, id).await,
     }
 }
 
@@ -649,48 +624,56 @@ async fn run_enrichment_for_concept(
     config: &Config,
     top_k: usize,
 ) -> Vec<voidm_core::nli::RelationSuggestion> {
-    // Ensure model is loaded
-    if let Err(e) = voidm_core::nli::ensure_nli_model().await {
-        eprintln!("Warning: NLI model load failed: {}. Skipping enrichment.", e);
-        return vec![];
-    }
-
-    // Get all other concepts
-    let candidates = match ontology::list_concepts(pool, None, 500).await {
-        Ok(cs) => cs,
-        Err(e) => {
-            tracing::warn!("Failed to list concepts for enrichment: {}", e);
+    #[cfg(feature = "nli")]
+    {
+        // Ensure model is loaded
+        if let Err(e) = voidm_core::nli::ensure_nli_model().await {
+            eprintln!("Warning: NLI model load failed: {}. Skipping enrichment.", e);
             return vec![];
         }
-    };
 
-    // Build candidate list: (id, text, similarity)
-    // Use embedding similarity if available, else default to 0.5
-    let mut scored_candidates: Vec<(String, String, f32)> = candidates
-        .into_iter()
-        .filter(|c| c.id != concept_id)
-        .map(|c| {
-            let text = concept_text_from(&c);
-            (c.id, text, 0.5_f32) // similarity placeholder — real cosine would require embeddings
-        })
-        .collect();
+        // Get all other concepts
+        let candidates = match ontology::list_concepts(pool, None, 500).await {
+            Ok(cs) => cs,
+            Err(e) => {
+                tracing::warn!("Failed to list concepts for enrichment: {}", e);
+                return vec![];
+            }
+        };
 
-    // If embeddings available, compute actual cosine similarity
-    if config.embeddings.enabled {
-        if let Ok(query_emb) = voidm_core::embeddings::embed_text(&config.embeddings.model, concept_text) {
-            for (_id, text, sim) in &mut scored_candidates {
-                if let Ok(emb) = voidm_core::embeddings::embed_text(&config.embeddings.model, text) {
-                    *sim = cosine_similarity(&query_emb, &emb);
+        // Build candidate list: (id, text, similarity)
+        // Use embedding similarity if available, else default to 0.5
+        let mut scored_candidates: Vec<(String, String, f32)> = candidates
+            .into_iter()
+            .filter(|c| c.id != concept_id)
+            .map(|c| {
+                let text = concept_text_from(&c);
+                (c.id, text, 0.5_f32) // similarity placeholder — real cosine would require embeddings
+            })
+            .collect();
+
+        // If embeddings available, compute actual cosine similarity
+        if config.embeddings.enabled {
+            if let Ok(query_emb) = voidm_core::embeddings::embed_text(&config.embeddings.model, concept_text) {
+                for (_id, text, sim) in &mut scored_candidates {
+                    if let Ok(emb) = voidm_core::embeddings::embed_text(&config.embeddings.model, text) {
+                        *sim = cosine_similarity(&query_emb, &emb);
+                    }
                 }
             }
         }
+
+        // Sort by similarity, take top_k
+        scored_candidates.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        scored_candidates.truncate(top_k);
+
+        voidm_core::nli::suggest_relations(concept_text, &scored_candidates)
     }
-
-    // Sort by similarity, take top_k
-    scored_candidates.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-    scored_candidates.truncate(top_k);
-
-    voidm_core::nli::suggest_relations(concept_text, &scored_candidates)
+    #[cfg(not(feature = "nli"))]
+    {
+        eprintln!("Warning: NLI feature not enabled. Skipping enrichment.");
+        vec![]
+    }
 }
 
 fn concept_text_from(c: &ontology::Concept) -> String {
@@ -757,21 +740,33 @@ async fn run_enrich(args: EnrichArgs, pool: &SqlitePool, config: &Config, json: 
 }
 
 async fn run_benchmark(json: bool) -> Result<()> {
-    println!("Loading NLI model …");
-    voidm_core::nli::ensure_nli_model().await?;
+    #[cfg(feature = "nli")]
+    {
+        println!("Loading NLI model …");
+        voidm_core::nli::ensure_nli_model().await?;
 
-    let avg_ms = voidm_core::nli::benchmark_latency(10)?;
-    if json {
-        println!("{}", serde_json::json!({ "avg_ms": avg_ms, "runs": 10 }));
-    } else {
-        println!("NLI inference latency: {:.1}ms avg (10 runs)", avg_ms);
-        if avg_ms < 200.0 {
-            println!("✓ Fast enough for synchronous enrichment on insert.");
+        let avg_ms = voidm_core::nli::benchmark_latency(10)?;
+        if json {
+            println!("{}", serde_json::json!({ "avg_ms": avg_ms, "runs": 10 }));
         } else {
-            println!("⚠ Latency > 200ms — recommend using --enrich flag explicitly.");
+            println!("NLI inference latency: {:.1}ms avg (10 runs)", avg_ms);
+            if avg_ms < 200.0 {
+                println!("✓ Fast enough for synchronous enrichment on insert.");
+            } else {
+                println!("⚠ Latency > 200ms — recommend using --enrich flag explicitly.");
+            }
         }
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(feature = "nli"))]
+    {
+        if json {
+            println!("{}", serde_json::json!({ "error": "NLI feature not enabled" }));
+        } else {
+            eprintln!("Error: NLI feature not enabled. Rebuild with --features nli");
+        }
+        anyhow::bail!("NLI feature not enabled")
+    }
 }
 
 async fn run_extract(args: ExtractArgs, pool: &SqlitePool, json: bool) -> Result<()> {
@@ -848,115 +843,6 @@ async fn run_extract(args: ExtractArgs, pool: &SqlitePool, json: bool) -> Result
     } else if !json {
         println!("\nUse 'voidm ontology extract \"...\" --add' to automatically add new candidates.");
         println!("Or 'voidm ontology concept add \"<name>\"' to add individually.");
-    }
-
-    Ok(())
-}
-
-// ─── enrich-memories ──────────────────────────────────────────────────────────
-
-async fn run_enrich_memories(
-    args: EnrichMemoriesArgs,
-    pool: &SqlitePool,
-    json: bool,
-) -> Result<()> {
-    // Ensure NER model is loaded (downloads ~103MB on first use)
-    if !json {
-        if !voidm_core::ner::ner_model_downloaded() {
-            eprintln!("Downloading NER model (~103MB, first use only) …");
-        }
-    }
-    voidm_core::ner::ensure_ner_model().await?;
-
-    let opts = voidm_core::ontology::EnrichMemoriesOpts {
-        scope: args.scope.as_deref(),
-        min_score: args.min_score,
-        add: true,  // ALWAYS add new concepts (default behavior changed)
-        force: args.force,
-        dry_run: args.dry_run,
-        limit: args.limit,
-    };
-
-    let results = voidm_core::ontology::enrich_memories(pool, &opts).await?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&results)?);
-        return Ok(());
-    }
-
-    // Human-readable output
-    let total = results.len();
-    let skipped = results.iter().filter(|r| r.skipped).count();
-    let processed = results.iter().filter(|r| !r.skipped).count();
-    let total_links: usize = results.iter().map(|r| r.links_created).sum();
-    let total_created: usize = results.iter().map(|r| r.concepts_created.len()).sum();
-
-    if args.dry_run {
-        println!("DRY RUN — no changes written.\n");
-    }
-
-    for (i, r) in results.iter().filter(|r| !r.skipped).enumerate() {
-        let status = if r.entities_found == 0 {
-            "no entities".to_string()
-        } else {
-            let mut parts = Vec::new();
-            if !r.concepts_linked.is_empty() {
-                parts.push(format!("linked: {}", r.concepts_linked.join(", ")));
-            }
-            if !r.concepts_created.is_empty() {
-                parts.push(format!("created: {}", r.concepts_created.join(", ")));
-            }
-            if parts.is_empty() {
-                format!("{} entities, 0 links (no matching concepts)", r.entities_found)
-            } else {
-                parts.join(" | ")
-            }
-        };
-        println!(
-            "[{}/{}] {} → {}",
-            i + 1,
-            processed,
-            r.preview,
-            status,
-        );
-    }
-
-    if skipped > 0 {
-        println!("\n{} already processed (use --force to re-run).", skipped);
-    }
-
-    println!(
-        "\nDone: {}/{} memories processed, {} link(s) created, {} concept(s) created.",
-        processed, total, total_links, total_created,
-    );
-
-    // Auto-dedup newly created concepts (if not dry-run)
-    if !args.dry_run && total_created > 0 {
-        if !json {
-            println!("\nAuto-deduplicating newly created concepts...");
-        }
-        let candidates = ontology::find_merge_candidates(pool, 0.90).await?;
-        if candidates.len() > 0 {
-            let plan = voidm_core::models::MergePlan {
-                merges: candidates
-                    .iter()
-                    .map(|c| voidm_core::models::MergePair {
-                        source: c.source_id.clone(),
-                        target: c.target_id.clone(),
-                    })
-                    .collect(),
-            };
-            let batch_id = Uuid::new_v4().to_string();
-            if let Ok(result) = ontology::execute_merge_batch(pool, &batch_id, &plan).await {
-                if !json {
-                    println!("✓ Deduplicated {} concept pairs", result.succeeded);
-                }
-            }
-        } else {
-            if !json {
-                println!("✓ No duplicates found");
-            }
-        }
     }
 
     Ok(())
@@ -1208,48 +1094,19 @@ async fn run_auto_improve(
     json: bool,
 ) -> Result<()> {
     if !json && !args.merge_only {
-        println!("Auto-Improve: Enriching memories + Auto-merging duplicates");
+        println!("Auto-Improve: Auto-merging duplicate concepts");
         println!("═══════════════════════════════════════════════════════════\n");
+        println!("Note: Memory enrichment now happens automatically during `voidm add`");
+        println!("(Concept extraction integrated into memory creation)\n");
     } else if !json && args.merge_only {
         println!("Auto-Improve: Merging duplicate concepts");
         println!("═══════════════════════════════════════════════════════════\n");
     }
 
-    // Step 1: Enrich memories with auto-add (skip if --merge-only)
-    if !args.merge_only {
-        if !json {
-            println!("Step 1: Enriching memories...");
-        }
-        let enrich_args = EnrichMemoriesArgs {
-            scope: args.scope.clone(),
-            min_score: args.min_score,
-            add: true,  // Always auto-add new concepts
-            force: args.force,  // Pass through the force flag
-            dry_run: args.dry_run,
-            limit: 0,  // Process all
-        };
+    // Concept enrichment now happens automatically during memory add (remove manual batch)
+    // Step 1 removed: Manual enrich_memories command no longer needed
 
-        if args.dry_run {
-            if !json {
-                println!("(dry-run mode: no changes will be written)\n");
-            }
-            return Ok(());
-        }
-
-        // Run enrich_memories
-        match run_enrich_memories(enrich_args, pool, json).await {
-            Ok(_) => {
-                if !json {
-                    println!("\n✓ Memory enrichment complete\n");
-                }
-            }
-            Err(e) => {
-                if !json {
-                    println!("\n⚠ Enrichment had warnings (continuing): {}\n", e);
-                }
-            }
-        }
-    } else if args.dry_run {
+    if args.dry_run {
         if !json {
             println!("(dry-run mode: no changes will be written)\n");
         }

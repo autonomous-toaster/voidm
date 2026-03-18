@@ -1106,6 +1106,132 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
+    fn search_bm25(
+        &self,
+        query: &str,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let query = query.to_string();
+        let scope_filter = scope_filter.map(|s| s.to_string());
+        let type_filter = type_filter.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // Use Neo4j full-text search index
+            let cypher = "CALL db.index.fulltext.queryNodes('memories_content', $query) YIELD node, score 
+                         RETURN node.id as id, score 
+                         ORDER BY score DESC 
+                         LIMIT $limit".to_string();
+            
+            let result = graph
+                .execute(
+                    neo4rs::query(&cypher)
+                        .param("query", query)
+                        .param("limit", limit as i64)
+                )
+                .await
+                .context("Failed to execute BM25 search on Neo4j")?;
+            
+            let mut result_handle = result;
+            let mut results: Vec<(String, f32)> = Vec::new();
+            while let Ok(Some(row)) = result_handle.next().await {
+                if let (Ok(id), Ok(score)) = (row.get::<String>("id"), row.get::<f32>("score")) {
+                    results.push((id, score));
+                }
+            }
+            
+            Ok(results)
+        })
+    }
+
+    fn search_fuzzy(
+        &self,
+        query: &str,
+        scope_filter: Option<&str>,
+        limit: usize,
+        threshold: f32,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let query = query.to_string();
+        let scope_filter = scope_filter.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // Fetch raw memories from Neo4j
+            let cypher = "MATCH (m:Memory) RETURN m.id as id, m.content as content ORDER BY m.created_at DESC LIMIT $limit";
+            
+            let result = graph
+                .execute(
+                    neo4rs::query(cypher)
+                        .param("limit", limit as i64)
+                )
+                .await
+                .context("Failed to fetch memories for fuzzy search on Neo4j")?;
+            
+            let mut result_handle = result;
+            let mut memories: Vec<(String, String)> = Vec::new();
+            
+            while let Ok(Some(row)) = result_handle.next().await {
+                if let (Ok(id), Ok(content)) = (row.get::<String>("id"), row.get::<String>("content")) {
+                    memories.push((id, content));
+                }
+            }
+            
+            // Apply Jaro-Winkler locally
+            let query_lower = query.to_lowercase();
+            let mut results: Vec<(String, f32)> = Vec::new();
+            
+            for (id, content) in memories {
+                let sim = strsim::jaro_winkler(&query_lower, &content.to_lowercase()) as f32;
+                if sim >= threshold {
+                    results.push((id, sim));
+                }
+            }
+            
+            // Sort by score descending
+            results.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            
+            Ok(results)
+        })
+    }
+
+    fn fetch_memories_raw(
+        &self,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String)>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let scope_filter = scope_filter.map(|s| s.to_string());
+        let type_filter = type_filter.map(|s| s.to_string());
+
+        Box::pin(async move {
+            let cypher = "MATCH (m:Memory) RETURN m.id as id, m.content as content ORDER BY m.created_at DESC LIMIT $limit";
+            
+            let result = graph
+                .execute(
+                    neo4rs::query(cypher)
+                        .param("limit", limit as i64)
+                )
+                .await
+                .context("Failed to fetch memories from Neo4j")?;
+            
+            let mut result_handle = result;
+            let mut memories: Vec<(String, String)> = Vec::new();
+            
+            while let Ok(Some(row)) = result_handle.next().await {
+                if let (Ok(id), Ok(content)) = (row.get::<String>("id"), row.get::<String>("content")) {
+                    memories.push((id, content));
+                }
+            }
+            
+            Ok(memories)
+        })
+    }
+
     fn check_model_mismatch(
         &self,
         configured_model: &str,

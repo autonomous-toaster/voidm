@@ -1,0 +1,10 @@
+[package]
+name = "voidm-redactor"
+version = "0.1.0"
+edition = "2021"
+description = "Secrets redaction for voidm"
+
+[dependencies]
+lazy_static = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }

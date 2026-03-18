@@ -1,6 +1,7 @@
 use anyhow::Result;
 use sqlx::SqlitePool;
 use crate::models::{Memory, SuggestedLink, edge_hint};
+use crate::db::Database;
 
 const NEIGHBOR_MAX_DEPTH: u8 = 3;
 const NEVER_TRAVERSE: &[&str] = &["CONTRADICTS", "INVALIDATES"];
@@ -38,27 +39,24 @@ pub struct SearchResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SearchMode {
+    /// Hybrid search combining vector, BM25, and fuzzy signals via Reciprocal Rank Fusion (RRF)
     Hybrid,
     Semantic,
     Keyword,
     Fuzzy,
     Bm25,
-    /// Hybrid search with Reciprocal Rank Fusion (RRF)
-    /// Combines vector, BM25, fuzzy signals using RRF instead of weighted averaging
-    HybridRRF,
 }
 
 impl std::str::FromStr for SearchMode {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "hybrid" => Ok(SearchMode::Hybrid),
+            "hybrid" | "hybrid-rrf" => Ok(SearchMode::Hybrid),
             "semantic" => Ok(SearchMode::Semantic),
             "keyword" => Ok(SearchMode::Keyword),
             "fuzzy" => Ok(SearchMode::Fuzzy),
             "bm25" => Ok(SearchMode::Bm25),
-            "hybrid-rrf" => Ok(SearchMode::HybridRRF),
-            other => Err(anyhow::anyhow!("Unknown search mode: '{}'. Valid: hybrid, semantic, keyword, fuzzy, bm25, hybrid-rrf", other)),
+            other => Err(anyhow::anyhow!("Unknown search mode: '{}'. Valid: hybrid, semantic, keyword, fuzzy, bm25", other)),
         }
     }
 }
@@ -101,16 +99,16 @@ pub struct SearchResponse {
 
 /// Full hybrid search pipeline.
 pub async fn search(
-    pool: &SqlitePool,
+    db: &crate::db::sqlite::SqliteDatabase,
     opts: &SearchOptions,
     model_name: &str,
     embeddings_enabled: bool,
     config_min_score: f32,
     config_search: &crate::config::SearchConfig,
 ) -> Result<SearchResponse> {
-    // Dispatch to RRF-enhanced search if mode is HybridRRF
-    if opts.mode == SearchMode::HybridRRF {
-        return search_with_rrf(pool, opts, model_name, embeddings_enabled, config_min_score, config_search).await;
+    // Hybrid now uses RRF (Reciprocal Rank Fusion)
+    if opts.mode == SearchMode::Hybrid {
+        return search_with_rrf(db, opts, model_name, embeddings_enabled, config_min_score, config_search).await;
     }
 
     use std::collections::HashMap;
@@ -124,16 +122,16 @@ pub async fn search(
     let fetch_limit = opts.limit * 3; // over-fetch for merging
     let mut scores: HashMap<String, f32> = HashMap::new();
 
-    // --- Vector ANN ---
+    // --- Vector ANN (Semantic only, Hybrid now uses RRF) ---
     let use_vector = embeddings_enabled
-        && matches!(opts.mode, SearchMode::Hybrid | SearchMode::Semantic)
-        && crate::vector::vec_table_exists(pool).await.unwrap_or(false);
+        && matches!(opts.mode, SearchMode::Semantic)
+        && crate::vector::vec_table_exists(&db.pool).await.unwrap_or(false);
 
     if use_vector {
         tracing::debug!("Search: Attempting vector-based search");
         match crate::embeddings::embed_text(model_name, &opts.query) {
             Ok(embedding) => {
-                match crate::vector::ann_search(pool, &embedding, fetch_limit).await {
+                match crate::vector::ann_search(&db.pool, &embedding, fetch_limit).await {
                     Ok(hits) => {
                         for (id, dist) in hits {
                             // Convert cosine distance [0,2] to similarity [0,1]
@@ -151,50 +149,37 @@ pub async fn search(
     // --- BM25 via FTS5 ---
     let use_bm25 = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Bm25 | SearchMode::Keyword);
     if use_bm25 {
-        let fts_query = sanitize_fts_query(&opts.query);
-        let rows: Vec<(String, f32)> = sqlx::query_as(
-            "SELECT id, bm25(memories_fts) AS score FROM memories_fts WHERE content MATCH ? ORDER BY score LIMIT ?"
-        )
-        .bind(&fts_query)
-        .bind(fetch_limit as i64)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+        let rows = db.search_bm25(
+            &opts.query,
+            opts.scope_filter.as_deref(),
+            opts.type_filter.as_deref(),
+            fetch_limit,
+        ).await.unwrap_or_default();
 
-        // BM25 scores are negative in FTS5 (more negative = more relevant)
-        let min_bm25 = rows.iter().map(|(_, s)| *s).fold(f32::MAX, f32::min);
-        let max_bm25 = rows.iter().map(|(_, s)| *s).fold(f32::MIN, f32::max);
-        let range = (max_bm25 - min_bm25).abs().max(0.001);
-
-        for (id, raw_score) in rows {
-            // Normalize to [0, 1] where higher = more relevant (invert because BM25 is negative)
-            let norm = 1.0 - ((raw_score - min_bm25) / range).clamp(0.0, 1.0);
-            *scores.entry(id).or_default() += norm * 0.3;
+        // Rows are already normalized by Database trait implementation
+        for (id, norm_score) in rows {
+            *scores.entry(id).or_default() += norm_score * 0.3;
         }
     }
 
     // --- Fuzzy (Jaro-Winkler) ---
     let use_fuzzy = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Fuzzy);
     if use_fuzzy {
-        let all: Vec<(String, String)> = sqlx::query_as(
-            "SELECT id, content FROM memories ORDER BY created_at DESC LIMIT 500"
-        )
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+        let all = db.search_fuzzy(
+            &opts.query,
+            opts.scope_filter.as_deref(),
+            fetch_limit,
+            0.6,
+        ).await.unwrap_or_default();
 
-        let query_lower = opts.query.to_lowercase();
-        for (id, content) in all {
-            let sim = strsim::jaro_winkler(&query_lower, &content.to_lowercase()) as f32;
-            if sim > 0.6 {
-                *scores.entry(id).or_default() += sim * 0.2;
-            }
+        for (id, sim) in all {
+            *scores.entry(id).or_default() += sim * 0.2;
         }
     }
 
     if scores.is_empty() {
         // Fallback: return newest memories (no threshold applied — no scores to compare)
-        let memories = fetch_memories_newest(pool, opts).await?;
+        let memories = fetch_memories_newest(&db.pool, opts).await?;
         return Ok(SearchResponse {
             results: memories,
             threshold_applied: None,
@@ -210,7 +195,7 @@ pub async fn search(
     // Fetch full memory records for top results
     let mut results = Vec::new();
     for (id, score) in ranked {
-        if let Some(m) = fetch_memory_by_id(pool, &id).await? {
+        if let Some(m) = fetch_memory_by_id(&db.pool, &id).await? {
             // Apply scope/type filters
             if let Some(ref scope) = opts.scope_filter {
                 if !m.scopes.iter().any(|s| s.starts_with(scope.as_str())) {
@@ -249,6 +234,7 @@ pub async fn search(
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
     // Apply reranker if enabled (before quality/threshold filters)
+    #[cfg(feature = "reranker")]
     if let Some(reranker_config) = &config_search.reranker {
         if reranker_config.enabled {
             if !results.is_empty() {
@@ -271,7 +257,7 @@ pub async fn search(
         if graph_config.enabled {
             if !results.is_empty() {
                 tracing::info!("Search: Graph-aware retrieval enabled, applying to {} results", results.len());
-                if let Err(e) = crate::graph_retrieval::expand_graph_results(pool, &mut results, graph_config).await {
+                if let Err(e) = crate::graph_retrieval::expand_graph_results(&db.pool, &mut results, graph_config).await {
                     tracing::warn!("Search: Graph-aware retrieval failed, continuing with original results: {}", e);
                 }
             } else {
@@ -303,14 +289,14 @@ pub async fn search(
         };
 
         if opts.include_neighbors {
-            expand_neighbors(pool, &mut results, opts, config_search).await?;
+            expand_neighbors(&db.pool, &mut results, opts, config_search).await?;
         }
 
         return Ok(SearchResponse { results, threshold_applied, best_score });
     }
 
     if opts.include_neighbors {
-        expand_neighbors(pool, &mut results, opts, config_search).await?;
+        expand_neighbors(&db.pool, &mut results, opts, config_search).await?;
     }
 
     Ok(SearchResponse { results, threshold_applied: None, best_score: None })
@@ -422,7 +408,7 @@ async fn fetch_memory_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Memory
     crate::crud::get_memory(pool, id).await
 }
 
-fn sanitize_fts_query(q: &str) -> String {
+pub fn sanitize_fts_query(q: &str) -> String {
     // FTS5 requires quoting special chars; simple approach: wrap in quotes
     let cleaned: String = q.chars()
         .map(|c| if c == '"' { ' ' } else { c })
@@ -500,6 +486,7 @@ pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
 /// Apply reranker to top-k results using pure reranker-guided scoring.
 /// Uses only reranker scores for reranked results (no blending with original scores).
 /// This aligns with the reranker's intent as an expert ranking override.
+#[cfg(feature = "reranker")]
 async fn apply_reranker(
     config: &crate::config::RerankerConfig,
     query: &str,
@@ -520,7 +507,7 @@ async fn apply_reranker(
     // Extract passages using intelligent passage extraction
     let docs_to_rerank: Vec<String> = results[..apply_to_k]
         .iter()
-        .map(|r| crate::passage::extract_best_passage(
+        .map(|r| voidm_embeddings::passage::extract_best_passage(
             &r.content,
             query,
             &config.passage_extraction,
@@ -593,7 +580,7 @@ async fn apply_reranker(
 ///
 /// Usage: Enable via SearchMode or config option
 pub async fn search_with_rrf(
-    pool: &SqlitePool,
+    db: &crate::db::sqlite::SqliteDatabase,
     opts: &SearchOptions,
     model_name: &str,
     embeddings_enabled: bool,
@@ -616,12 +603,12 @@ pub async fn search_with_rrf(
     // --- Vector ANN Signal ---
     let use_vector = embeddings_enabled
         && matches!(opts.mode, SearchMode::Hybrid | SearchMode::Semantic)
-        && crate::vector::vec_table_exists(pool).await.unwrap_or(false);
+        && crate::vector::vec_table_exists(&db.pool).await.unwrap_or(false);
 
     if use_vector {
         tracing::debug!("Search (RRF): Vector signal");
         if let Ok(embedding) = crate::embeddings::embed_text(model_name, &opts.query) {
-            if let Ok(hits) = crate::vector::ann_search(pool, &embedding, fetch_limit).await {
+            if let Ok(hits) = crate::vector::ann_search(&db.pool, &embedding, fetch_limit).await {
                 for (id, dist) in hits {
                     let sim = 1.0 - (dist / 2.0).clamp(0.0, 1.0);
                     vector_results.push((id, sim));
@@ -638,22 +625,13 @@ pub async fn search_with_rrf(
     let use_bm25 = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Bm25 | SearchMode::Keyword);
     if use_bm25 {
         tracing::debug!("Search (RRF): BM25 signal");
-        let fts_query = sanitize_fts_query(&opts.query);
-        if let Ok(rows) = sqlx::query_as::<_, (String, f32)>(
-            "SELECT id, bm25(memories_fts) AS score FROM memories_fts WHERE content MATCH ? ORDER BY score LIMIT ?"
-        )
-        .bind(&fts_query)
-        .bind(fetch_limit as i64)
-        .fetch_all(pool)
-        .await {
-            let min_bm25 = rows.iter().map(|(_, s)| *s).fold(f32::MAX, f32::min);
-            let max_bm25 = rows.iter().map(|(_, s)| *s).fold(f32::MIN, f32::max);
-            let range = (max_bm25 - min_bm25).abs().max(0.001);
-
-            for (id, raw_score) in rows {
-                let norm = 1.0 - ((raw_score - min_bm25) / range).clamp(0.0, 1.0);
-                bm25_results.push((id, norm));
-            }
+        if let Ok(rows) = db.search_bm25(
+            &opts.query,
+            opts.scope_filter.as_deref(),
+            opts.type_filter.as_deref(),
+            fetch_limit,
+        ).await {
+            bm25_results = rows;
             bm25_results.sort_by(|a, b| {
                 b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
             });
@@ -664,18 +642,13 @@ pub async fn search_with_rrf(
     let use_fuzzy = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Fuzzy);
     if use_fuzzy {
         tracing::debug!("Search (RRF): Fuzzy signal");
-        if let Ok(all) = sqlx::query_as::<_, (String, String)>(
-            "SELECT id, content FROM memories ORDER BY created_at DESC LIMIT 500"
-        )
-        .fetch_all(pool)
-        .await {
-            let query_lower = opts.query.to_lowercase();
-            for (id, content) in all {
-                let sim = strsim::jaro_winkler(&query_lower, &content.to_lowercase()) as f32;
-                if sim > 0.6 {
-                    fuzzy_results.push((id, sim));
-                }
-            }
+        if let Ok(results) = db.search_fuzzy(
+            &opts.query,
+            opts.scope_filter.as_deref(),
+            fetch_limit,
+            0.6,
+        ).await {
+            fuzzy_results = results;
             fuzzy_results.sort_by(|a, b| {
                 b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
             });
@@ -696,7 +669,7 @@ pub async fn search_with_rrf(
 
     if signals.is_empty() {
         // Fallback: return newest memories
-        let memories = fetch_memories_newest(pool, opts).await?;
+        let memories = fetch_memories_newest(&db.pool, opts).await?;
         return Ok(SearchResponse {
             results: memories,
             threshold_applied: None,
@@ -715,7 +688,7 @@ pub async fn search_with_rrf(
     let mut best_score = None;
 
     for rrf_result in fused.iter().take(opts.limit * 2) {
-        if let Some(m) = fetch_memory_by_id(pool, &rrf_result.id).await? {
+        if let Some(m) = fetch_memory_by_id(&db.pool, &rrf_result.id).await? {
             if let Some(ref scope) = opts.scope_filter {
                 if !m.scopes.iter().any(|s| s.starts_with(scope.as_str())) {
                     continue;
@@ -753,6 +726,24 @@ pub async fn search_with_rrf(
                 break;
             }
         }
+    }
+
+    // Apply graph-aware retrieval if enabled (post-RRF expansion)
+    if let Some(graph_config) = &config_search.graph_retrieval {
+        if graph_config.enabled {
+            if !results.is_empty() {
+                tracing::info!("Search (RRF): Graph-aware retrieval enabled, applying to {} results", results.len());
+                if let Err(e) = crate::graph_retrieval::expand_graph_results(&db.pool, &mut results, graph_config).await {
+                    tracing::warn!("Search (RRF): Graph-aware retrieval failed, continuing with original results: {}", e);
+                }
+            } else {
+                tracing::debug!("Search (RRF): Graph-aware retrieval enabled but no results to expand");
+            }
+        } else {
+            tracing::debug!("Search (RRF): Graph-aware retrieval disabled");
+        }
+    } else {
+        tracing::debug!("Search (RRF): No graph-retrieval config found");
     }
 
     tracing::info!("Search (RRF): Returning {} results", results.len());

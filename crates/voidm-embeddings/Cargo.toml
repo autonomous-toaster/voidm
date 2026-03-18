@@ -1,0 +1,14 @@
+[package]
+name = "voidm-embeddings"
+version = "0.1.0"
+edition = "2021"
+description = "Vector embedding generation for voidm"
+
+[dependencies]
+anyhow = { workspace = true }
+once_cell = { workspace = true }
+fastembed = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+dirs = { workspace = true }
+serde = { workspace = true }

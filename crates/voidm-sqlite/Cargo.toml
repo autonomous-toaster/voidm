@@ -1,0 +1,21 @@
+[package]
+name = "voidm-sqlite"
+version = "0.1.0"
+edition = "2021"
+description = "SQLite backend implementation for voidm with generic Database trait"
+
+[dependencies]
+sqlx = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+libsqlite3-sys = { workspace = true }
+sqlite-vec = { workspace = true }
+once_cell = { workspace = true }
+
+# Trait definition
+voidm-db-trait = { path = "../voidm-db-trait" }
+# For QueryTranslator and CypherOperation
+voidm-core = { path = "../voidm-core" }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{crud, resolve_id};
+use voidm_core::{crud, resolve_id_sqlite};
 
 #[derive(Args)]
 pub struct DeleteArgs {
@@ -13,7 +13,7 @@ pub struct DeleteArgs {
 }
 
 pub async fn run(args: DeleteArgs, pool: &SqlitePool, json: bool) -> Result<()> {
-    let id = match resolve_id(pool, &args.id).await {
+    let id = match resolve_id_sqlite(pool, &args.id).await {
         Ok(id) => id,
         Err(e) => {
             if json {

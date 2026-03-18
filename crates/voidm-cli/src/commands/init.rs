@@ -8,7 +8,15 @@ pub struct InitArgs {
 }
 
 pub async fn run(args: InitArgs) -> anyhow::Result<()> {
-    use voidm_core::{embeddings, Config, ner, nli, query_expansion, reranker};
+    use voidm_core::{embeddings, Config};
+    #[cfg(feature = "reranker")]
+    use voidm_core::reranker;
+    #[cfg(feature = "ner")]
+    use voidm_core::ner;
+    #[cfg(feature = "nli")]
+    use voidm_core::nli;
+    #[cfg(feature = "query-expansion")]
+    use voidm_core::query_expansion;
 
     println!("Initializing voidm models...\n");
     if args.update {
@@ -30,15 +38,22 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
         .unwrap_or(true);
 
     // Get reranker model from config
-    let reranker_config = &config.search.reranker;
-    let reranker_model = reranker_config
-        .as_ref()
-        .map(|r| r.model.clone())
-        .unwrap_or_else(|| "ms-marco-TinyBERT".to_string());
-    let reranker_enabled = reranker_config
-        .as_ref()
-        .map(|r| r.enabled)
-        .unwrap_or(false);
+    #[cfg(feature = "reranker")]
+    let (reranker_model, reranker_enabled) = {
+        let reranker_config = &config.search.reranker;
+        let model = reranker_config
+            .as_ref()
+            .map(|r| r.model.clone())
+            .unwrap_or_else(|| "ms-marco-TinyBERT".to_string());
+        let enabled = reranker_config
+            .as_ref()
+            .map(|r| r.enabled)
+            .unwrap_or(false);
+        (model, enabled)
+    };
+    
+    #[cfg(not(feature = "reranker"))]
+    let reranker_enabled = false;
 
     let total = 5; // 1 embedding + NER + NLI + query expansion + reranker
     let mut initialized = 0;
@@ -58,38 +73,11 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
     }
 
     // Initialize NER model
-    print!("[2/5] Initializing NER model ... ");
-    std::io::Write::flush(&mut std::io::stdout())?;
-    match ner::ensure_ner_model().await {
-        Ok(_) => {
-            println!("✓");
-            initialized += 1;
-        }
-        Err(e) => {
-            eprintln!("✗ FAILED: {}", e);
-            return Err(e);
-        }
-    }
-
-    // Initialize NLI model
-    print!("[3/5] Initializing NLI model ... ");
-    std::io::Write::flush(&mut std::io::stdout())?;
-    match nli::ensure_nli_model().await {
-        Ok(_) => {
-            println!("✓");
-            initialized += 1;
-        }
-        Err(e) => {
-            eprintln!("✗ FAILED: {}", e);
-            return Err(e);
-        }
-    }
-
-    // Initialize default query expansion model (only if enabled)
-    if qe_enabled {
-        print!("[4/5] Initializing query expansion model: {} ... ", qe_model);
+    #[cfg(feature = "ner")]
+    {
+        print!("[2/5] Initializing NER model ... ");
         std::io::Write::flush(&mut std::io::stdout())?;
-        match query_expansion::ensure_llm_model(&qe_model).await {
+        match ner::ensure_ner_model().await {
             Ok(_) => {
                 println!("✓");
                 initialized += 1;
@@ -99,26 +87,42 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
                 return Err(e);
             }
         }
-    } else {
-        println!("[4/5] Skipping query expansion model (disabled in config)");
+    }
+    #[cfg(not(feature = "ner"))]
+    {
+        println!("[2/5] Skipping NER model (feature not enabled)");
         initialized += 1;
     }
 
-    // Initialize reranker model (only if enabled)
-    if reranker_enabled {
-        print!("[5/5] Initializing reranker model: {} ... ", reranker_model);
+    // Initialize NLI model
+    #[cfg(feature = "nli")]
+    {
+        print!("[3/5] Initializing NLI model ... ");
         std::io::Write::flush(&mut std::io::stdout())?;
-        
-        // Check if already cached (unless update flag is set)
-        let is_cached = reranker::is_model_cached(&reranker_model);
-        if is_cached && !args.update {
-            println!("✓ (cached)");
-            initialized += 1;
-        } else {
-            if args.update && is_cached {
-                println!("(updating)");
+        match nli::ensure_nli_model().await {
+            Ok(_) => {
+                println!("✓");
+                initialized += 1;
             }
-            match reranker::load_reranker_cached(&reranker_model, args.update).await {
+            Err(e) => {
+                eprintln!("✗ FAILED: {}", e);
+                return Err(e);
+            }
+        }
+    }
+    #[cfg(not(feature = "nli"))]
+    {
+        println!("[3/5] Skipping NLI model (feature not enabled)");
+        initialized += 1;
+    }
+
+    // Initialize default query expansion model (only if enabled)
+    #[cfg(feature = "query-expansion")]
+    {
+        if qe_enabled {
+            print!("[4/5] Initializing query expansion model: {} ... ", qe_model);
+            std::io::Write::flush(&mut std::io::stdout())?;
+            match query_expansion::ensure_llm_model(&qe_model).await {
                 Ok(_) => {
                     println!("✓");
                     initialized += 1;
@@ -128,9 +132,52 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
                     return Err(e);
                 }
             }
+        } else {
+            println!("[4/5] Skipping query expansion model (disabled in config)");
+            initialized += 1;
         }
-    } else {
-        println!("[5/5] Skipping reranker model (disabled in config)");
+    }
+    #[cfg(not(feature = "query-expansion"))]
+    {
+        println!("[4/5] Skipping query expansion model (feature not enabled)");
+        initialized += 1;
+    }
+
+    // Initialize reranker model (only if enabled)
+    #[cfg(feature = "reranker")]
+    {
+        if reranker_enabled {
+            print!("[5/5] Initializing reranker model: {} ... ", reranker_model);
+            std::io::Write::flush(&mut std::io::stdout())?;
+            
+            // Check if already cached (unless update flag is set)
+            let is_cached = reranker::is_model_cached(&reranker_model);
+            if is_cached && !args.update {
+                println!("✓ (cached)");
+                initialized += 1;
+            } else {
+                if args.update && is_cached {
+                    println!("(updating)");
+                }
+                match reranker::load_reranker_cached(&reranker_model, args.update).await {
+                    Ok(_) => {
+                        println!("✓");
+                        initialized += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("✗ FAILED: {}", e);
+                        return Err(e);
+                    }
+                }
+            }
+        } else {
+            println!("[5/5] Skipping reranker model (disabled in config)");
+            initialized += 1;
+        }
+    }
+    #[cfg(not(feature = "reranker"))]
+    {
+        println!("[5/5] Skipping reranker model (feature not enabled)");
         initialized += 1;
     }
 

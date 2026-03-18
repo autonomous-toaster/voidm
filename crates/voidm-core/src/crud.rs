@@ -7,14 +7,42 @@ use crate::models::{
     AddMemoryRequest, AddMemoryResponse, DuplicateWarning, EdgeType, LinkResponse,
     ConflictWarning, Memory,
 };
-use crate::{embeddings, search, vector, quality, auto_tagger, redactor};
+use voidm_scoring;
+use crate::{embeddings, search, vector, redactor};
+#[cfg(feature = "tinyllama")]
+use crate::auto_tagger_tinyllama;
 use crate::config::Config;
 
-/// Resolve a full or short (prefix) ID to a full memory ID.
+/// Convert voidm_core MemoryType to voidm_scoring MemoryType
+fn convert_memory_type(mt: &crate::models::MemoryType) -> voidm_scoring::MemoryType {
+    match mt {
+        crate::models::MemoryType::Episodic => voidm_scoring::MemoryType::Episodic,
+        crate::models::MemoryType::Semantic => voidm_scoring::MemoryType::Semantic,
+        crate::models::MemoryType::Procedural => voidm_scoring::MemoryType::Procedural,
+        crate::models::MemoryType::Conceptual => voidm_scoring::MemoryType::Conceptual,
+        crate::models::MemoryType::Contextual => voidm_scoring::MemoryType::Contextual,
+    }
+}
+
+/// Resolve a full or short (prefix) ID to a full memory ID (backend-agnostic).
+/// 
+/// # Backend Abstraction
+/// This function accepts any type implementing the Database trait, allowing
+/// it to work with SQLite, PostgreSQL, Neo4j, or other backends.
+/// 
 /// - If `id` is already a full UUID that exists → return it as-is.
 /// - If `id` is a prefix → find all matches; error if 0 or >1.
 /// - Minimum prefix length: 4 characters.
-pub async fn resolve_id(pool: &SqlitePool, id: &str) -> Result<String> {
+pub async fn resolve_id<D: voidm_db_trait::Database + ?Sized>(db: &D, id: &str) -> Result<String> {
+    db.resolve_memory_id(id).await
+}
+
+/// Resolve a full or short (prefix) ID to a full memory ID (SQLite-specific).
+/// 
+/// # Deprecated
+/// Use `resolve_id()` with Database trait instead for backend-agnostic code.
+/// This function is kept for compatibility with existing CLI code.
+pub async fn resolve_id_sqlite(pool: &SqlitePool, id: &str) -> Result<String> {
     // Exact match first (fast path)
     let exact: Option<String> = sqlx::query_scalar("SELECT id FROM memories WHERE id = ?")
         .bind(id)
@@ -54,8 +82,11 @@ pub async fn resolve_id(pool: &SqlitePool, id: &str) -> Result<String> {
 /// Returns AddMemoryResponse with suggested_links and duplicate_warning.
 pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &Config) -> Result<AddMemoryResponse> {
     // Auto-enrich tags BEFORE creating tags_json (moved to beginning)
-    if let Err(e) = auto_tagger::enrich_memory_tags(&mut req, config) {
-        tracing::warn!("Failed to auto-enrich tags: {}. Using user-provided tags only.", e);
+    #[cfg(feature = "tinyllama")]
+    {
+        if let Err(e) = auto_tagger_tinyllama::enrich_memory_tags_tinyllama(&mut req, config).await {
+            tracing::warn!("Failed to auto-enrich tags: {}. Using user-provided tags only.", e);
+        }
     }
     
     // Redact secrets from memory content and metadata BEFORE insertion
@@ -79,9 +110,9 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     let metadata_json = serde_json::to_string(&req.metadata)?;
     let memory_type_str = req.memory_type.to_string();
 
-    // 1. Compute embedding OUTSIDE transaction
+    // 1. Compute embedding OUTSIDE transaction with consistent chunking
     let embedding_result = if config.embeddings.enabled {
-        match embeddings::embed_text(&config.embeddings.model, &req.content) {
+        match embeddings::embed_text_chunked(&config.embeddings.model, &req.content, embeddings::DEFAULT_CHUNK_SIZE) {
             Ok(emb) => Some(emb),
             Err(e) => {
                 tracing::warn!("Failed to compute embedding: {}. Skipping vector storage.", e);
@@ -94,7 +125,8 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
 
     // Compute quality score OUTSIDE transaction (will persist to DB)
     let memory_type_enum = req.memory_type.clone();
-    let quality = quality::compute_quality_score(&req.content, &memory_type_enum);
+    let quality_mt = convert_memory_type(&memory_type_enum);
+    let quality = voidm_scoring::compute_quality_score(&req.content, &quality_mt);
 
     // Ensure vec_memories table exists with correct dimension
     if let Some(ref emb) = embedding_result {
@@ -227,10 +259,23 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
 
     tx.commit().await.context("Transaction commit failed")?;
 
+    // Post-insert: Auto-extract and link concepts (if enabled)
+    if config.insert.auto_extract_concepts {
+        if let Err(e) = extract_and_link_concepts(
+            pool,
+            &id,
+            &req.content,
+            config.insert.concept_min_score,
+            config.insert.concept_auto_create,
+        ).await {
+            tracing::warn!("Failed to auto-extract concepts: {}. Continuing with memory creation.", e);
+        }
+    }
+
     // Post-insert: Auto-link memories with shared tags
     if !req.tags.is_empty() {
         let tag_limit = config.insert.auto_link_limit;
-        if let Err(e) = crate::tag_linker::auto_link_by_tags(pool, &id, &req.tags, tag_limit).await {
+        if let Err(e) = voidm_tagging::auto_link_by_tags(pool, &id, &req.tags, tag_limit).await {
             tracing::warn!("Failed to auto-link by tags: {}. Continuing with memory creation.", e);
         }
     }
@@ -310,7 +355,8 @@ pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
             Some(score)
         } else {
             let memory_type_enum: crate::models::MemoryType = memory_type.parse().unwrap_or(crate::models::MemoryType::Semantic);
-            let quality_score_val = quality::compute_quality_score(&content, &memory_type_enum);
+            let quality_mt = convert_memory_type(&memory_type_enum);
+            let quality_score_val = voidm_scoring::compute_quality_score(&content, &quality_mt);
             Some(quality_score_val.score)
         };
         
@@ -376,7 +422,8 @@ pub async fn list_memories(
             Some(score)
         } else {
             let memory_type_enum: crate::models::MemoryType = memory_type.parse().unwrap_or(crate::models::MemoryType::Semantic);
-            let quality_score_val = quality::compute_quality_score(&content, &memory_type_enum);
+            let quality_mt = convert_memory_type(&memory_type_enum);
+            let quality_score_val = voidm_scoring::compute_quality_score(&content, &quality_mt);
             Some(quality_score_val.score)
         };
         
@@ -681,5 +728,112 @@ fn redact_memory(
         }
     }
 
+    Ok(())
+}
+
+/// Extract named entities from memory content and link to concepts.
+/// Creates INSTANCE_OF edges between the memory and extracted concepts.
+/// Optionally creates missing concepts if `auto_create` is true.
+#[cfg(feature = "ner")]
+async fn extract_and_link_concepts(
+    pool: &SqlitePool,
+    memory_id: &str,
+    content: &str,
+    min_score: f32,
+    auto_create: bool,
+) -> Result<()> {
+    use crate::ner;
+
+    // Ensure NER model is loaded (downloads on first use)
+    ner::ensure_ner_model().await?;
+
+    // Extract entities from content
+    let entities = ner::extract_entities(content)?;
+
+    // Filter by minimum score
+    let filtered_entities: Vec<_> = entities.iter()
+        .filter(|e| e.score >= min_score)
+        .collect();
+
+    if filtered_entities.is_empty() {
+        tracing::debug!("No entities above min_score {:.2} extracted from memory {}", min_score, memory_id);
+        return Ok(());
+    }
+
+    tracing::info!("Extracted {} entities from memory {} (min_score: {:.2})", filtered_entities.len(), memory_id, min_score);
+
+    // For each entity, find or create concept and link
+    for entity in filtered_entities {
+        // Try to find existing concept by name (case-insensitive)
+        let existing_concept: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM ontology_concepts WHERE lower(name) = lower(?)"
+        )
+        .bind(&entity.text)
+        .fetch_optional(pool)
+        .await?;
+
+        let concept_id = if let Some(id) = existing_concept {
+            id
+        } else if auto_create {
+            // Create new concept
+            let new_id = uuid::Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            
+            sqlx::query(
+                "INSERT INTO ontology_concepts (id, name, description, scope, created_at)
+                 VALUES (?, ?, ?, ?, ?)"
+            )
+            .bind(&new_id)
+            .bind(&entity.text)
+            .bind(format!("Auto-extracted from memory: {} ({:.2} confidence)", entity.entity_type, entity.score))
+            .bind::<Option<String>>(None)
+            .bind(&now)
+            .execute(pool)
+            .await?;
+
+            // Also insert into FTS for searchability
+            sqlx::query("INSERT INTO ontology_concept_fts (id, name, description) VALUES (?, ?, ?)")
+                .bind(&new_id)
+                .bind(&entity.text)
+                .bind(format!("Auto-extracted: {}", entity.entity_type))
+                .execute(pool)
+                .await?;
+
+            tracing::debug!("Created concept '{}' for memory {}", entity.text, memory_id);
+            new_id
+        } else {
+            tracing::debug!("Concept '{}' not found and auto_create disabled, skipping", entity.text);
+            continue;
+        };
+
+        // Create INSTANCE_OF edge from memory to concept
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT OR IGNORE INTO ontology_edges (from_id, from_type, rel_type, to_id, to_type, note, created_at)
+             VALUES (?, 'memory', 'INSTANCE_OF', ?, 'concept', ?, ?)"
+        )
+        .bind(memory_id)
+        .bind(&concept_id)
+        .bind(format!("Extracted with {:.2} confidence", entity.score))
+        .bind(&now)
+        .execute(pool)
+        .await?;
+
+        tracing::debug!("Linked memory {} to concept '{}'", memory_id, entity.text);
+    }
+
+    Ok(())
+}
+
+/// Stub for when NER feature is disabled
+#[cfg(not(feature = "ner"))]
+async fn extract_and_link_concepts(
+    _pool: &SqlitePool,
+    _memory_id: &str,
+    _content: &str,
+    _min_score: f32,
+    _auto_create: bool,
+) -> Result<()> {
+    tracing::debug!("Concept extraction skipped (NER feature not enabled)");
     Ok(())
 }

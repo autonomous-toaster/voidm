@@ -4,27 +4,31 @@ pub mod db;
 pub mod query;
 pub mod migrate;
 pub mod models;
-pub mod ner;
+#[cfg(feature = "nli")]
 pub mod nli;
-pub mod reranker;
 pub mod ontology;
-pub mod quality;
 pub mod vector;
 pub mod search;
-pub mod embeddings;
 pub mod migration;
-pub mod semantic_dedup;
-pub mod query_expansion;
-pub mod gguf_query_expander;
-pub mod auto_tagger;
-pub mod tag_linker;
-pub mod redactor;
+#[cfg(feature = "tinyllama")]
+pub mod auto_tagger_tinyllama;
 pub mod graph_retrieval;
 pub mod rrf_fusion;
-pub mod passage;
 
 pub use config::Config;
 pub use config::config_path_display;
+
+// Re-export from separate crates
+#[cfg(feature = "ner")]
+pub use voidm_ner as ner;
+pub use voidm_redactor as redactor;
+#[cfg(feature = "reranker")]
+pub use voidm_reranker as reranker;
+pub use voidm_embeddings as embeddings;
+pub use voidm_scoring as quality;
+#[cfg(feature = "query-expansion")]
+pub use voidm_query_expansion as query_expansion;
+
 pub use db::sqlite::open_pool;  // Re-export for backward compatibility
-pub use crud::resolve_id;
+pub use crud::{resolve_id, resolve_id_sqlite};
 pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning, MemoryEdge, OntologyEdgeForMigration};

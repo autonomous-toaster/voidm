@@ -140,7 +140,7 @@ impl crate::db::Database for SqliteDatabase {
         let pool = self.pool.clone();
         let id = id.to_string();
         Box::pin(async move {
-            crate::crud::resolve_id(&pool, &id).await
+            crate::crud::resolve_id_sqlite(&pool, &id).await
         })
     }
 
@@ -218,14 +218,16 @@ impl crate::db::Database for SqliteDatabase {
         config_min_score: f32,
         config_search: &crate::config::SearchConfig,
     ) -> Pin<Box<dyn Future<Output = Result<SearchResponse>> + Send + '_>> {
-        let pool = self.pool.clone();
+        let db_clone = crate::db::sqlite::SqliteDatabase {
+            pool: self.pool.clone(),
+        };
         let opts_owned: SearchOptions = opts.clone();
         let model_name_owned: String = model_name.to_string();
         let search_config_owned: crate::config::SearchConfig = config_search.clone();
         
         let future = async move {
             crate::search::search(
-                &pool,
+                &db_clone,
                 &opts_owned,
                 &model_name_owned,
                 embeddings_enabled,
@@ -369,6 +371,146 @@ impl crate::db::Database for SqliteDatabase {
         Box::pin(async move {
             // Placeholder for graph traversal
             anyhow::bail!("Graph traversal not yet implemented on SQLite backend")
+        })
+    }
+
+    fn search_bm25(
+        &self,
+        query: &str,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let query = query.to_string();
+        let scope_filter = scope_filter.map(|s| s.to_string());
+        let type_filter = type_filter.map(|s| s.to_string());
+
+        Box::pin(async move {
+            let fts_query = crate::search::sanitize_fts_query(&query);
+            
+            let mut sql = "SELECT id, bm25(memories_fts) AS score FROM memories_fts WHERE content MATCH ?".to_string();
+            let mut binds: Vec<String> = vec![fts_query];
+            
+            // Add scope filter if provided
+            if let Some(scope) = scope_filter {
+                sql.push_str(" AND (SELECT scope FROM memories WHERE id = memories_fts.id LIKE ?)");
+                binds.push(format!("%{}%", scope));
+            }
+            
+            // Add type filter if provided
+            if let Some(mem_type) = type_filter {
+                sql.push_str(" AND (SELECT memory_type FROM memories WHERE id = memories_fts.id = ?)");
+                binds.push(mem_type);
+            }
+            
+            sql.push_str(" ORDER BY score LIMIT ?");
+            binds.push(limit.to_string());
+            
+            // Execute query with dynamic bindings
+            let mut query_builder = sqlx::query_as::<_, (String, f32)>(&sql);
+            for bind in binds {
+                query_builder = query_builder.bind(bind);
+            }
+            
+            let rows = query_builder
+                .fetch_all(&pool)
+                .await
+                .unwrap_or_default();
+            
+            // Normalize BM25 scores from [-inf, 0] to [0, 1] where higher = more relevant
+            if rows.is_empty() {
+                return Ok(Vec::new());
+            }
+            
+            let min_bm25 = rows.iter().map(|(_, s)| *s).fold(f32::MAX, f32::min);
+            let max_bm25 = rows.iter().map(|(_, s)| *s).fold(f32::MIN, f32::max);
+            let range = (max_bm25 - min_bm25).abs().max(0.001);
+            
+            let normalized: Vec<(String, f32)> = rows
+                .into_iter()
+                .map(|(id, raw_score)| {
+                    let norm = 1.0 - ((raw_score - min_bm25) / range).clamp(0.0, 1.0);
+                    (id, norm)
+                })
+                .collect();
+            
+            Ok(normalized)
+        })
+    }
+
+    fn search_fuzzy(
+        &self,
+        query: &str,
+        scope_filter: Option<&str>,
+        limit: usize,
+        threshold: f32,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let query = query.to_string();
+        let scope_filter = scope_filter.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // Fetch raw memories
+            let memories = {
+                let mut sql = "SELECT id, content FROM memories ORDER BY created_at DESC LIMIT ?".to_string();
+                let limit_i64 = limit as i64;
+                
+                sqlx::query_as::<_, (String, String)>(&sql)
+                    .bind(limit_i64)
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap_or_default()
+            };
+            
+            // Apply Jaro-Winkler locally
+            let query_lower = query.to_lowercase();
+            let mut results = Vec::new();
+            
+            for (id, content) in memories {
+                let sim = strsim::jaro_winkler(&query_lower, &content.to_lowercase()) as f32;
+                if sim >= threshold {
+                    results.push((id, sim));
+                }
+            }
+            
+            // Sort by score descending
+            results.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            
+            Ok(results)
+        })
+    }
+
+    fn fetch_memories_raw(
+        &self,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String)>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let scope_filter = scope_filter.map(|s| s.to_string());
+        let type_filter = type_filter.map(|s| s.to_string());
+
+        Box::pin(async move {
+            let mut sql = "SELECT id, content FROM memories ORDER BY created_at DESC".to_string();
+            
+            if limit > 0 {
+                sql.push_str(" LIMIT ?");
+            }
+            
+            let mut query_builder = sqlx::query_as::<_, (String, String)>(&sql);
+            if limit > 0 {
+                query_builder = query_builder.bind(limit as i64);
+            }
+            
+            let memories = query_builder
+                .fetch_all(&pool)
+                .await
+                .unwrap_or_default();
+            
+            Ok(memories)
         })
     }
 

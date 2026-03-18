@@ -1,0 +1,9 @@
+[package]
+name = "voidm-db-trait"
+version = "0.1.0"
+edition = "2021"
+description = "Database abstraction trait for voidm - enables multiple backend support"
+
+[dependencies]
+anyhow = { workspace = true }
+serde_json = { workspace = true }

@@ -17,7 +17,7 @@ use voidm_core::{
     Config, crud,
     models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType},
     ontology::{self, NodeKind, OntologyRelType},
-    resolve_id,
+    resolve_id_sqlite,
     search::{SearchMode, SearchOptions, search},
 };
 
@@ -171,7 +171,7 @@ impl ServerHandler for VoidmMcpServer {
         } else if uri == "voidm://concepts" {
             json!(ontology::list_concepts(&self.pool, None, 20).await.map_err(mcp_err)?)
         } else if let Some(id) = uri.strip_prefix("voidm://memory/") {
-            let id = resolve_id(&self.pool, id).await.map_err(mcp_err)?;
+            let id = resolve_id_sqlite(&self.pool, id).await.map_err(mcp_err)?;
             let memory = crud::get_memory(&self.pool, &id)
                 .await
                 .map_err(mcp_err)?
@@ -217,8 +217,11 @@ impl VoidmMcpServer {
             intent: params.intent,
         };
 
+        let db = voidm_core::db::sqlite::SqliteDatabase {
+            pool: self.pool.clone(),
+        };
         let resp = search(
-            &self.pool,
+            &db,
             &opts,
             &self.config.embeddings.model,
             self.config.embeddings.enabled,
@@ -287,7 +290,7 @@ impl VoidmMcpServer {
         &self,
         Parameters(params): Parameters<DeleteMemoryParams>,
     ) -> std::result::Result<Json<Map<String, Value>>, String> {
-        let id = resolve_id(&self.pool, &params.memory_id)
+        let id = resolve_id_sqlite(&self.pool, &params.memory_id)
             .await
             .map_err(|e| e.to_string())?;
         let deleted = crud::delete_memory(&self.pool, &id)
@@ -305,8 +308,8 @@ impl VoidmMcpServer {
         Parameters(params): Parameters<LinkMemoriesParams>,
     ) -> std::result::Result<Json<Map<String, Value>>, String> {
         let rel: EdgeType = params.rel.parse().map_err(|e: anyhow::Error| e.to_string())?;
-        let from = resolve_id(&self.pool, &params.from).await.map_err(|e| e.to_string())?;
-        let to = resolve_id(&self.pool, &params.to).await.map_err(|e| e.to_string())?;
+        let from = resolve_id_sqlite(&self.pool, &params.from).await.map_err(|e| e.to_string())?;
+        let to = resolve_id_sqlite(&self.pool, &params.to).await.map_err(|e| e.to_string())?;
         let resp = crud::link_memories(&self.pool, &from, &rel, &to, params.note.as_deref())
             .await
             .map_err(|e| e.to_string())?;
@@ -568,7 +571,7 @@ fn memory_write_warnings(resp: &voidm_core::models::AddMemoryResponse) -> Vec<St
 async fn resolve_node_id(pool: &SqlitePool, id: &str, kind: NodeKind) -> Result<String> {
     match kind {
         NodeKind::Concept => ontology::resolve_concept_id(pool, id).await,
-        NodeKind::Memory => resolve_id(pool, id).await,
+        NodeKind::Memory => resolve_id_sqlite(pool, id).await,
     }
 }
 

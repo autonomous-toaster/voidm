@@ -1,0 +1,19 @@
+[package]
+name = "voidm-postgres"
+version = "0.1.0"
+edition = "2021"
+description = "PostgreSQL backend implementation for voidm"
+
+[dependencies]
+sqlx = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+strsim = { workspace = true }
+
+# Trait definition from voidm-db-trait
+voidm-db-trait = { path = "../voidm-db-trait" }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use sqlx::SqlitePool;
-use voidm_core::resolve_id;
+use voidm_core::resolve_id_sqlite;
 use voidm_graph;
 
 #[derive(Subcommand)]
@@ -96,7 +96,7 @@ async fn run_cypher(args: CypherArgs, pool: &SqlitePool, json: bool) -> Result<(
 }
 
 async fn run_neighbors(args: NeighborsArgs, pool: &SqlitePool, json: bool) -> Result<()> {
-    let id = match resolve_id(pool, &args.id).await {
+    let id = match resolve_id_sqlite(pool, &args.id).await {
         Ok(id) => id,
         Err(e) => {
             if json {
@@ -126,8 +126,8 @@ async fn run_neighbors(args: NeighborsArgs, pool: &SqlitePool, json: bool) -> Re
 
 async fn run_path(args: PathArgs, pool: &SqlitePool, json: bool) -> Result<()> {
     // Resolve both IDs before same-ID check (so short IDs expand correctly)
-    let from = resolve_id(pool, &args.from).await?;
-    let to   = resolve_id(pool, &args.to).await?;
+    let from = resolve_id_sqlite(pool, &args.from).await?;
+    let to   = resolve_id_sqlite(pool, &args.to).await?;
 
     if from == to {
         if json {

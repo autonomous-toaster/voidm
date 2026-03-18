@@ -13,3 +13,4 @@
 {"type":"config","name":"SCRED Redactor Phase 2 - Trie Prefix Filtering & Advanced Optimizations","metricName":"redaction_latency_us","metricUnit":"µs","bestDirection":"lower"}
 {"run":1,"commit":"a427a23","metric":19.73,"metrics":{},"status":"keep","description":"Baseline: Current optimized redaction latency with fast-path filter. All 244 patterns loaded, real HTTP request (90-byte) benchmark. Starting point for Phase 2 optimizations.","timestamp":1773869806052,"segment":0}
 {"type":"config","name":"PSN Learning Loop: Real Voidm Integration & Improvement Measurement","metricName":"success_improvement_rate","metricUnit":"%","bestDirection":"higher"}
+{"run":2,"commit":"41ba6a6","metric":20.14,"metrics":{},"status":"keep","description":"Reconfirmed baseline after rebuilding: 20.14µs per redaction call. Variance is 2-3%. Starting Strategy exploration.","timestamp":1773870157325,"segment":0}

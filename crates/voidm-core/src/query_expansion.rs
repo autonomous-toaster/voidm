@@ -153,6 +153,25 @@ Context: {intent}
 Query: {query}
 Related:"#;
 
+    /// HyDE-specific template for generating hypothetical documents that would answer the query
+    /// Output format is 3-5 short, realistic document snippets separated by semicolons
+    pub const FEW_SHOT_HYDE: &str = r#"Generate 3-5 hypothetical document snippets that would contain the answer to this search query. Each snippet should be a realistic excerpt that would appear in relevant documents.
+
+Query: What is Docker?
+Documents: |Docker is a containerization platform that packages applications with their dependencies into lightweight, portable containers|; |Containers provide isolation and consistency across different environments, making deployments more reliable|; |Docker uses images as templates and runs containers as isolated processes with shared kernel resources|; |The Docker ecosystem includes registries like Docker Hub for sharing and discovering containerized applications|
+
+Query: How to optimize database queries?
+Documents: |Database query optimization involves analyzing execution plans and adding appropriate indexes to improve performance|; |Common techniques include query rewriting, denormalization, and partitioning to reduce I/O and CPU overhead|; |Profiling tools and slow query logs help identify bottlenecks in database performance|; |Caching strategies and connection pooling can significantly reduce database load in production systems|
+
+Query: Machine learning best practices
+Documents: |Successful machine learning projects require careful data collection, cleaning, and feature engineering before model training|; |Model evaluation should use cross-validation and appropriate metrics for the specific problem (accuracy, F1, AUC)|; |Hyperparameter tuning, regularization, and ensemble methods help improve model generalization|; |Monitoring model performance in production is crucial to detect data drift and maintain accuracy over time|
+
+Query: Cloud security considerations
+Documents: |Cloud security requires defense in depth with identity management, network isolation, encryption, and audit logging|; |Proper access control and least privilege principles prevent unauthorized data access and lateral movement|; |Compliance frameworks like HIPAA and GDPR have specific requirements for cloud data handling and privacy|; |Regular security assessments, penetration testing, and vulnerability scanning help identify and fix security issues|
+
+Query: {query}
+Documents:"#;
+
     /// GBNF grammar for structured synonym output.
     /// Enforces format: "term1, term2, term3"
     #[allow(dead_code)]
@@ -166,6 +185,7 @@ item   : [a-zA-Z0-9._\-\s]+
             TemplateMode::Structured => FEW_SHOT_STRUCTURED,
             TemplateMode::Improved => FEW_SHOT_IMPROVED,
             TemplateMode::IntentAware => FEW_SHOT_INTENT_AWARE,
+            TemplateMode::HyDE => FEW_SHOT_HYDE,
         }
     }
 
@@ -175,6 +195,7 @@ item   : [a-zA-Z0-9._\-\s]+
         Structured,  // Original few-shot
         Improved,    // Domain-aware structure
         IntentAware, // Intent-guided structure
+        HyDE,        // Hypothetical Document Embeddings
     }
 
     /// Get the GBNF grammar

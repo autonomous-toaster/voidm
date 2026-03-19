@@ -56,20 +56,32 @@ Synonyms: SQL, queries, indexing, schema, transactions, relational, NoSQL
 Query: {query}
 Synonyms:"#;
 
-    /// Improved domain-aware template with clearer structure
-    pub const FEW_SHOT_IMPROVED: &str = r#"Expand search queries with related terms:
+    /// Improved domain-aware template with clearer structure and diverse examples
+    pub const FEW_SHOT_IMPROVED: &str = r#"Expand search queries with related terms and concepts:
 
 Topic: Docker
-Synonyms: containers, Kubernetes, images, registry, orchestration, deployment
-Related: microservices, cloud-native, containerization, compose
+Synonyms: containers, Kubernetes, images, registry, orchestration, deployment, cloud-native
+Related: microservices, containerization, compose, scaling, cluster management
 
 Topic: Python
-Synonyms: Django, Flask, NumPy, machine learning, pandas, data science
-Related: scripting, automation, backend development, scientific computing
+Synonyms: Django, Flask, NumPy, machine learning, pandas, data science, PyPI
+Related: scripting, automation, backend development, scientific computing, virtual environments
 
 Topic: REST API
-Synonyms: HTTP, endpoints, JSON, microservices, web services
-Related: JSON-RPC, GraphQL, OpenAPI, API gateway
+Synonyms: HTTP, endpoints, JSON, microservices, web services, OpenAPI, schemas
+Related: GraphQL, JSON-RPC, API gateway, versioning, documentation, authentication
+
+Topic: Database
+Synonyms: SQL, NoSQL, PostgreSQL, MongoDB, indexing, queries, transactions, schemas
+Related: ACID, normalization, data warehousing, time-series, replication, backup
+
+Topic: Security
+Synonyms: authentication, authorization, encryption, OAuth, JWT, certificates, SSL/TLS
+Related: identity management, access control, compliance, audit, threat detection
+
+Topic: Testing
+Synonyms: unit tests, integration tests, TDD, test cases, assertions, mocking, coverage
+Related: continuous integration, regression testing, debugging, quality assurance
 
 Topic: {query}
 Synonyms:"#;

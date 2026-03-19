@@ -15,74 +15,64 @@ use std::path::PathBuf;
 // ─── Prompt templates for different memory types ──────────────────────────
 
 mod prompts {
-    pub const EPISODIC: &str = r#"Generate 8-12 relevant tags for this episodic memory (event, experience, or personal note):
+    pub const EPISODIC: &str = r#"Generate 8-12 relevant tags for episodic memories (events, experiences, personal notes).
 
-"{content}"
+Example:
+Memory: "Attended Docker Kubernetes conference in San Francisco on March 15, 2024. Met with Alex about containerization strategies."
+Tags: kubernetes, docker, conference, san-francisco, march-2024, containerization, networking
 
-Focus on extracting:
-- **Who**: People, entities, organizations, roles mentioned
-- **What**: Actions, events, activities, outcomes
-- **When**: Dates, times, temporal markers, durations
-- **Where**: Locations, places, venues, geographical references
-- **Why/How**: Context, motivations, methods, relationships, causality
+Memory: "{content}"
 
-Format: Provide ONLY a comma-separated list of lowercase tags. Do NOT include explanations.
+Focus on: Who (people, organizations) | What (actions, events) | When (dates, times) | Where (locations) | Why/How (context, relationships)
+Output: Comma-separated lowercase tags only. No explanations.
 Tags:"#;
 
-    pub const SEMANTIC: &str = r#"Generate 8-12 relevant tags for this semantic memory (knowledge, definition, or factual information):
+    pub const SEMANTIC: &str = r#"Generate 8-12 relevant tags for semantic memories (knowledge, definitions, factual information).
 
-"{content}"
+Example:
+Memory: "REST API is an architectural style for APIs using HTTP methods (GET, POST, PUT, DELETE) with stateless communication and resource-oriented design. It emphasizes scalability and cachability."
+Tags: rest-api, http-methods, architecture-pattern, stateless-communication, scalability, web-services, api-design
 
-Focus on extracting:
-- **Core concepts**: Definitions, principles, theories being described
-- **Domains**: Fields, disciplines, areas of knowledge
-- **Properties**: Characteristics, attributes, fundamental traits
-- **Relationships**: Connections to other concepts, hierarchies, associations
-- **Applications**: Use cases, contexts where this applies, practical implications
+Memory: "{content}"
 
-Format: Provide ONLY a comma-separated list of lowercase tags. Do NOT include explanations.
+Focus on: Core concepts | Domains/disciplines | Properties/characteristics | Relationships | Applications/use-cases
+Output: Comma-separated lowercase tags only. No explanations.
 Tags:"#;
 
-    pub const PROCEDURAL: &str = r#"Generate 8-12 relevant tags for this procedural memory (process, workflow, or how-to):
+    pub const PROCEDURAL: &str = r#"Generate 8-12 relevant tags for procedural memories (workflows, processes, how-to guides).
 
-"{content}"
+Example:
+Memory: "To deploy a Docker container: build the image with Dockerfile, tag it, push to registry (Docker Hub or private), then pull and run on target server using docker run -d -p 8080:80 myapp:latest"
+Tags: docker, deployment, containerization, dockerfile, docker-hub, docker-run, orchestration
 
-Focus on extracting:
-- **Tools/Tech**: Technologies, frameworks, languages, platforms, software
-- **Steps/Phases**: Procedures, stages, sequential elements, workflows
-- **Inputs/Outputs**: Resources, requirements, deliverables, results
-- **Techniques**: Methods, approaches, strategies, patterns
-- **Related**: Alternatives, prerequisites, dependencies, optimizations
+Memory: "{content}"
 
-Format: Provide ONLY a comma-separated list of lowercase tags. Do NOT include explanations.
+Focus on: Tools/technologies | Steps/phases/workflows | Inputs/outputs | Techniques/patterns | Alternatives/prerequisites
+Output: Comma-separated lowercase tags only. No explanations.
 Tags:"#;
 
-    pub const CONCEPTUAL: &str = r#"Generate 8-12 relevant tags for this conceptual memory (framework, theory, or abstraction):
+    pub const CONCEPTUAL: &str = r#"Generate 8-12 relevant tags for conceptual memories (theories, frameworks, abstractions).
 
-"{content}"
+Example:
+Memory: "Microservices architecture decomposes applications into loosely-coupled, independently-deployable services. Each service owns its data, uses async communication, and can scale independently. Contrasts with monolithic architecture."
+Tags: microservices, architecture-pattern, distributed-systems, service-independence, scalability, system-design
 
-Focus on extracting:
-- **Concepts**: Core ideas, abstractions, theoretical constructs
-- **Foundations**: Underlying principles, assumptions, axioms
-- **Scope**: Applicable domains, contexts, scale of applicability
-- **Relationships**: Connections to other theories, influences, derivatives
-- **Implications**: Consequences, predictions, philosophical or practical impact
+Memory: "{content}"
 
-Format: Provide ONLY a comma-separated list of lowercase tags. Do NOT include explanations.
+Focus on: Core concepts/ideas | Theoretical foundations | Applicable domains | Relationships to other concepts | Implications/impact
+Output: Comma-separated lowercase tags only. No explanations.
 Tags:"#;
 
-    pub const CONTEXTUAL: &str = r#"Generate 8-12 relevant tags for this contextual memory (background, situation, or context):
+    pub const CONTEXTUAL: &str = r#"Generate 8-12 relevant tags for contextual memories (background, situations, circumstances).
 
-"{content}"
+Example:
+Memory: "During the cloud migration project (Q1 2024), we encountered latency issues due to regional deployment strategy. The team (3 engineers + project manager) had to coordinate across multiple AWS regions to optimize performance."
+Tags: cloud-migration, aws, latency-optimization, multi-region, q1-2024, project-management, performance-tuning
 
-Focus on extracting:
-- **Conditions**: Environmental factors, circumstances, constraints
-- **Background**: Historical context, prior events, situational setup
-- **Stakeholders**: People, organizations, parties involved or affected
-- **Factors**: Key variables, dependencies, influential elements
-- **Relevance**: Why this context matters, connections to current situation
+Memory: "{content}"
 
-Format: Provide ONLY a comma-separated list of lowercase tags. Do NOT include explanations.
+Focus on: Conditions/circumstances | Background/history | Stakeholders/parties | Key factors/variables | Relevance/connections
+Output: Comma-separated lowercase tags only. No explanations.
 Tags:"#;
 
     pub fn get_prompt_for_type(memory_type: &crate::models::MemoryType) -> &'static str {

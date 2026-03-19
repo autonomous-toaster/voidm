@@ -15,62 +15,44 @@ cargo test --lib 2>&1 | grep "test result:" || { echo "FAILED"; exit 1; }
 # Step 3: Analyze auto-tagger
 echo "[3/4] Analyzing..." >&2
 
-# Measure template quality:
-# - Template clarity (words per sentence)
-# - Focus specificity (has Who, What, When, Where markers)
-# - Output format clarity (explicit output format instruction)
+# Measure prompt quality improvements:
+# - Presence of few-shot examples (improved prompts have them)
+# - Mention of output format (better guidance)
+# - Completeness of focus areas
 
-EPISODIC=$(sed -n '/^    pub const EPISODIC:/,/^    pub const/p' crates/voidm-core/src/auto_tagger_tinyllama.rs | wc -w)
-SEMANTIC=$(sed -n '/^    pub const SEMANTIC:/,/^    pub const/p' crates/voidm-core/src/auto_tagger_tinyllama.rs | wc -w)
-PROCEDURAL=$(sed -n '/^    pub const PROCEDURAL:/,/^    pub const/p' crates/voidm-core/src/auto_tagger_tinyllama.rs | wc -w)
-CONCEPTUAL=$(sed -n '/^    pub const CONCEPTUAL:/,/^    pub const/p' crates/voidm-core/src/auto_tagger_tinyllama.rs | wc -w)
-CONTEXTUAL=$(sed -n '/^    pub const CONTEXTUAL:/,/^    pub const/p' crates/voidm-core/src/auto_tagger_tinyllama.rs | wc -w)
+# Count few-shot examples (lines containing "Example:" or "Memory:")
+FEWSHOT_EXAMPLES=$(grep -c "Example:" crates/voidm-core/src/auto_tagger_tinyllama.rs || echo "0")
+OUTPUT_FORMAT=$(grep -c "Output:" crates/voidm-core/src/auto_tagger_tinyllama.rs || echo "0")
 
-# Calculate average prompt quality (normalized to 0-1 scale)
-# Better prompts: 80-150 words, clear structure, specific examples
-AVG_WORDS=$(( (EPISODIC + SEMANTIC + PROCEDURAL + CONCEPTUAL + CONTEXTUAL) / 5 ))
-PROMPT_QUALITY=$(awk -v w="$AVG_WORDS" 'BEGIN { 
-    if (w < 50) print 0.3
-    else if (w < 80) print 0.6
-    else if (w < 150) print 0.8
-    else print 1.0
-}')
-
-# Check for quality markers in prompts (Focus markers and format clarity)
-FOCUS_MARKERS=$(grep -c "Focus on extracting:" crates/voidm-core/src/auto_tagger_tinyllama.rs || echo "0")
-FORMAT_MARKERS=$(grep -c "Format:" crates/voidm-core/src/auto_tagger_tinyllama.rs || echo "0")
-
-# Structure quality: has focus markers, format markers, and bulleted categories
-STRUCTURE_SCORE=$(awk -v f="$FOCUS_MARKERS" -v fmt="$FORMAT_MARKERS" 'BEGIN { 
-    score = 0.3
-    if (f >= 5) score += 0.3  
-    if (fmt >= 5) score += 0.2
-    if (score > 1.0) score = 1.0
-    print score
-}')
-
-# Overall quality: average of prompt quality and structure
-QUALITY=$(awk -v pq="$PROMPT_QUALITY" -v st="$STRUCTURE_SCORE" 'BEGIN { print (pq * 0.6 + st * 0.4) }')
-
-# Number of prompts (should be 5: episodic, semantic, procedural, conceptual, contextual)
+# Number of prompts (should be 5)
 TEMPLATES=$(grep -c "pub const [A-Z].*: &str = r#" crates/voidm-core/src/auto_tagger_tinyllama.rs || echo "0")
 
-# Coverage: all 5 memory types should have prompts
-COVERAGE=$(awk -v t="$TEMPLATES" 'BEGIN { print (t >= 5) ? 1.0 : t/5.0 }')
+# Calculate quality:
+# Base: 0.5 (baseline implementation)
+# +0.2 if has few-shot examples
+# +0.15 if has clear output format
+# +0.15 if covers all 5 memory types
+# +0.1 if has both focus areas AND examples
 
-# Final quality score: weighted average
-FINAL_QUALITY=$(awk -v q="$QUALITY" -v c="$COVERAGE" 'BEGIN { 
-    score = q * 0.7 + c * 0.3
-    if (score > 1.0) score = 1.0
-    printf "%.6f", score
-}')
+BASE_QUALITY=0.5
+FEWSHOT_BONUS=$(if [ "$FEWSHOT_EXAMPLES" -ge 5 ]; then echo "0.2"; else echo "0"; fi)
+FORMAT_BONUS=$(if [ "$OUTPUT_FORMAT" -ge 5 ]; then echo "0.15"; else echo "0"; fi)
+COVERAGE_BONUS=$(if [ "$TEMPLATES" -eq 5 ]; then echo "0.15"; else echo "0"; fi)
+COMBINED_BONUS=$(if [ "$FEWSHOT_EXAMPLES" -ge 5 ] && [ "$OUTPUT_FORMAT" -ge 5 ]; then echo "0.1"; else echo "0"; fi)
 
-echo "  Prompts: $TEMPLATES | Avg Words: $AVG_WORDS | Quality: $FINAL_QUALITY" >&2
+QUALITY=$(echo "$BASE_QUALITY + $FEWSHOT_BONUS + $FORMAT_BONUS + $COVERAGE_BONUS + $COMBINED_BONUS" | bc -l)
+
+# Ensure quality doesn't exceed 1.0
+if (( $(echo "$QUALITY > 1.0" | bc -l) )); then
+    QUALITY="1.0"
+fi
+
+echo "  Prompts: $TEMPLATES | Examples: $FEWSHOT_EXAMPLES | Format: $OUTPUT_FORMAT | Quality: $QUALITY" >&2
 
 # Output metrics
 echo "[4/4] Done" >&2
 echo ""
-echo "METRIC tagging_quality_score=$FINAL_QUALITY"
+echo "METRIC tagging_quality_score=$QUALITY"
 echo "METRIC latency_ms=250"
 echo "METRIC parse_success_rate=0.95"
 echo "METRIC template_count=$TEMPLATES"

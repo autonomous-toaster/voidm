@@ -15,79 +15,74 @@ use std::path::PathBuf;
 // ─── Prompt templates for different memory types ──────────────────────────
 
 mod prompts {
-    pub const EPISODIC: &str = r#"Generate 8-12 tags for this memory about an event or experience:
+    pub const EPISODIC: &str = r#"Generate 8-12 relevant tags for this episodic memory (event, experience, or personal note):
 
 "{content}"
 
-These tags should capture:
-- People, entities, or organizations mentioned
-- Actions, activities, or events
-- Dates, times, or temporal references
-- Locations mentioned
-- Key concepts or themes
-- Relationships or connections
+Focus on extracting:
+- **Who**: People, entities, organizations, roles mentioned
+- **What**: Actions, events, activities, outcomes
+- **When**: Dates, times, temporal markers, durations
+- **Where**: Locations, places, venues, geographical references
+- **Why/How**: Context, motivations, methods, relationships, causality
 
-Output ONLY a comma-separated list of tags (no explanations):
+Format: Provide ONLY a comma-separated list of lowercase tags. Do NOT include explanations.
 Tags:"#;
 
-    pub const SEMANTIC: &str = r#"Generate 8-12 tags for this knowledge or definition:
+    pub const SEMANTIC: &str = r#"Generate 8-12 relevant tags for this semantic memory (knowledge, definition, or factual information):
 
 "{content}"
 
-These tags should capture:
-- Concepts, definitions, or principles
-- Related domains or disciplines
-- Key properties or characteristics
-- Relationships to other concepts
-- Domains of application
-- Fundamental assumptions
+Focus on extracting:
+- **Core concepts**: Definitions, principles, theories being described
+- **Domains**: Fields, disciplines, areas of knowledge
+- **Properties**: Characteristics, attributes, fundamental traits
+- **Relationships**: Connections to other concepts, hierarchies, associations
+- **Applications**: Use cases, contexts where this applies, practical implications
 
-Output ONLY a comma-separated list of tags (no explanations):
+Format: Provide ONLY a comma-separated list of lowercase tags. Do NOT include explanations.
 Tags:"#;
 
-    pub const PROCEDURAL: &str = r#"Generate 8-12 tags for this procedure or process:
+    pub const PROCEDURAL: &str = r#"Generate 8-12 relevant tags for this procedural memory (process, workflow, or how-to):
 
 "{content}"
 
-These tags should capture:
-- Tools, technologies, or systems involved
-- Steps, stages, or phases
-- Inputs and outputs
-- Resources required
-- Preconditions or constraints
-- Related techniques or alternatives
+Focus on extracting:
+- **Tools/Tech**: Technologies, frameworks, languages, platforms, software
+- **Steps/Phases**: Procedures, stages, sequential elements, workflows
+- **Inputs/Outputs**: Resources, requirements, deliverables, results
+- **Techniques**: Methods, approaches, strategies, patterns
+- **Related**: Alternatives, prerequisites, dependencies, optimizations
 
-Output ONLY a comma-separated list of tags (no explanations):
+Format: Provide ONLY a comma-separated list of lowercase tags. Do NOT include explanations.
 Tags:"#;
 
-    pub const CONCEPTUAL: &str = r#"Generate 8-12 tags for this conceptual framework:
+    pub const CONCEPTUAL: &str = r#"Generate 8-12 relevant tags for this conceptual memory (framework, theory, or abstraction):
 
 "{content}"
 
-These tags should capture:
-- Core concepts or ideas
-- Theoretical foundations
-- Domains of application
-- Related theories or frameworks
-- Key distinctions or classifications
-- Philosophical or empirical assumptions
+Focus on extracting:
+- **Concepts**: Core ideas, abstractions, theoretical constructs
+- **Foundations**: Underlying principles, assumptions, axioms
+- **Scope**: Applicable domains, contexts, scale of applicability
+- **Relationships**: Connections to other theories, influences, derivatives
+- **Implications**: Consequences, predictions, philosophical or practical impact
 
-Output ONLY a comma-separated list of tags (no explanations):
+Format: Provide ONLY a comma-separated list of lowercase tags. Do NOT include explanations.
 Tags:"#;
 
-    pub const CONTEXTUAL: &str = r#"Generate 8-12 tags for this contextual memory:
+    pub const CONTEXTUAL: &str = r#"Generate 8-12 relevant tags for this contextual memory (background, situation, or context):
 
 "{content}"
 
-These tags should capture:
-- Contextual factors or conditions
-- Relevant background information
-- Stakeholders or parties involved
-- Environmental factors
-- Historical or situational context
-- Related circumstances or dependencies
+Focus on extracting:
+- **Conditions**: Environmental factors, circumstances, constraints
+- **Background**: Historical context, prior events, situational setup
+- **Stakeholders**: People, organizations, parties involved or affected
+- **Factors**: Key variables, dependencies, influential elements
+- **Relevance**: Why this context matters, connections to current situation
 
-Output ONLY a comma-separated list of tags (no explanations):
+Format: Provide ONLY a comma-separated list of lowercase tags. Do NOT include explanations.
 Tags:"#;
 
     pub fn get_prompt_for_type(memory_type: &crate::models::MemoryType) -> &'static str {
@@ -220,28 +215,64 @@ fn validate_tags(tags: &[String]) -> Vec<String> {
 }
 
 fn extract_basic_tags(content: &str) -> Vec<String> {
-    // Simple placeholder: extract capitalized words and common terms
-    let words: Vec<&str> = content.split_whitespace().collect();
+    // Enhanced placeholder: extract meaningful tags from content
     let mut tags = Vec::new();
+    let content_lower = content.to_lowercase();
     
-    for word in words {
+    // Extract capitalized words (potential entities/proper nouns)
+    let words: Vec<&str> = content.split_whitespace().collect();
+    for word in &words {
         let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-');
         if cleaned.len() > 3 && cleaned.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
             tags.push(cleaned.to_lowercase());
         }
     }
-
-    // Also add content-derived tags based on patterns
-    if content.contains("Docker") || content.contains("docker") {
-        tags.push("containerization".to_string());
+    
+    // Technology-related tags (common keywords)
+    let tech_keywords = vec![
+        ("docker", "containerization"), ("kubernetes", "orchestration"),
+        ("python", "python-programming"), ("rust", "systems-programming"),
+        ("javascript", "web-development"), ("react", "frontend"),
+        ("database", "data-persistence"), ("sql", "databases"),
+        ("api", "api-design"), ("rest", "web-services"),
+        ("microservice", "distributed-systems"), ("cloud", "cloud-computing"),
+        ("machine-learning", "ml"), ("deep-learning", "neural-networks"),
+        ("testing", "quality-assurance"), ("ci-cd", "devops"),
+        ("security", "cybersecurity"), ("encryption", "security"),
+        ("monitoring", "observability"), ("logging", "diagnostics"),
+    ];
+    
+    for (keyword, tag) in tech_keywords {
+        if content_lower.contains(keyword) {
+            tags.push(tag.to_string());
+        }
     }
-    if content.contains("Python") || content.contains("python") {
-        tags.push("python-programming".to_string());
+    
+    // Domain-specific pattern extraction
+    if content_lower.contains("memory") || content_lower.contains("remember") {
+        tags.push("memory-system".to_string());
     }
-    if content.contains("API") || content.contains("api") {
-        tags.push("api-design".to_string());
+    if content_lower.contains("query") || content_lower.contains("search") {
+        tags.push("search-functionality".to_string());
     }
-
+    if content_lower.contains("optimization") || content_lower.contains("optimize") {
+        tags.push("performance-optimization".to_string());
+    }
+    if content_lower.contains("error") || content_lower.contains("exception") || content_lower.contains("debug") {
+        tags.push("error-handling".to_string());
+    }
+    if content_lower.contains("pattern") || content_lower.contains("design") {
+        tags.push("design-patterns".to_string());
+    }
+    
+    // Temporal markers
+    if content_lower.contains("future") {
+        tags.push("forward-looking".to_string());
+    }
+    if content_lower.contains("historical") || content_lower.contains("history") {
+        tags.push("historical-context".to_string());
+    }
+    
     validate_tags(&tags)
 }
 

@@ -87,6 +87,10 @@ Topic: Cloud Infrastructure
 Synonyms: AWS, Azure, GCP, cloud computing, infrastructure-as-code, terraform, serverless
 Related: auto-scaling, load balancing, containerization, DevOps, CDN
 
+Topic: Machine Learning
+Synonyms: neural networks, deep learning, models, training, inference, TensorFlow, PyTorch
+Related: computer vision, NLP, classification, regression, feature engineering, optimization
+
 Topic: {query}
 Synonyms:"#;
 

@@ -227,22 +227,17 @@ lex: "#,
 
     /// Check if a model name should use GGUF backend
     pub fn should_use_gguf(model_name: &str) -> bool {
-        // DISABLED: GGUF inference cannot be interrupted
-        // Even with tokio::task::spawn_blocking, the timeout only cancels the outer future
-        // but the blocking thread keeps running inference forever in the background.
-        // This causes resource leaks and hangs in interactive CLI contexts.
+        // DISABLED: GGUF inference is blocking and can't be properly interrupted
+        // The llama_gguf engine runs inference without yielding control,
+        // so timeouts don't work and the CLI hangs indefinitely.
         //
-        // GGUF models are CPU-intensive and benefit from larger model sizes,
-        // but the non-interruptible nature makes them unsuitable for CLI use.
-        //
-        // Recommendation: Use tinyllama (ONNX, default) or run voidm in a subprocess
-        // with external timeout wrapper (kill -9 if needed).
+        // Users should use tinyllama (ONNX, default) instead.
         
         if model_name.contains("tobil") || model_name.contains("qmd") {
             tracing::warn!(
-                "GGUF query expansion ({}) is disabled. Use tinyllama (default) instead. \
-                 GGUF models cannot be safely interrupted and will cause resource leaks. \
-                 To use GGUF, run voidm in a subprocess with timeout: timeout 5s voidm search ...",
+                "GGUF query expansion ({}) is disabled. \
+                 Use --query-expand-model tinyllama (default) instead, or \
+                 run voidm with a timeout wrapper.",
                 model_name
             );
         }
@@ -269,7 +264,7 @@ mod tests {
 
     #[test]
     fn test_should_use_gguf() {
-        // GGUF is disabled due to non-interruptible inference
+        // GGUF is now disabled, so all should return false
         assert!(!GgufQueryExpander::should_use_gguf("tobil/qmd-query-expansion-1.7B"));
         assert!(!GgufQueryExpander::should_use_gguf("qmd-something"));
         assert!(!GgufQueryExpander::should_use_gguf("tinyllama"));

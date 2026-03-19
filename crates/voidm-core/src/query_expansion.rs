@@ -61,44 +61,44 @@ Synonyms: models, neural networks, training, inference, classification, regressi
 Query: {query}
 Synonyms:"#;
 
-    /// Improved domain-aware template with comprehensive, high-quality examples
+    /// Improved domain-aware template with refined, high-quality examples
     pub const FEW_SHOT_IMPROVED: &str = r#"Expand search queries with related terms and concepts:
 
 Topic: Docker
-Synonyms: containers, Kubernetes, images, registry, orchestration, deployment, cloud-native
-Related: microservices, containerization, compose, scaling, cluster management
+Synonyms: containers, Kubernetes, images, registry, orchestration, deployment, cloud-native, OCI
+Related: microservices, containerization, compose, scaling, cluster, resource management
 
 Topic: Python
-Synonyms: Django, Flask, NumPy, machine learning, pandas, data science, PyPI, requests
-Related: scripting, automation, backend development, scientific computing, virtual environments
+Synonyms: Django, Flask, NumPy, machine learning, pandas, data science, PyPI, requests, asyncio
+Related: scripting, automation, backend development, scientific computing, environments, packaging
 
 Topic: REST API
-Synonyms: HTTP, endpoints, JSON, microservices, web services, OpenAPI, schemas, standards
-Related: GraphQL, JSON-RPC, API gateway, versioning, documentation, authentication, rate-limiting
+Synonyms: HTTP, endpoints, JSON, microservices, web services, OpenAPI, schemas, standards, routes
+Related: GraphQL, JSON-RPC, API gateway, versioning, documentation, authentication, caching
 
 Topic: Database
-Synonyms: SQL, NoSQL, PostgreSQL, MongoDB, indexing, queries, transactions, schemas, tables
-Related: ACID, normalization, data warehousing, time-series, replication, backup, partitioning
+Synonyms: SQL, NoSQL, PostgreSQL, MongoDB, indexing, queries, transactions, schemas, tables, CRUD
+Related: ACID, normalization, data warehousing, time-series, replication, backup, sharding
 
 Topic: Security
 Synonyms: authentication, authorization, encryption, OAuth, JWT, certificates, SSL/TLS, HTTPS
-Related: identity management, access control, compliance, audit, threat detection, vulnerability
+Related: identity management, access control, compliance, audit, threat detection, secrets
 
 Topic: Testing
-Synonyms: unit tests, integration tests, TDD, test cases, assertions, mocking, coverage, quality
-Related: continuous integration, regression testing, debugging, quality assurance, performance
+Synonyms: unit tests, integration tests, TDD, test cases, assertions, mocking, coverage, runners
+Related: continuous integration, regression testing, debugging, quality assurance, fixtures
 
 Topic: Cloud Infrastructure
-Synonyms: AWS, Azure, GCP, cloud computing, infrastructure-as-code, terraform, serverless, FaaS
-Related: auto-scaling, load balancing, containerization, DevOps, CDN, networking, storage
+Synonyms: AWS, Azure, GCP, cloud computing, infrastructure-as-code, terraform, serverless, CDN
+Related: auto-scaling, load balancing, containers, DevOps, networking, storage, compute
 
 Topic: Machine Learning
-Synonyms: neural networks, deep learning, models, training, inference, TensorFlow, PyTorch, algorithms
-Related: computer vision, NLP, classification, regression, feature engineering, optimization, datasets
+Synonyms: neural networks, deep learning, models, training, inference, TensorFlow, PyTorch, scikit
+Related: computer vision, NLP, classification, regression, feature engineering, optimization
 
 Topic: Monitoring & Observability
-Synonyms: logging, metrics, traces, monitoring, alerting, dashboards, prometheus, grafana, elk
-Related: performance monitoring, debugging, incident response, SLO, observability, telemetry
+Synonyms: logging, metrics, traces, monitoring, alerting, dashboards, prometheus, grafana, datadog
+Related: performance monitoring, debugging, incident response, SLO, telemetry, observability
 
 Topic: {query}
 Synonyms:"#;

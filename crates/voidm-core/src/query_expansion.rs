@@ -125,6 +125,14 @@ Context: Cloud infrastructure
 Query: deployment
 Related: provisioning, infrastructure-as-code, automation, CI/CD, scaling, availability
 
+Context: Machine learning
+Query: training
+Related: models, algorithms, datasets, optimization, validation, regularization, hyperparameters
+
+Context: Security compliance
+Query: authentication
+Related: OAuth, JWT, certificates, encryption, identity, verification, authorization
+
 Context: {intent}
 Query: {query}
 Related:"#;

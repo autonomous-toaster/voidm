@@ -461,4 +461,81 @@ mod tests {
             assert!(prompt.contains("Output:"), "Missing output spec for {:?}", mem_type);
         }
     }
+
+    // Realistic tag quality tests for different memory types
+
+    #[test]
+    fn test_extract_tags_procedural_focus() {
+        let content = "To implement a REST API server: 1) Set up Flask framework 2) Define routes for CRUD operations 3) Add authentication middleware 4) Implement error handling 5) Deploy to production with Docker";
+        let tags = extract_basic_tags(content);
+        assert!(!tags.is_empty());
+        // Should have procedural/workflow tags
+        assert!(tags.iter().any(|t| t.contains("rest") || t.contains("api") || t.contains("docker") || t.contains("flask") || t.contains("authentication") || t.contains("implement")));
+    }
+
+    #[test]
+    fn test_extract_tags_semantic_knowledge() {
+        let content = "Event sourcing is an architectural pattern where state changes are captured as immutable events. This enables temporal queries, audit trails, and complex domain modeling. Compare with CQRS for read model optimization.";
+        let tags = extract_basic_tags(content);
+        assert!(!tags.is_empty());
+        // Should have architecture/pattern tags
+        assert!(tags.iter().any(|t| t.contains("pattern") || t.contains("architecture") || t.contains("design") || t.contains("event")));
+    }
+
+    #[test]
+    fn test_extract_tags_contextual_background() {
+        let content = "During the sprint planning meeting with the backend team, we discussed migrating from monolithic to microservices. John suggested using Kubernetes for orchestration. Budget constraints mentioned: need cost optimization.";
+        let tags = extract_basic_tags(content);
+        assert!(!tags.is_empty());
+        // Should have collaborative/contextual tags
+        assert!(tags.iter().any(|t| t.contains("kubernetes") || t.contains("microservice") || t.contains("meeting") || t.contains("optimization")));
+    }
+
+    #[test]
+    fn test_tag_diversity_across_domains() {
+        let content_samples = vec![
+            "Docker container orchestration using Kubernetes clusters",
+            "Python machine learning models with TensorFlow",
+            "Database optimization and query performance tuning",
+            "Security authentication and encryption standards",
+            "Testing strategies and continuous integration pipelines",
+        ];
+        
+        let mut all_tags = std::collections::HashSet::new();
+        for content in content_samples {
+            let tags = extract_basic_tags(content);
+            for tag in tags {
+                all_tags.insert(tag);
+            }
+        }
+        
+        // Should have meaningful diversity across domains
+        assert!(all_tags.len() >= 8, "Expected at least 8 diverse tags, got {}", all_tags.len());
+    }
+
+    #[test]
+    fn test_extract_tags_conceptual_frameworks() {
+        let content = "The SOLID principles (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion) guide object-oriented design. These are foundational concepts for writing maintainable code.";
+        let tags = extract_basic_tags(content);
+        assert!(!tags.is_empty());
+        // Should recognize design concepts
+        assert!(tags.iter().any(|t| t.contains("design") || t.contains("pattern") || t.contains("solid") || t.contains("principle")));
+    }
+
+    #[test]
+    fn test_memory_type_prompts_specificity() {
+        // Verify each prompt has specific guidance
+        let episodic = prompts::get_prompt_for_type(&crate::models::MemoryType::Episodic);
+        let semantic = prompts::get_prompt_for_type(&crate::models::MemoryType::Semantic);
+        let procedural = prompts::get_prompt_for_type(&crate::models::MemoryType::Procedural);
+        
+        // Episodic should mention time/date/event context
+        assert!(episodic.to_lowercase().contains("when") || episodic.to_lowercase().contains("date") || episodic.to_lowercase().contains("event"));
+        
+        // Semantic should mention concepts/knowledge
+        assert!(semantic.to_lowercase().contains("concept") || semantic.to_lowercase().contains("definition") || semantic.to_lowercase().contains("knowledge"));
+        
+        // Procedural should mention steps/process
+        assert!(procedural.to_lowercase().contains("step") || procedural.to_lowercase().contains("process") || procedural.to_lowercase().contains("how"));
+    }
 }

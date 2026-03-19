@@ -60,9 +60,16 @@ impl GgufQueryExpander {
         let prompt = Self::prepare_prompt(query);
         tracing::debug!("GGUF: Prompt prepared, length={}", prompt.len());
 
-        // Run inference
-        let output = engine.generate(&prompt, 100)
-            .context("GGUF inference failed")?;
+        // Run inference - spawn on blocking thread to allow timeout
+        // The tokio::task::spawn_blocking will properly allow timeouts to interrupt
+        let output = tokio::task::spawn_blocking(move || {
+            tracing::debug!("GGUF: Starting inference (on blocking thread)");
+            engine.generate(&prompt, 100)
+                .context("GGUF inference failed")
+        })
+        .await
+        .context("GGUF inference task panicked")?
+        .context("GGUF inference failed")?;
 
         tracing::debug!("GGUF: Inference complete, output length={}", output.len());
 

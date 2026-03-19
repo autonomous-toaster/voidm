@@ -230,7 +230,7 @@ fn default_query_expansion_model() -> String {
 }
 
 fn default_query_expansion_timeout_ms() -> u64 {
-    300
+    5000  // 5 seconds - GGUF models need this much time for inference
 }
 
 /// Intent-aware query expansion configuration.

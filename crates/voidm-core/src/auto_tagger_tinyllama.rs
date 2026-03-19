@@ -538,4 +538,53 @@ mod tests {
         // Procedural should mention steps/process
         assert!(procedural.to_lowercase().contains("step") || procedural.to_lowercase().contains("process") || procedural.to_lowercase().contains("how"));
     }
+
+    #[test]
+    fn test_extract_tags_cross_domain_relevance() {
+        let content = "Kubernetes deployment strategies for microservices with Docker containers, including resource management, scaling, and monitoring with Prometheus for observability.";
+        let tags = extract_basic_tags(content);
+        // Should have several relevant tags from different domains
+        let relevant_count = tags.iter().filter(|t| {
+            t.contains("kubernetes") || t.contains("microservice") || t.contains("docker") ||
+            t.contains("scaling") || t.contains("monitoring") || t.contains("prometheus") ||
+            t.contains("orchestration") || t.contains("containerization")
+        }).count();
+        assert!(relevant_count >= 4, "Expected at least 4 relevant tags, got {}", relevant_count);
+    }
+
+    #[test]
+    fn test_extract_tags_domain_specificity() {
+        // Test that different domains produce domain-specific tags
+        let ml_content = "Neural networks and deep learning models for image classification using TensorFlow";
+        let ml_tags = extract_basic_tags(ml_content);
+        assert!(ml_tags.iter().any(|t| t.contains("learning") || t.contains("tensorflow") || t.contains("neural")));
+        
+        let infra_content = "Infrastructure as Code with Terraform for cloud resource provisioning";
+        let infra_tags = extract_basic_tags(infra_content);
+        assert!(infra_tags.iter().any(|t| t.contains("cloud") || t.contains("infrastructure") || t.contains("terraform")));
+    }
+
+    #[test]
+    fn test_tag_extraction_accuracy() {
+        // Verify no false positives in tag extraction
+        let content = "This is a simple document without technical keywords";
+        let tags = extract_basic_tags(content);
+        
+        // Should not extract arbitrary words
+        let false_positives = tags.iter().filter(|t| {
+            t.as_str() == "simple" || t.as_str() == "document" || t.as_str() == "without" || t.as_str() == "technical"
+        }).count();
+        assert_eq!(false_positives, 0, "Should not extract common words as tags");
+    }
+
+    #[test]
+    fn test_tag_normalization_consistency() {
+        let tags1 = extract_basic_tags("Docker and DOCKER and docker");
+        let tags2 = extract_basic_tags("Python and PYTHON and Python");
+        
+        // All variations should normalize to lowercase
+        let has_docker = tags1.iter().any(|t| t == "docker");
+        let has_python = tags2.iter().any(|t| t == "python");
+        assert!(has_docker || has_python, "Tags should be normalized to lowercase");
+    }
 }

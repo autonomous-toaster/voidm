@@ -141,6 +141,14 @@ Context: Monitoring observability
 Query: metrics
 Related: logging, traces, dashboards, alerting, telemetry, incident response, performance
 
+Context: Data engineering
+Query: pipeline
+Related: ETL, transformation, validation, aggregation, warehousing, batch, streaming
+
+Context: API management
+Query: versioning
+Related: compatibility, deprecation, gateway, rate limiting, documentation, schemas, standards
+
 Context: {intent}
 Query: {query}
 Related:"#;

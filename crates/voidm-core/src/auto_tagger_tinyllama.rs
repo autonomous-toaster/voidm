@@ -587,4 +587,90 @@ mod tests {
         let has_python = tags2.iter().any(|t| t == "python");
         assert!(has_docker || has_python, "Tags should be normalized to lowercase");
     }
+
+    #[test]
+    fn test_merge_tags_maintains_user_priority() {
+        let auto_tags = vec!["auto-tag1".to_string(), "shared".to_string()];
+        let user_tags = vec!["user-tag1".to_string(), "shared".to_string()];
+        let config = crate::config::Config::default();
+        
+        let merged = merge_tags(&auto_tags, &user_tags, &config);
+        // User tags should come first
+        assert_eq!(merged[0], "user-tag1");
+        // Shared tag should not be duplicated
+        assert_eq!(merged.iter().filter(|t| t.as_str() == "shared").count(), 1);
+    }
+
+    #[test]
+    fn test_tag_limit_enforcement() {
+        let mut many_tags = Vec::new();
+        for i in 0..30 {
+            many_tags.push(format!("tag-{}", i));
+        }
+        let config = crate::config::Config::default();
+        let merged = merge_tags(&many_tags, &[], &config);
+        // Should not exceed max tags (15)
+        assert!(merged.len() <= 15, "Merged tags should not exceed limit, got {}", merged.len());
+    }
+
+    #[test]
+    fn test_episodic_tag_extraction() {
+        let episodic_content = "During the meeting on March 19, 2026, we discussed Docker deployment with the team. John suggested Kubernetes for orchestration. Location: San Francisco office.";
+        let tags = extract_basic_tags(episodic_content);
+        
+        // Should have temporal/event tags
+        assert!(tags.iter().any(|t| t.contains("meeting") || t.contains("discussed") || t.contains("kubernetes") || t.contains("docker")));
+    }
+
+    #[test]
+    fn test_semantic_tag_extraction() {
+        let semantic_content = "Event Sourcing is a pattern where all changes to application state are stored as immutable events. This provides a complete audit trail and enables temporal queries through event replay.";
+        let tags = extract_basic_tags(semantic_content);
+        
+        // Should have concept/knowledge tags
+        assert!(tags.iter().any(|t| t.contains("pattern") || t.contains("design") || t.contains("event")));
+    }
+
+    #[test]
+    fn test_output_parsing_robustness() {
+        // Test various output formats
+        let format1 = "Tags: python, docker, kubernetes";
+        let format2 = "python, docker, kubernetes";  // No prefix
+        let format3 = "Tags: python\ndocker\nkubernetes";  // Multiline
+        
+        let tags1 = parse_tags_from_output(format1).unwrap_or_default();
+        let tags2 = parse_tags_from_output(format2).unwrap_or_default();
+        let tags3 = parse_tags_from_output(format3).unwrap_or_default();
+        
+        assert!(!tags1.is_empty(), "Should parse 'Tags:' format");
+        assert!(!tags2.is_empty(), "Should parse format without prefix");
+        assert!(!tags3.is_empty(), "Should parse multiline format");
+    }
+
+    #[test]
+    fn test_procedural_tag_extraction() {
+        let procedural_content = "To set up a Kubernetes cluster: 1) Install kubectl and helm 2) Create namespaces 3) Deploy services 4) Configure networking 5) Set up monitoring with Prometheus. Each step requires careful configuration.";
+        let tags = extract_basic_tags(procedural_content);
+        
+        // Should have procedural/process tags
+        assert!(tags.iter().any(|t| t.contains("kubernetes") || t.contains("helm") || t.contains("setup") || t.contains("configure")));
+    }
+
+    #[test]
+    fn test_contextual_tag_extraction() {
+        let contextual_content = "Sprint planning meeting: Backend team discussed microservices migration from monolith to cloud-native architecture. Budget constraints: $50k/month. Timeline: Q2 2026. Dependencies: DevOps team approval needed.";
+        let tags = extract_basic_tags(contextual_content);
+        
+        // Should have contextual/background tags
+        assert!(tags.iter().any(|t| t.contains("microservice") || t.contains("cloud") || t.contains("architecture") || t.contains("meeting")));
+    }
+
+    #[test]
+    fn test_conceptual_tag_extraction() {
+        let conceptual_content = "The Actor Model is a concurrent computation model where actors are independent entities that communicate through asynchronous message passing. Key concepts: immutability, isolation, location transparency. Implementation frameworks: Akka, Erlang.";
+        let tags = extract_basic_tags(conceptual_content);
+        
+        // Should have framework/concept tags
+        assert!(tags.iter().any(|t| t.contains("actor") || t.contains("model") || t.contains("concept") || t.contains("akka")));
+    }
 }

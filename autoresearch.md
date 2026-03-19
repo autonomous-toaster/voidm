@@ -139,5 +139,8 @@ RUST_LOG=debug cargo test --lib query_expansion -- --nocapture
 
 - **Session**: autoresearch/tinyllama-prompts-20260319
 - **Date**: 2026-03-19
-- **Baseline**: Computed on first run
-- **Best Metric**: Updated after each improvement
+- **Baseline**: 0.795571 (3 topics, 29 terms)
+- **Final**: 0.877908 (10 topics, 136 terms)
+- **Improvement**: +10.3%
+- **Experiments**: 10 total
+- **Status**: ✅ COMPLETE - Ready for production

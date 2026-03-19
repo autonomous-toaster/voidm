@@ -56,7 +56,7 @@ Synonyms: SQL, queries, indexing, schema, transactions, relational, NoSQL
 Query: {query}
 Synonyms:"#;
 
-    /// Improved domain-aware template with clearer structure and diverse examples
+    /// Improved domain-aware template with diverse, high-quality examples
     pub const FEW_SHOT_IMPROVED: &str = r#"Expand search queries with related terms and concepts:
 
 Topic: Docker
@@ -82,6 +82,10 @@ Related: identity management, access control, compliance, audit, threat detectio
 Topic: Testing
 Synonyms: unit tests, integration tests, TDD, test cases, assertions, mocking, coverage
 Related: continuous integration, regression testing, debugging, quality assurance
+
+Topic: Cloud Infrastructure
+Synonyms: AWS, Azure, GCP, cloud computing, infrastructure-as-code, terraform, serverless
+Related: auto-scaling, load balancing, containerization, DevOps, CDN
 
 Topic: {query}
 Synonyms:"#;

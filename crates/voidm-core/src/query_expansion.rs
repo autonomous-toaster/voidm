@@ -34,24 +34,29 @@ use crate::config::QueryExpansionConfig;
 
 /// Prompt templates for query expansion.
 mod prompts {
-    /// Continuation-style template - works with base models like GPT-2
-    /// Mimics the format of lists/catalogs that GPT-2 was trained on
+    /// Continuation-style template - works with base models, expanded with diverse examples
     pub const FEW_SHOT_STRUCTURED: &str = r#"Expand search queries with related terms and synonyms:
 
 Query: web development
-Synonyms: frontend, backend, HTML, CSS, JavaScript, React, frameworks, UI
+Synonyms: frontend, backend, HTML, CSS, JavaScript, React, frameworks, UI, responsive design
 
 Query: Python programming
-Synonyms: Django, Flask, NumPy, machine learning, data science, pandas, scripting
+Synonyms: Django, Flask, NumPy, machine learning, data science, pandas, scripting, libraries
 
 Query: Docker containers
-Synonyms: Kubernetes, orchestration, deployment, microservices, images, registry
+Synonyms: Kubernetes, orchestration, deployment, microservices, images, registry, swarm, scaling
 
 Query: REST API
-Synonyms: HTTP, endpoints, JSON, web services, microservices, OpenAPI
+Synonyms: HTTP, endpoints, JSON, web services, microservices, OpenAPI, schemas, versioning
 
 Query: Database
-Synonyms: SQL, queries, indexing, schema, transactions, relational, NoSQL
+Synonyms: SQL, queries, indexing, schema, transactions, relational, NoSQL, replication
+
+Query: Cloud computing
+Synonyms: AWS, Azure, GCP, infrastructure, serverless, scaling, deployment, containers
+
+Query: Machine learning
+Synonyms: models, neural networks, training, inference, classification, regression, optimization
 
 Query: {query}
 Synonyms:"#;

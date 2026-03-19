@@ -227,7 +227,21 @@ lex: "#,
 
     /// Check if a model name should use GGUF backend
     pub fn should_use_gguf(model_name: &str) -> bool {
-        model_name.contains("tobil") || model_name.contains("qmd")
+        // DISABLED: GGUF inference is blocking and can't be properly interrupted
+        // The llama_gguf engine runs inference without yielding control,
+        // so timeouts don't work and the CLI hangs indefinitely.
+        //
+        // Users should use tinyllama (ONNX, default) instead.
+        
+        if model_name.contains("tobil") || model_name.contains("qmd") {
+            tracing::warn!(
+                "GGUF query expansion ({}) is disabled. \
+                 Use --query-expand-model tinyllama (default) instead, or \
+                 run voidm with a timeout wrapper.",
+                model_name
+            );
+        }
+        false
     }
 
     /// Get the HuggingFace model ID for the given model name
@@ -250,8 +264,9 @@ mod tests {
 
     #[test]
     fn test_should_use_gguf() {
-        assert!(GgufQueryExpander::should_use_gguf("tobil/qmd-query-expansion-1.7B"));
-        assert!(GgufQueryExpander::should_use_gguf("qmd-something"));
+        // GGUF is now disabled, so all should return false
+        assert!(!GgufQueryExpander::should_use_gguf("tobil/qmd-query-expansion-1.7B"));
+        assert!(!GgufQueryExpander::should_use_gguf("qmd-something"));
         assert!(!GgufQueryExpander::should_use_gguf("tinyllama"));
         assert!(!GgufQueryExpander::should_use_gguf("gpt2-small"));
     }

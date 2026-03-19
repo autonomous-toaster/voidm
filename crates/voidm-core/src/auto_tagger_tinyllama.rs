@@ -673,4 +673,83 @@ mod tests {
         // Should have framework/concept tags
         assert!(tags.iter().any(|t| t.contains("actor") || t.contains("model") || t.contains("concept") || t.contains("akka")));
     }
+
+    #[test]
+    fn test_edge_case_empty_content() {
+        let tags = extract_basic_tags("");
+        // Empty content should produce empty tags (not crash)
+        assert_eq!(tags.len(), 0);
+    }
+
+    #[test]
+    fn test_edge_case_very_long_content() {
+        let long_content = "Docker ".repeat(500) + "Kubernetes Python database";
+        let tags = extract_basic_tags(&long_content);
+        // Should handle long content without panic
+        assert!(!tags.is_empty());
+        assert!(tags.iter().any(|t| t.contains("docker") || t.contains("kubernetes")));
+    }
+
+    #[test]
+    fn test_edge_case_special_characters() {
+        let content = "Python@3.9 Rust#1.56 JavaScript$ES2021 with [Docker] and (Kubernetes)";
+        let tags = extract_basic_tags(content);
+        // Should normalize special characters in tags
+        let valid_tags = tags.iter().filter(|t| {
+            t.chars().all(|c| c.is_alphanumeric() || c == '-')
+        }).count();
+        // Most tags should be valid after normalization
+        assert!(valid_tags > 0);
+    }
+
+    #[test]
+    fn test_edge_case_unicode_content() {
+        let content = "使用 Docker 和 Kubernetes 来部署 Python 应用程序";
+        let tags = extract_basic_tags(content);
+        // Should extract English technical terms even in mixed unicode content
+        assert!(!tags.is_empty());
+    }
+
+    #[test]
+    fn test_all_tech_keywords_coverage() {
+        // Verify main tech keywords are recognized
+        let content = "docker kubernetes python rust javascript react database sql api rest microservice cloud machine-learning deep-learning testing ci-cd security encryption monitoring logging";
+        let tags = extract_basic_tags(content);
+        
+        // Should recognize most common tech terms
+        let recognized = tags.iter().filter(|t| {
+            t.contains("docker") || t.contains("kubernetes") || t.contains("python") ||
+            t.contains("api") || t.contains("database") || t.contains("cloud") ||
+            t.contains("security") || t.contains("monitoring")
+        }).count();
+        assert!(recognized >= 6, "Should recognize at least 6 common tech terms, got {}", recognized);
+    }
+
+    #[test]
+    fn test_tag_parsing_empty_output() {
+        let empty_outputs = vec!["", "Tags: ", "Tags:\n"];
+        for output in empty_outputs {
+            let result = parse_tags_from_output(output);
+            // Should handle gracefully without panic
+            if let Ok(tags) = result {
+                // Tags should be minimal (0-1 for mostly empty output)
+                assert!(tags.len() <= 1, "Empty output should produce minimal tags, got {}", tags.len());
+            }
+        }
+    }
+
+    #[test]
+    fn test_integration_memory_flow() {
+        // Simulates a complete workflow: extract → validate → merge
+        let content = "Docker deployment with Kubernetes orchestration strategy";
+        let auto_tags = extract_basic_tags(content);
+        let validated = validate_tags(&auto_tags);
+        let config = crate::config::Config::default();
+        let user_tags = vec!["devops".to_string(), "infrastructure".to_string()];
+        let final_merged = merge_tags(&validated, &user_tags, &config);
+        
+        // Complete workflow should produce valid tags
+        assert!(!final_merged.is_empty());
+        assert!(final_merged.iter().any(|t| t == "devops" || t == "infrastructure"));
+    }
 }

@@ -18,6 +18,7 @@ pub mod query_expansion;
 pub mod gguf_query_expander;
 pub mod gguf_model_cache;
 pub mod auto_tagger;
+pub mod auto_tagger_tinyllama;
 pub mod tag_linker;
 pub mod redactor;
 pub mod graph_retrieval;

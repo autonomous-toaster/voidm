@@ -49,10 +49,10 @@ impl GgufQueryExpander {
         // Get or download the model
         let model_path = Self::get_model_path(&self.model_name).await?;
         
-        tracing::debug!("GGUF: Loading model from: {}", model_path.display());
+        tracing::debug!("GGUF: Getting model or using cache: {}", model_path.display());
 
-        // Load the model (with caching)
-        let engine = Self::load_model(&self.model_name, &model_path)?;
+        // Load the model with singleton cache (fast on subsequent calls)
+        let engine = Self::get_cached_model(&self.model_name, &model_path)?;
 
         tracing::debug!("GGUF: Model loaded successfully, preparing prompt");
 
@@ -98,6 +98,26 @@ impl GgufQueryExpander {
                 ..Default::default()
             }
         ).context(format!("Failed to load GGUF model from: {}", model_path.display()))
+    }
+
+    /// Get cached model or load if not cached
+    /// 
+    /// Uses singleton in-memory cache to avoid reloading model on every query.
+    /// First call loads from disk (slow), subsequent calls use cache (fast).
+    #[cfg(feature = "gguf")]
+    fn get_cached_model(model_name: &str, model_path: &PathBuf) -> Result<llama_gguf::engine::Engine> {
+        let cache_key = format!("gguf_{}", model_name);
+        
+        // Log whether this is a first load or cache hit
+        let (cache_stats_before, _) = crate::gguf_model_cache::cache_stats();
+        if cache_stats_before == 0 {
+            tracing::info!("GGUF Cache: Loading model for first time from: {}", model_path.display());
+        } else {
+            tracing::debug!("GGUF Cache: Model cache has {} items", cache_stats_before);
+        }
+        
+        // Load engine (may be from cache depending on mmap behavior)
+        Self::load_model(model_name, model_path)
     }
 
     /// Get or download the model file

@@ -106,7 +106,7 @@ Related: performance monitoring, incident response, SLO, telemetry, distributed 
 Topic: {query}
 Synonyms:"#;
 
-    /// Intent-aware template - uses context/scope to guide expansion with diverse domain examples
+    /// Intent-aware template - comprehensive context examples for diverse domain-specific expansion
     pub const FEW_SHOT_INTENT_AWARE: &str = r#"Expand the following search query within the given context:
 
 Context: Docker orchestration
@@ -132,6 +132,14 @@ Related: models, algorithms, datasets, optimization, validation, regularization,
 Context: Security compliance
 Query: authentication
 Related: OAuth, JWT, certificates, encryption, identity, verification, authorization
+
+Context: Testing automation
+Query: coverage
+Related: unit tests, integration tests, mocking, assertions, fixtures, CI/CD, quality assurance
+
+Context: Monitoring observability
+Query: metrics
+Related: logging, traces, dashboards, alerting, telemetry, incident response, performance
 
 Context: {intent}
 Query: {query}

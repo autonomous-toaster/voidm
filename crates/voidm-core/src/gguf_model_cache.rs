@@ -122,8 +122,8 @@ mod tests {
         let model1 = vec![1; 100];
         let model2 = vec![2; 200];
         
-        get_or_load_model("model1", model1).unwrap();
-        get_or_load_model("model2", model2).unwrap();
+        get_or_load_model("model_multi_1_unique", model1).unwrap();
+        get_or_load_model("model_multi_2_unique", model2).unwrap();
         
         let (models, bytes) = cache_stats();
         assert_eq!(models, 2);

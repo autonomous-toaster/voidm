@@ -73,7 +73,7 @@ Synonyms: Django, Flask, NumPy, machine learning, pandas, data science, PyPI, re
 Related: scripting, automation, backend development, scientific computing, environments, packaging
 
 Topic: REST API
-Synonyms: HTTP, endpoints, JSON, microservices, web services, OpenAPI, schemas, standards, routes, HAL
+Synonyms: HTTP, endpoints, JSON, web services, remote invocation, OpenAPI, schemas, standards, routes, HAL
 Related: GraphQL, JSON-RPC, API gateway, versioning, documentation, permission models, caching
 
 Topic: Database

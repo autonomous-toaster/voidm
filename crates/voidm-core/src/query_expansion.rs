@@ -61,7 +61,7 @@ Synonyms: models, neural networks, training, inference, classification, regressi
 Query: {query}
 Synonyms:"#;
 
-    /// Improved domain-aware template with diverse, high-quality examples
+    /// Improved domain-aware template with comprehensive, high-quality examples
     pub const FEW_SHOT_IMPROVED: &str = r#"Expand search queries with related terms and concepts:
 
 Topic: Docker
@@ -69,32 +69,36 @@ Synonyms: containers, Kubernetes, images, registry, orchestration, deployment, c
 Related: microservices, containerization, compose, scaling, cluster management
 
 Topic: Python
-Synonyms: Django, Flask, NumPy, machine learning, pandas, data science, PyPI
+Synonyms: Django, Flask, NumPy, machine learning, pandas, data science, PyPI, requests
 Related: scripting, automation, backend development, scientific computing, virtual environments
 
 Topic: REST API
-Synonyms: HTTP, endpoints, JSON, microservices, web services, OpenAPI, schemas
-Related: GraphQL, JSON-RPC, API gateway, versioning, documentation, authentication
+Synonyms: HTTP, endpoints, JSON, microservices, web services, OpenAPI, schemas, standards
+Related: GraphQL, JSON-RPC, API gateway, versioning, documentation, authentication, rate-limiting
 
 Topic: Database
-Synonyms: SQL, NoSQL, PostgreSQL, MongoDB, indexing, queries, transactions, schemas
-Related: ACID, normalization, data warehousing, time-series, replication, backup
+Synonyms: SQL, NoSQL, PostgreSQL, MongoDB, indexing, queries, transactions, schemas, tables
+Related: ACID, normalization, data warehousing, time-series, replication, backup, partitioning
 
 Topic: Security
-Synonyms: authentication, authorization, encryption, OAuth, JWT, certificates, SSL/TLS
-Related: identity management, access control, compliance, audit, threat detection
+Synonyms: authentication, authorization, encryption, OAuth, JWT, certificates, SSL/TLS, HTTPS
+Related: identity management, access control, compliance, audit, threat detection, vulnerability
 
 Topic: Testing
-Synonyms: unit tests, integration tests, TDD, test cases, assertions, mocking, coverage
-Related: continuous integration, regression testing, debugging, quality assurance
+Synonyms: unit tests, integration tests, TDD, test cases, assertions, mocking, coverage, quality
+Related: continuous integration, regression testing, debugging, quality assurance, performance
 
 Topic: Cloud Infrastructure
-Synonyms: AWS, Azure, GCP, cloud computing, infrastructure-as-code, terraform, serverless
-Related: auto-scaling, load balancing, containerization, DevOps, CDN
+Synonyms: AWS, Azure, GCP, cloud computing, infrastructure-as-code, terraform, serverless, FaaS
+Related: auto-scaling, load balancing, containerization, DevOps, CDN, networking, storage
 
 Topic: Machine Learning
-Synonyms: neural networks, deep learning, models, training, inference, TensorFlow, PyTorch
-Related: computer vision, NLP, classification, regression, feature engineering, optimization
+Synonyms: neural networks, deep learning, models, training, inference, TensorFlow, PyTorch, algorithms
+Related: computer vision, NLP, classification, regression, feature engineering, optimization, datasets
+
+Topic: Monitoring & Observability
+Synonyms: logging, metrics, traces, monitoring, alerting, dashboards, prometheus, grafana, elk
+Related: performance monitoring, debugging, incident response, SLO, observability, telemetry
 
 Topic: {query}
 Synonyms:"#;

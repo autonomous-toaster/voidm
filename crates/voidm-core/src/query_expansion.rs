@@ -394,16 +394,21 @@ impl QueryExpander {
         tracing::info!("Query expansion: Starting basic expansion for query: '{}'", query);
         tracing::debug!("Query expansion config: enabled={}, model={}", self.config.enabled, self.config.model);
         
+        // Track timing
+        let start = std::time::Instant::now();
+        
         // Generate expansion - no fallback, propagate errors
         let result = self.expand_with_timeout(query).await;
         
+        let elapsed = start.elapsed();
+        
         match &result {
             Ok(expanded) => {
-                tracing::info!("Query expansion: Successfully expanded query");
+                tracing::info!("Query expansion: Successfully expanded query in {:.0}ms", elapsed.as_millis());
                 tracing::debug!("Query expansion: Original='{}' | Expanded='{}'", query, expanded);
             },
             Err(e) => {
-                tracing::warn!("Query expansion: Failed to expand query: {}", e);
+                tracing::warn!("Query expansion: Failed to expand query in {:.0}ms: {}", elapsed.as_millis(), e);
             }
         }
         
@@ -424,15 +429,17 @@ impl QueryExpander {
         tracing::info!("Query expansion (grammar-guided): Starting for query: '{}'", query);
         tracing::debug!("Query expansion: Using GBNF grammar for structured output");
         
+        let start = std::time::Instant::now();
         let result = self.expand_with_timeout_and_grammar(query).await;
+        let elapsed = start.elapsed();
         
         match &result {
             Ok(expanded) => {
-                tracing::info!("Query expansion (grammar-guided): Successfully expanded");
+                tracing::info!("Query expansion (grammar-guided): Successfully expanded in {:.0}ms", elapsed.as_millis());
                 tracing::debug!("Query expansion (grammar-guided): Result='{}'", expanded);
             },
             Err(e) => {
-                tracing::warn!("Query expansion (grammar-guided): Failed: {}", e);
+                tracing::warn!("Query expansion (grammar-guided): Failed in {:.0}ms: {}", elapsed.as_millis(), e);
             }
         }
         
@@ -464,15 +471,17 @@ impl QueryExpander {
             self.config.intent.default_intent
         );
 
+        let start = std::time::Instant::now();
         let result = self.expand_with_timeout_and_intent(query, intent).await;
+        let elapsed = start.elapsed();
         
         match &result {
             Ok(expanded) => {
-                tracing::info!("Query expansion (intent-aware): Successfully expanded");
+                tracing::info!("Query expansion (intent-aware): Successfully expanded in {:.0}ms", elapsed.as_millis());
                 tracing::debug!("Query expansion (intent-aware): Result='{}'", expanded);
             },
             Err(e) => {
-                tracing::warn!("Query expansion (intent-aware): Failed: {}", e);
+                tracing::warn!("Query expansion (intent-aware): Failed in {:.0}ms: {}", elapsed.as_millis(), e);
             }
         }
         

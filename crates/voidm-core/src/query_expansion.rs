@@ -34,7 +34,7 @@ use crate::config::QueryExpansionConfig;
 
 /// Prompt templates for query expansion.
 mod prompts {
-    /// Continuation-style template - works with base models, expanded with diverse examples
+    /// Continuation-style template with expanded examples and concept grouping
     pub const FEW_SHOT_STRUCTURED: &str = r#"Expand search queries with related terms and synonyms:
 
 Query: web development
@@ -47,16 +47,19 @@ Query: Docker containers
 Synonyms: Kubernetes, orchestration, deployment, microservices, images, registry, swarm, scaling
 
 Query: REST API
-Synonyms: HTTP, endpoints, JSON, web services, microservices, OpenAPI, schemas, versioning
+Synonyms: HTTP, endpoints, JSON, web services, remote invocation, OpenAPI, schemas, versioning
 
 Query: Database
 Synonyms: SQL, queries, indexing, schema, transactions, relational, NoSQL, replication
 
 Query: Cloud computing
-Synonyms: AWS, Azure, GCP, infrastructure, serverless, scaling, deployment, containers
+Synonyms: AWS, Azure, GCP, infrastructure, serverless, scaling, deployment, provisioning
 
 Query: Machine learning
 Synonyms: models, neural networks, training, inference, classification, regression, optimization
+
+Query: Security
+Synonyms: authentication, authorization, encryption, OAuth, JWT, certificates, SSL/TLS, HTTPS
 
 Query: {query}
 Synonyms:"#;
@@ -103,20 +106,28 @@ Related: performance monitoring, incident response, SLO, telemetry, distributed 
 Topic: {query}
 Synonyms:"#;
 
-    /// Intent-aware template - uses context/scope to guide expansion
+    /// Intent-aware template - uses context/scope to guide expansion with diverse domain examples
     pub const FEW_SHOT_INTENT_AWARE: &str = r#"Expand the following search query within the given context:
 
 Context: Docker orchestration
 Query: containers
-Related terms: Kubernetes, orchestration, cluster, deployment, services, swarm
+Related: Kubernetes, orchestration, cluster, deployment, services, swarm, scaling
 
 Context: Python backend
 Query: web frameworks
-Related terms: Django, Flask, FastAPI, async, HTTP, REST, endpoints
+Related: Django, Flask, FastAPI, async, HTTP, REST, endpoints, routing
+
+Context: Database performance
+Query: optimization
+Related: indexing, caching, partitioning, normalization, query plans, execution, tuning
+
+Context: Cloud infrastructure
+Query: deployment
+Related: provisioning, infrastructure-as-code, automation, CI/CD, scaling, availability
 
 Context: {intent}
 Query: {query}
-Related terms:"#;
+Related:"#;
 
     /// GBNF grammar for structured synonym output.
     /// Enforces format: "term1, term2, term3"

@@ -328,11 +328,33 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_tags_multiline() {
+        let output = "Some explanation...\nTags: docker, kubernetes, containers\nMore text";
+        let tags = parse_tags_from_output(output).unwrap();
+        assert_eq!(tags.len(), 3);
+        assert!(tags.contains(&"docker".to_string()));
+    }
+
+    #[test]
     fn test_validate_tags() {
         let tags = vec![
             "valid-tag".to_string(),
             "x".to_string(), // too short
             "123".to_string(), // pure numbers
+            "another-valid".to_string(),
+        ];
+        let validated = validate_tags(&tags);
+        assert_eq!(validated.len(), 2);
+        assert!(validated.contains(&"valid-tag".to_string()));
+        assert!(validated.contains(&"another-valid".to_string()));
+    }
+
+    #[test]
+    fn test_validate_tags_filters_invalid_chars() {
+        let tags = vec![
+            "valid-tag".to_string(),
+            "has@invalid".to_string(),
+            "has!mark".to_string(),
         ];
         let validated = validate_tags(&tags);
         assert_eq!(validated.len(), 1);
@@ -347,6 +369,13 @@ mod tests {
     }
 
     #[test]
+    fn test_truncate_content_short() {
+        let content = "short";
+        let truncated = truncate_content(&content, 1000);
+        assert_eq!(truncated, "short");
+    }
+
+    #[test]
     fn test_merge_tags() {
         let auto_tags = vec!["auto1".to_string(), "auto2".to_string()];
         let user_tags = vec!["user1".to_string(), "user2".to_string()];
@@ -354,6 +383,82 @@ mod tests {
 
         let merged = merge_tags(&auto_tags, &user_tags, &config);
         assert_eq!(merged.len(), 4);
-        assert!(merged[0] == "user1" || merged[0] == "user2"); // user tags come first
+        assert!(merged[0] == "user1" || merged[0] == "user2");
+    }
+
+    #[test]
+    fn test_merge_tags_deduplicates() {
+        let auto_tags = vec!["auto1".to_string(), "common".to_string()];
+        let user_tags = vec!["user1".to_string(), "common".to_string()];
+        let config = crate::config::Config::default();
+
+        let merged = merge_tags(&auto_tags, &user_tags, &config);
+        // Should have 3 tags (common only once), but user tags come first
+        assert!(merged.len() <= 3);
+        assert!(merged.contains(&"common".to_string()));
+    }
+
+    #[test]
+    fn test_extract_basic_tags_episodic() {
+        let content = "I attended a Docker conference in San Francisco on March 15, 2024. Met with Alex about containerization strategies.";
+        let tags = extract_basic_tags(content);
+        // Should extract Docker-related tags
+        assert!(!tags.is_empty());
+        assert!(tags.iter().any(|t| t.contains("docker") || t.contains("container")));
+    }
+
+    #[test]
+    fn test_extract_basic_tags_python() {
+        let content = "Python is a powerful programming language used for machine learning with libraries like TensorFlow and PyTorch.";
+        let tags = extract_basic_tags(content);
+        assert!(!tags.is_empty());
+        assert!(tags.iter().any(|t| t.contains("python")));
+    }
+
+    #[test]
+    fn test_extract_basic_tags_api() {
+        let content = "REST APIs use HTTP methods for CRUD operations with JSON payloads. This is important for API design.";
+        let tags = extract_basic_tags(content);
+        assert!(!tags.is_empty());
+        assert!(tags.iter().any(|t| t.contains("api")));
+    }
+
+    #[test]
+    fn test_parse_tags_fallback_format() {
+        // Test without "Tags:" prefix
+        let output = "docker, kubernetes, containers";
+        let tags = parse_tags_from_output(output).unwrap();
+        assert_eq!(tags.len(), 3);
+    }
+
+    #[test]
+    fn test_episodic_prompt_present() {
+        let prompt = prompts::get_prompt_for_type(&crate::models::MemoryType::Episodic);
+        assert!(prompt.contains("Example:"));
+        assert!(prompt.contains("Output:"));
+    }
+
+    #[test]
+    fn test_semantic_prompt_present() {
+        let prompt = prompts::get_prompt_for_type(&crate::models::MemoryType::Semantic);
+        assert!(prompt.contains("Example:"));
+        assert!(prompt.contains("Output:"));
+    }
+
+    #[test]
+    fn test_all_prompts_have_examples() {
+        let memory_types = vec![
+            crate::models::MemoryType::Episodic,
+            crate::models::MemoryType::Semantic,
+            crate::models::MemoryType::Procedural,
+            crate::models::MemoryType::Conceptual,
+            crate::models::MemoryType::Contextual,
+        ];
+        
+        for mem_type in memory_types {
+            let prompt = prompts::get_prompt_for_type(&mem_type);
+            assert!(prompt.contains("Example:"), "Missing example for {:?}", mem_type);
+            assert!(prompt.contains("Output:"), "Missing output spec for {:?}", mem_type);
+        }
     }
 }

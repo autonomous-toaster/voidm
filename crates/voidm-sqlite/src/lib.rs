@@ -55,6 +55,10 @@ pub async fn open_pool(db_path: &Path) -> Result<SqlitePool> {
         .await
         .with_context(|| format!("Cannot open database at {}", db_path.display()))?;
 
+    // Initialize schema
+    let db = SqliteDatabase::new(pool.clone());
+    db.ensure_schema().await?;
+
     Ok(pool)
 }
 
@@ -187,6 +191,20 @@ impl Database for SqliteDatabase {
             .await
             .ok();
 
+            // Vector embeddings table
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS vec_memories (
+                    memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+                    embedding BLOB NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                "#,
+            )
+            .execute(&pool)
+            .await
+            .ok();
+
             Ok(())
         })
     }
@@ -194,64 +212,32 @@ impl Database for SqliteDatabase {
     fn add_memory(
         &self,
         req_json: Value,
-        _config: &Value,
+        config_json: &Value,
     ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
         let pool = self.pool.clone();
+        let config_json = config_json.clone();
         Box::pin(async move {
-            let id = Uuid::new_v4().to_string();
-            let now = Utc::now().to_rfc3339();
+            // Deserialize request and config
+            let req: voidm_core::models::AddMemoryRequest = serde_json::from_value(req_json)
+                .context("Failed to parse AddMemoryRequest")?;
+            let config: voidm_core::Config = serde_json::from_value(config_json)
+                .context("Failed to parse Config")?;
             
-            let content = req_json
-                .get("content")
-                .and_then(|v| v.as_str())
-                .context("Missing content")?;
-            let memory_type = req_json
-                .get("type")
-                .and_then(|v| v.as_str())
-                .or_else(|| req_json.get("memory_type").and_then(|v| v.as_str()))
-                .context("Missing type/memory_type")?;
-            let importance = req_json
-                .get("importance")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(5) as i32;
-            let tags = req_json
-                .get("tags")
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "[]".to_string());
-            let scopes = req_json
-                .get("scopes")
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "[]".to_string());
-            let metadata = req_json
-                .get("metadata")
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "{}".to_string());
-
-            sqlx::query(
-                r#"
-                INSERT INTO memories 
-                (id, type, content, importance, tags, scopes, metadata, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                "#,
-            )
-            .bind(&id)
-            .bind(memory_type)
-            .bind(content)
-            .bind(importance)
-            .bind(&tags)
-            .bind(&scopes)
-            .bind(&metadata)
-            .bind(&now)
-            .bind(&now)
-            .execute(&pool)
-            .await
-            .context("Failed to insert memory")?;
-
-            Ok(json!({
-                "id": id,
-                "conflicts": [],
-                "duplicate_warnings": [],
-                "suggested_links": []
+            // Call the real implementation
+            let resp = voidm_core::crud::add_memory(&pool, req, &config).await?;
+            
+            // Serialize response with proper field name "type" (not "memory_type")
+            Ok(serde_json::json!({
+                "id": resp.id,
+                "type": resp.memory_type,
+                "content": resp.content,
+                "scopes": resp.scopes,
+                "tags": resp.tags,
+                "importance": resp.importance,
+                "created_at": resp.created_at,
+                "quality_score": resp.quality_score,
+                "suggested_links": resp.suggested_links,
+                "duplicate_warning": resp.duplicate_warning,
             }))
         })
     }
@@ -260,28 +246,11 @@ impl Database for SqliteDatabase {
         let pool = self.pool.clone();
         let id = id.to_string();
         Box::pin(async move {
-            let row = sqlx::query(
-                "SELECT id, type, content, importance, tags, scopes, metadata, created_at, updated_at FROM memories WHERE id = ? OR id LIKE ? LIMIT 1",
-            )
-            .bind(&id)
-            .bind(format!("{}%", id))
-            .fetch_optional(&pool)
-            .await
-            .context("Failed to fetch memory")?;
-
-            Ok(row.map(|r| {
-                json!({
-                    "id": r.get::<String, _>("id"),
-                    "type": r.get::<String, _>("type"),
-                    "content": r.get::<String, _>("content"),
-                    "importance": r.get::<i32, _>("importance"),
-                    "tags": serde_json::from_str::<Value>(&r.get::<String, _>("tags")).unwrap_or(Value::Array(vec![])),
-                    "scopes": serde_json::from_str::<Value>(&r.get::<String, _>("scopes")).unwrap_or(Value::Array(vec![])),
-                    "metadata": serde_json::from_str::<Value>(&r.get::<String, _>("metadata")).unwrap_or(Value::Object(Default::default())),
-                    "created_at": r.get::<String, _>("created_at"),
-                    "updated_at": r.get::<String, _>("updated_at")
-                })
-            }))
+            match voidm_core::crud::get_memory(&pool, &id).await {
+                Ok(Some(mem)) => Ok(Some(serde_json::to_value(mem)?)),
+                Ok(None) => Ok(None),
+                Err(e) => Err(e),
+            }
         })
     }
 
@@ -291,28 +260,10 @@ impl Database for SqliteDatabase {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
         let pool = self.pool.clone();
         Box::pin(async move {
-            let limit = limit.unwrap_or(100) as i64;
-            let rows = sqlx::query(
-                "SELECT id, type, content, importance, tags, scopes, metadata, created_at, updated_at FROM memories ORDER BY created_at DESC LIMIT ?",
-            )
-            .bind(limit)
-            .fetch_all(&pool)
-            .await
-            .context("Failed to fetch memories")?;
-
-            Ok(rows.iter().map(|r| {
-                json!({
-                    "id": r.get::<String, _>("id"),
-                    "type": r.get::<String, _>("type"),
-                    "content": r.get::<String, _>("content"),
-                    "importance": r.get::<i32, _>("importance"),
-                    "tags": serde_json::from_str::<Value>(&r.get::<String, _>("tags")).unwrap_or(Value::Array(vec![])),
-                    "scopes": serde_json::from_str::<Value>(&r.get::<String, _>("scopes")).unwrap_or(Value::Array(vec![])),
-                    "metadata": serde_json::from_str::<Value>(&r.get::<String, _>("metadata")).unwrap_or(Value::Object(Default::default())),
-                    "created_at": r.get::<String, _>("created_at"),
-                    "updated_at": r.get::<String, _>("updated_at")
-                })
-            }).collect())
+            match voidm_core::crud::list_memories(&pool, None, None, limit.unwrap_or(100)).await {
+                Ok(mems) => Ok(mems.into_iter().map(|m| serde_json::to_value(m).unwrap_or(Value::Null)).collect()),
+                Err(e) => Err(e),
+            }
         })
     }
 
@@ -320,14 +271,7 @@ impl Database for SqliteDatabase {
         let pool = self.pool.clone();
         let id = id.to_string();
         Box::pin(async move {
-            let result = sqlx::query("DELETE FROM memories WHERE id = ? OR id LIKE ?")
-                .bind(&id)
-                .bind(format!("{}%", id))
-                .execute(&pool)
-                .await
-                .context("Failed to delete memory")?;
-
-            Ok(result.rows_affected() > 0)
+            voidm_core::crud::delete_memory(&pool, &id).await
         })
     }
 

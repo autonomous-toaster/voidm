@@ -97,7 +97,7 @@ pub struct SearchArgs {
     pub verbose: bool,
 }
 
-pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+pub async fn run(args: SearchArgs, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, config: &Config, json: bool) -> Result<()> {
     let mode: SearchMode = args.mode.parse()?;
 
     // Apply CLI reranker overrides to config
@@ -205,11 +205,8 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         intent: args.intent.clone(),
     };
 
-    let db = voidm_core::db::sqlite::SqliteDatabase {
-        pool: pool.clone(),
-    };
     let resp = search(
-        &db,
+        db.as_ref(),
         &opts,
         &config.embeddings.model,
         config.embeddings.enabled,

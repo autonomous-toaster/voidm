@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{crud, resolve_id_sqlite};
+use voidm_core::{crud, crud_trait};
 
 #[derive(Args)]
 pub struct GetArgs {
@@ -9,8 +9,8 @@ pub struct GetArgs {
     pub id: String,
 }
 
-pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
-    let id = match resolve_id_sqlite(pool, &args.id).await {
+pub async fn run(args: GetArgs, db: &std::sync::Arc<dyn voidm_db_trait::Database>, _pool: &sqlx::SqlitePool, json: bool) -> Result<()> {
+    let id = match crud::resolve_id(db.as_ref(), &args.id).await {
         Ok(id) => id,
         Err(e) => {
             if json {
@@ -21,7 +21,7 @@ pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
             std::process::exit(1);
         }
     };
-    match crud::get_memory(pool, &id).await? {
+    match crud_trait::get_memory(db, &id).await? {
         None => {
             if json {
                 println!("{}", serde_json::json!({ "error": format!("Memory '{}' not found", id), "id": id }));

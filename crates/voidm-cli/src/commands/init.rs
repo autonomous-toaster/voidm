@@ -13,8 +13,7 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
     use voidm_core::reranker;
     #[cfg(feature = "ner")]
     use voidm_core::ner;
-    #[cfg(feature = "nli")]
-    use voidm_core::nli;
+    use voidm_nli as nli;
     #[cfg(feature = "query-expansion")]
     use voidm_core::query_expansion;
 

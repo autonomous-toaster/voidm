@@ -1,12 +1,14 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
+use std::sync::Arc;
 
 mod commands;
 mod output;
 mod instructions;
 
-use voidm_core::{Config, open_pool};
+use voidm_core::Config;
+use voidm_sqlite::open_pool;
 
 #[derive(Parser)]
 #[command(name = "voidm", about = "Local-first memory tool for LLM agents", version)]
@@ -181,6 +183,7 @@ async fn run(cli: Cli) -> Result<()> {
     let config = Config::load();
     let db_path = config.db_path(cli.db.as_deref());
     let pool = open_pool(&db_path).await?;
+    let db = Arc::new(voidm_sqlite::SqliteDatabase::new(pool.clone())) as Arc<dyn voidm_db_trait::Database>;
 
     // Run migrations
     voidm_core::migrate::run(&pool).await?;
@@ -191,7 +194,7 @@ async fn run(cli: Cli) -> Result<()> {
     // Check model mismatch
     if config.embeddings.enabled {
         if let Ok(Some((db_model, db_dim))) =
-            voidm_core::crud::check_model_mismatch(&pool, &config.embeddings.model).await
+            voidm_core::crud_trait::check_model_mismatch(&db, &config.embeddings.model).await
         {
             eprintln!(
                 "Warning: configured model '{}' differs from DB model '{}' (dim {}). \
@@ -202,26 +205,26 @@ async fn run(cli: Cli) -> Result<()> {
     }
 
     match cli.command {
-        Commands::Add(args) => commands::add::run(args, &pool, &config, cli.json).await,
-        Commands::Get(args) => commands::get::run(args, &pool, cli.json).await,
-        Commands::Search(args) => commands::search::run(args, &pool, &config, cli.json).await,
-        Commands::List(args) => commands::list::run(args, &pool, &config, cli.json).await,
-        Commands::Delete(args) => commands::delete::run(args, &pool, cli.json).await,
-        Commands::Link(args) => commands::link::run(args, &pool, cli.json).await,
-        Commands::Unlink(args) => commands::unlink::run(args, &pool, cli.json).await,
-        Commands::Graph(cmd) => commands::graph::run(cmd, &pool, cli.json).await,
-        Commands::Ontology(cmd) => commands::ontology::run(cmd, &pool, &config, cli.json).await,
-        Commands::Conflicts(cmd) => commands::conflicts::run(cmd, &pool, cli.json).await,
-        Commands::Scopes(cmd) => commands::scopes::run(cmd, &pool, cli.json).await,
-        Commands::Export(args) => commands::export::run(args, &pool, &config, cli.json).await,
+        Commands::Add(args) => commands::add::run(args, &db, &pool, &config, cli.json).await,
+        Commands::Get(args) => commands::get::run(args, &db, &pool, cli.json).await,
+        Commands::Search(args) => commands::search::run(args, &db, &pool, &config, cli.json).await,
+        Commands::List(args) => commands::list::run(args, &db, &pool, &config, cli.json).await,
+        Commands::Delete(args) => commands::delete::run(args, &db, &pool, cli.json).await,
+        Commands::Link(args) => commands::link::run(args, &db, &pool, cli.json).await,
+        Commands::Unlink(args) => commands::unlink::run(args, &db, &pool, cli.json).await,
+        Commands::Graph(cmd) => commands::graph::run(cmd, &db, &pool, cli.json).await,
+        Commands::Ontology(cmd) => commands::ontology::run(cmd, &db, &pool, &config, cli.json).await,
+        Commands::Conflicts(cmd) => commands::conflicts::run(cmd, &db, &pool, cli.json).await,
+        Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, &pool, cli.json).await,
+        Commands::Export(args) => commands::export::run(args, &db, &pool, &config, cli.json).await,
         Commands::Config(_) => unreachable!(),
-        Commands::Models(cmd) => commands::models::run(cmd, &pool, &config, cli.json).await,
+        Commands::Models(cmd) => commands::models::run(cmd, &db, &pool, &config, cli.json).await,
         Commands::Instructions(_) => unreachable!(),
         Commands::Info(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Migrate(_) => unreachable!(),
         Commands::CheckUpdate(_) => unreachable!(),
-        Commands::Stats(args) => commands::stats::run(args, &pool, &config, cli.json).await,
+        Commands::Stats(args) => commands::stats::run(args, &db, &pool, &config, cli.json).await,
         Commands::Mcp(args) => commands::mcp::run(args, pool, config).await,
     }
 }

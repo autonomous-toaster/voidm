@@ -1,0 +1,17 @@
+[package]
+name = "voidm-neo4j"
+version = "0.1.0"
+edition = "2021"
+description = "Neo4j backend implementation for voidm using the Database trait"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+neo4rs = "0.7"
+voidm-db-trait = { path = "../voidm-db-trait" }
+voidm-core = { path = "../voidm-core" }

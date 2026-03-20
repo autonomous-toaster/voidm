@@ -141,7 +141,7 @@ pub struct Memory {
 }
 
 /// Request to add a memory.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AddMemoryRequest {
     pub id: Option<String>,
     pub content: String,
@@ -154,7 +154,7 @@ pub struct AddMemoryRequest {
 }
 
 /// A link spec from --link id:TYPE or --link id:RELATES_TO:"note"
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LinkSpec {
     pub target_id: String,
     pub edge_type: EdgeType,

@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{Config, crud, models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType}};
+use std::sync::Arc;
+use voidm_core::{Config, crud_trait, models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType}};
+use voidm_db_trait::Database;
 
 #[derive(Args)]
 pub struct AddArgs {
@@ -30,7 +32,7 @@ pub struct AddArgs {
     pub links: Vec<String>,
 }
 
-pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+pub async fn run(args: AddArgs, db: &Arc<dyn Database>, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
     let memory_type: MemoryType = args.r#type.parse()?;
 
     // Validate importance before touching the DB
@@ -65,7 +67,7 @@ pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) 
         links: link_specs,
     };
 
-    let resp = crud::add_memory(pool, req, config).await?;
+    let resp = crud_trait::add_memory(db, req, config).await?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&resp)?);

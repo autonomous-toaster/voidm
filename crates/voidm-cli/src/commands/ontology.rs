@@ -259,7 +259,7 @@ pub struct InstancesArgs {
 
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
-pub async fn run(cmd: OntologyCommands, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+pub async fn run(cmd: OntologyCommands, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, config: &Config, json: bool) -> Result<()> {
     match cmd {
         OntologyCommands::Concept(sub) => run_concept(sub, pool, config, json).await,
         OntologyCommands::Link(args) => run_link(args, pool, json).await,
@@ -623,11 +623,10 @@ async fn run_enrichment_for_concept(
     pool: &SqlitePool,
     config: &Config,
     top_k: usize,
-) -> Vec<voidm_core::nli::RelationSuggestion> {
-    #[cfg(feature = "nli")]
+) -> Vec<voidm_nli::RelationSuggestion> {
     {
         // Ensure model is loaded
-        if let Err(e) = voidm_core::nli::ensure_nli_model().await {
+        if let Err(e) = voidm_nli::ensure_nli_model().await {
             eprintln!("Warning: NLI model load failed: {}. Skipping enrichment.", e);
             return vec![];
         }
@@ -667,7 +666,7 @@ async fn run_enrichment_for_concept(
         scored_candidates.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
         scored_candidates.truncate(top_k);
 
-        voidm_core::nli::suggest_relations(concept_text, &scored_candidates)
+        voidm_nli::suggest_relations(concept_text, &scored_candidates)
     }
     #[cfg(not(feature = "nli"))]
     {
@@ -743,9 +742,9 @@ async fn run_benchmark(json: bool) -> Result<()> {
     #[cfg(feature = "nli")]
     {
         println!("Loading NLI model …");
-        voidm_core::nli::ensure_nli_model().await?;
+        voidm_nli::ensure_nli_model().await?;
 
-        let avg_ms = voidm_core::nli::benchmark_latency(10)?;
+        let avg_ms = voidm_nli::benchmark_latency(10)?;
         if json {
             println!("{}", serde_json::json!({ "avg_ms": avg_ms, "runs": 10 }));
         } else {

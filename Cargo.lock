@@ -4750,12 +4750,16 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "voidm-core",
+ "voidm-db-trait",
  "voidm-embeddings",
  "voidm-graph",
+ "voidm-neo4j",
  "voidm-ner",
+ "voidm-nli",
  "voidm-postgres",
  "voidm-redactor",
  "voidm-reranker",
+ "voidm-sqlite",
 ]
 
 [[package]]
@@ -4843,6 +4847,8 @@ dependencies = [
  "tracing",
  "uuid",
  "voidm-core",
+ "voidm-db-trait",
+ "voidm-sqlite",
 ]
 
 [[package]]
@@ -4857,6 +4863,21 @@ dependencies = [
  "tokenizers 0.22.2",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "voidm-neo4j"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "neo4rs",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+ "voidm-core",
+ "voidm-db-trait",
 ]
 
 [[package]]

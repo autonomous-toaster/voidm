@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::Args;
+use std::sync::Arc;
 use sqlx::SqlitePool;
-use voidm_core::{crud, resolve_id_sqlite};
+use voidm_core::{crud, crud_trait};
+use voidm_db_trait::Database;
 
 #[derive(Args)]
 pub struct DeleteArgs {
@@ -12,8 +14,8 @@ pub struct DeleteArgs {
     pub yes: bool,
 }
 
-pub async fn run(args: DeleteArgs, pool: &SqlitePool, json: bool) -> Result<()> {
-    let id = match resolve_id_sqlite(pool, &args.id).await {
+pub async fn run(args: DeleteArgs, db: &Arc<dyn Database>, _pool: &SqlitePool, json: bool) -> Result<()> {
+    let id = match crud::resolve_id(db.as_ref(), &args.id).await {
         Ok(id) => id,
         Err(e) => {
             if json {
@@ -35,7 +37,7 @@ pub async fn run(args: DeleteArgs, pool: &SqlitePool, json: bool) -> Result<()> 
         }
     }
 
-    let deleted = crud::delete_memory(pool, &id).await?;
+    let deleted = crud_trait::delete_memory(db, &id).await?;
     if deleted {
         if json {
             println!("{}", serde_json::json!({ "deleted": true, "id": id }));

@@ -31,7 +31,7 @@ pub struct ConflictsResolveArgs {
 
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
-pub async fn run(cmd: ConflictsCommands, pool: &SqlitePool, json: bool) -> Result<()> {
+pub async fn run(cmd: ConflictsCommands, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, json: bool) -> Result<()> {
     match cmd {
         ConflictsCommands::List(args) => run_list(args, pool, json).await,
         ConflictsCommands::Resolve(args) => run_resolve(args, pool, json).await,

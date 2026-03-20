@@ -1,7 +1,9 @@
 use anyhow::Result;
+use std::sync::Arc;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{crud, models::EdgeType, resolve_id_sqlite};
+use voidm_core::{crud, crud_trait, models::EdgeType};
+use voidm_db_trait::Database;
 
 #[derive(Args)]
 pub struct UnlinkArgs {
@@ -13,11 +15,11 @@ pub struct UnlinkArgs {
     pub to: String,
 }
 
-pub async fn run(args: UnlinkArgs, pool: &SqlitePool, json: bool) -> Result<()> {
+pub async fn run(args: UnlinkArgs, db: &Arc<dyn Database>, _pool: &SqlitePool, json: bool) -> Result<()> {
     let edge_type: EdgeType = args.rel.parse()?;
-    let from = resolve_id_sqlite(pool, &args.from).await?;
-    let to   = resolve_id_sqlite(pool, &args.to).await?;
-    let removed = crud::unlink_memories(pool, &from, &edge_type, &to).await?;
+    let from = crud::resolve_id(db.as_ref(), &args.from).await?;
+    let to   = crud::resolve_id(db.as_ref(), &args.to).await?;
+    let removed = crud_trait::unlink_memories(db, &from, edge_type.as_str(), &to).await?;
 
     if removed {
         if json {

@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use voidm_core::{Config, crud, models::MemoryEdge, ontology::Concept, db::Database};
+use voidm_core::{Config, crud, crud_trait, models::MemoryEdge, ontology::Concept};
 use std::sync::Arc;
 
 #[derive(Args)]
@@ -54,23 +54,38 @@ pub struct ExportMetadata {
     pub scopes_included: Vec<String>,
 }
 
-pub async fn run(args: ExportArgs, pool: &SqlitePool, _config: &Config, _json: bool) -> Result<()> {
-    let db = Arc::new(voidm_core::db::sqlite::SqliteDatabase { pool: pool.clone() });
+pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, _config: &Config, _json: bool) -> Result<()> {
     
-    let memories = crud::list_memories(pool, args.scope.as_deref(), None, args.limit).await?;
+    let memories = crud_trait::list_memories_filtered(db, args.scope.as_deref(), None, Some(args.limit)).await?;
     let mut edges = Vec::new();
     let mut concepts = Vec::new();
     let mut ontology_edges = Vec::new();
 
     // Get edges if requested or format is "full"
     if args.with_edges || args.format == "full" {
-        edges = db.list_edges().await.unwrap_or_default();
+        let edges_json = db.list_edges().await.unwrap_or_default();
+        for edge_json in edges_json {
+            if let Ok(edge) = serde_json::from_value::<voidm_core::models::MemoryEdge>(edge_json) {
+                edges.push(edge);
+            }
+        }
     }
 
     // Get concepts if requested or format is "full"
     if args.with_concepts || args.format == "full" {
-        concepts = db.list_concepts(args.scope.as_deref(), args.limit).await.unwrap_or_default();
-        ontology_edges = db.list_ontology_edges().await.unwrap_or_default();
+        let concepts_json = db.list_concepts(args.scope.as_deref(), args.limit).await.unwrap_or_default();
+        for concept_json in concepts_json {
+            if let Ok(concept) = serde_json::from_value::<voidm_core::ontology::Concept>(concept_json) {
+                concepts.push(concept);
+            }
+        }
+        
+        let onto_edges_json = db.list_ontology_edges().await.unwrap_or_default();
+        for edge_json in onto_edges_json {
+            if let Ok(edge) = serde_json::from_value::<voidm_core::models::OntologyEdgeForMigration>(edge_json) {
+                ontology_edges.push(edge);
+            }
+        }
     }
 
     let content = match args.format.as_str() {

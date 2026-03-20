@@ -36,7 +36,7 @@ pub fn run_list(json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn run(cmd: ModelsCommands, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+pub async fn run(cmd: ModelsCommands, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, config: &Config, json: bool) -> Result<()> {
     match cmd {
         ModelsCommands::List => run_list(json),
         ModelsCommands::Download { model } => {

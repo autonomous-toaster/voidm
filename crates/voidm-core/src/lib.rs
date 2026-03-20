@@ -1,19 +1,19 @@
+// Simple compatibility type for DbPool
+pub type DbPool = std::sync::Arc<dyn voidm_db_trait::Database>;
+
 pub mod config;
 pub mod crud;
-pub mod db;
+pub mod crud_trait;
 pub mod query;
 pub mod migrate;
 pub mod models;
-#[cfg(feature = "nli")]
-pub mod nli;
 pub mod ontology;
-pub mod vector;
 pub mod search;
 pub mod migration;
-#[cfg(feature = "tinyllama")]
-pub mod auto_tagger_tinyllama;
 pub mod graph_retrieval;
 pub mod rrf_fusion;
+pub mod fast_vector;
+pub mod vector; // Deprecated: kept for compatibility only
 
 pub use config::Config;
 pub use config::config_path_display;
@@ -29,6 +29,5 @@ pub use voidm_scoring as quality;
 #[cfg(feature = "query-expansion")]
 pub use voidm_query_expansion as query_expansion;
 
-pub use db::sqlite::open_pool;  // Re-export for backward compatibility
 pub use crud::{resolve_id, resolve_id_sqlite};
 pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning, MemoryEdge, OntologyEdgeForMigration};

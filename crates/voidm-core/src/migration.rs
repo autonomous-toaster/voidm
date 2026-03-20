@@ -1,8 +1,8 @@
 use anyhow::Result;
-use crate::db::Database;
+use voidm_db_trait::Database;
 use crate::Config;
 use std::collections::HashSet;
-use crate::models::{MemoryType, AddMemoryRequest};
+use crate::models::{Memory, MemoryType, AddMemoryRequest};
 use std::str::FromStr;
 
 /// Migrate memories from source to destination database
@@ -19,7 +19,9 @@ pub async fn migrate_memories(
     let mut migrated = 0;
     let mut skipped = 0;
 
-    for mem in memories {
+    for mem_json in memories {
+        let mem: Memory = serde_json::from_value(mem_json)?;
+        
         if skip_ids.contains(&mem.id) {
             skipped += 1;
             continue;
@@ -42,7 +44,7 @@ pub async fn migrate_memories(
             .unwrap_or(MemoryType::Semantic);
 
         let req = AddMemoryRequest {
-            id: Some(mem.id),
+            id: Some(mem.id.clone()),
             content: mem.content,
             memory_type,
             scopes: mem.scopes,
@@ -52,7 +54,9 @@ pub async fn migrate_memories(
             links: vec![],
         };
 
-        match dest.add_memory(req, config).await {
+        let req_json = serde_json::to_value(&req)?;
+        let config_json = serde_json::to_value(config)?;
+        match dest.add_memory(req_json, &config_json).await {
             Ok(_) => migrated += 1,
             Err(e) => {
                 anyhow::bail!("Failed to create memory in destination: {}", e);
@@ -74,7 +78,7 @@ mod tests {
     use std::sync::Arc;
 
     async fn create_test_db() -> Result<Arc<dyn Database>> {
-        let pool = crate::db::sqlite::open_sqlite_pool(":memory:").await?;
+        let pool = voidm_sqlite::open_sqlite_pool(":memory:").await?;
         let db = SqliteDatabase { pool };
         db.ensure_schema().await?;
         Ok(Arc::new(db))

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::sync::Arc;
-use voidm_core::db::Database;
+use voidm_db_trait::Database;
 
 #[derive(Parser, Clone)]
 pub struct MigrateArgs {
@@ -48,16 +48,16 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
         .filter(|s| !s.is_empty())
         .collect();
 
-    let sqlite_path = config.db_path(cli_db).to_string_lossy().to_string();
+    let sqlite_path = config.db_path(cli_db);
 
     // Open source database
-    let source_db: Arc<dyn voidm_core::db::Database> = if from_backend == "sqlite" {
-        let pool = voidm_core::db::sqlite::open_sqlite_pool(&sqlite_path).await?;
-        Arc::new(voidm_core::db::sqlite::SqliteDatabase { pool })
+    let source_db: Arc<dyn voidm_db_trait::Database> = if from_backend == "sqlite" {
+        let pool = voidm_sqlite::open_pool(&sqlite_path).await?;
+        Arc::new(voidm_sqlite::SqliteDatabase::new(pool))
     } else {
         let neo4j_config = config.database.neo4j.as_ref()
             .context("Neo4j config missing for source")?;
-        Arc::new(voidm_core::db::neo4j::Neo4jDatabase::connect(
+        Arc::new(voidm_neo4j::Neo4jDatabase::connect(
             &neo4j_config.uri,
             &neo4j_config.username,
             &neo4j_config.password,
@@ -65,13 +65,13 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
     };
 
     // Open destination database
-    let dest_db: Arc<dyn voidm_core::db::Database> = if to_backend == "sqlite" {
-        let pool = voidm_core::db::sqlite::open_sqlite_pool(&sqlite_path).await?;
-        Arc::new(voidm_core::db::sqlite::SqliteDatabase { pool })
+    let dest_db: Arc<dyn voidm_db_trait::Database> = if to_backend == "sqlite" {
+        let pool = voidm_sqlite::open_pool(&sqlite_path).await?;
+        Arc::new(voidm_sqlite::SqliteDatabase::new(pool))
     } else {
         let neo4j_config = config.database.neo4j.as_ref()
             .context("Neo4j config missing for destination")?;
-        Arc::new(voidm_core::db::neo4j::Neo4jDatabase::connect(
+        Arc::new(voidm_neo4j::Neo4jDatabase::connect(
             &neo4j_config.uri,
             &neo4j_config.username,
             &neo4j_config.password,
@@ -117,7 +117,13 @@ async fn migrate_memories(
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
-    let memories = source.list_memories(Some(10000)).await?;
+    let memories_json = source.list_memories(Some(10000)).await?;
+    let mut memories = Vec::new();
+    for mem_json in memories_json {
+        if let Ok(mem) = serde_json::from_value::<voidm_core::models::Memory>(mem_json) {
+            memories.push(mem);
+        }
+    }
 
     let mut migrated = 0;
     let mut skipped = 0;
@@ -156,7 +162,9 @@ async fn migrate_memories(
             links: vec![],
         };
 
-        let _ = dest.add_memory(req, config).await?;
+        let req_json = serde_json::to_value(&req)?;
+        let config_json = serde_json::to_value(config)?;
+        let _ = dest.add_memory(req_json, &config_json).await?;
         migrated += 1;
 
         if !json && migrated % 100 == 0 {
@@ -178,7 +186,13 @@ async fn migrate_concepts(
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
-    let concepts = source.list_concepts(None, 10000).await?;
+    let concepts_json = source.list_concepts(None, 10000).await?;
+    let mut concepts = Vec::new();
+    for concept_json in concepts_json {
+        if let Ok(concept) = serde_json::from_value::<voidm_core::ontology::Concept>(concept_json) {
+            concepts.push(concept);
+        }
+    }
 
     let mut migrated = 0;
     let mut skipped = 0;
@@ -222,7 +236,13 @@ async fn migrate_relationships(
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
-    let edges = source.list_edges().await?;
+    let edges_json = source.list_edges().await?;
+    let mut edges = Vec::new();
+    for edge_json in edges_json {
+        if let Ok(edge) = serde_json::from_value::<voidm_core::models::MemoryEdge>(edge_json) {
+            edges.push(edge);
+        }
+    }
 
     let mut migrated = 0;
     let mut skipped = 0;
@@ -260,8 +280,18 @@ async fn migrate_relationships(
             }
         };
 
-        match dest.link_memories(&edge.from_id, &rel_type, &edge.to_id, edge.note.as_deref()).await {
-            Ok(resp) => {
+        match dest.link_memories(&edge.from_id, rel_type.as_str(), &edge.to_id, edge.note.as_deref()).await {
+            Ok(resp_json) => {
+                let resp: voidm_core::models::LinkResponse = match serde_json::from_value(resp_json) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        if !json {
+                            eprintln!("  ERROR: Failed to parse response for edge {} -> {}", edge.from_id, edge.to_id);
+                        }
+                        skipped += 1;
+                        continue;
+                    }
+                };
                 if resp.created {
                     migrated += 1;
                     if !json && migrated % 10 == 0 {
@@ -297,7 +327,13 @@ async fn migrate_ontology_edges(
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
-    let edges = source.list_ontology_edges().await?;
+    let edges_json = source.list_ontology_edges().await?;
+    let mut edges = Vec::new();
+    for edge_json in edges_json {
+        if let Ok(edge) = serde_json::from_value::<voidm_core::models::OntologyEdgeForMigration>(edge_json) {
+            edges.push(edge);
+        }
+    }
 
     let mut migrated = 0;
     let mut skipped = 0;

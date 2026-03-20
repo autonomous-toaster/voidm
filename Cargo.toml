@@ -2,7 +2,7 @@
 members = [
     "crates/voidm-core",
     "crates/voidm-graph",
-    "crates/voidm-cli", "crates/voidm-ner", "crates/voidm-nli", "crates/voidm-scoring", "crates/voidm-embeddings", "crates/voidm-redactor", "crates/voidm-reranker", "crates/voidm-query-expansion", "crates/voidm-tagging", "crates/voidm-models", "crates/voidm-db-trait", "crates/voidm-postgres", "crates/voidm-sqlite", "crates/voidm-mcp",
+    "crates/voidm-cli", "crates/voidm-ner", "crates/voidm-nli", "crates/voidm-scoring", "crates/voidm-embeddings", "crates/voidm-redactor", "crates/voidm-reranker", "crates/voidm-query-expansion", "crates/voidm-tagging", "crates/voidm-models", "crates/voidm-db-trait", "crates/voidm-postgres", "crates/voidm-sqlite", "crates/voidm-mcp", "crates/voidm-neo4j",
 ]
 resolver = "2"
 

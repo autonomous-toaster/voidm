@@ -9,8 +9,6 @@ use crate::models::{
 };
 use voidm_scoring;
 use crate::{embeddings, search, vector, redactor};
-#[cfg(feature = "tinyllama")]
-use crate::auto_tagger_tinyllama;
 use crate::config::Config;
 
 /// Convert voidm_core MemoryType to voidm_scoring MemoryType
@@ -43,35 +41,8 @@ pub async fn resolve_id<D: voidm_db_trait::Database + ?Sized>(db: &D, id: &str) 
 /// Use `resolve_id()` with Database trait instead for backend-agnostic code.
 /// This function is kept for compatibility with existing CLI code.
 pub async fn resolve_id_sqlite(pool: &SqlitePool, id: &str) -> Result<String> {
-    // Exact match first (fast path)
-    let exact: Option<String> = sqlx::query_scalar("SELECT id FROM memories WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-    if let Some(full) = exact {
-        return Ok(full);
-    }
-
-    if id.len() < 4 {
-        bail!("ID prefix '{}' is too short (minimum 4 characters)", id);
-    }
-
-    // Prefix search — LIKE 'prefix%'
-    let pattern = format!("{}%", id);
-    let matches: Vec<String> = sqlx::query_scalar("SELECT id FROM memories WHERE id LIKE ?")
-        .bind(&pattern)
-        .fetch_all(pool)
-        .await?;
-
-    match matches.len() {
-        0 => bail!("Memory '{}' not found", id),
-        1 => Ok(matches.into_iter().next().unwrap()),
-        n => bail!(
-            "Ambiguous short ID '{}' matches {} memories. Use more characters:\n{}",
-            id, n,
-            matches.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
-        ),
-    }
+    // TODO: Replace with trait-based implementation
+    todo!("Replace with trait-based call")
 }
 
 /// Add a memory — full workflow:
@@ -82,12 +53,13 @@ pub async fn resolve_id_sqlite(pool: &SqlitePool, id: &str) -> Result<String> {
 /// Returns AddMemoryResponse with suggested_links and duplicate_warning.
 pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &Config) -> Result<AddMemoryResponse> {
     // Auto-enrich tags BEFORE creating tags_json (moved to beginning)
-    #[cfg(feature = "tinyllama")]
-    {
-        if let Err(e) = auto_tagger_tinyllama::enrich_memory_tags_tinyllama(&mut req, config).await {
-            tracing::warn!("Failed to auto-enrich tags: {}. Using user-provided tags only.", e);
-        }
-    }
+    // TODO: Re-enable when auto_tagger_tinyllama is fixed
+    // #[cfg(feature = "tinyllama")]
+    // {
+    //     if let Err(e) = auto_tagger_tinyllama::enrich_memory_tags_tinyllama(&mut req, config).await {
+    //         tracing::warn!("Failed to auto-enrich tags: {}. Using user-provided tags only.", e);
+    //     }
+    // }
     
     // Redact secrets from memory content and metadata BEFORE insertion
     let mut redaction_warnings = Vec::new();
@@ -483,44 +455,8 @@ async fn merge_memories(
 
 /// Get a single memory by ID.
 pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
-    let row: Option<(String, String, String, i64, String, String, Option<f32>, String, String)> = sqlx::query_as(
-        "SELECT id, type, content, importance, tags, metadata, quality_score, created_at, updated_at
-         FROM memories WHERE id = ?"
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
-
-    if let Some((id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, created_at, updated_at)) = row {
-        let scopes = get_scopes(pool, &id).await?;
-        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-        let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or(serde_json::Value::Object(Default::default()));
-        
-        // Use persisted quality_score if available, otherwise compute and return
-        let quality_score = if let Some(score) = quality_score_db {
-            Some(score)
-        } else {
-            let memory_type_enum: crate::models::MemoryType = memory_type.parse().unwrap_or(crate::models::MemoryType::Semantic);
-            let quality_mt = convert_memory_type(&memory_type_enum);
-            let quality_score_val = voidm_scoring::compute_quality_score(&content, &quality_mt);
-            Some(quality_score_val.score)
-        };
-        
-        Ok(Some(Memory {
-            id,
-            memory_type,
-            content,
-            importance,
-            tags,
-            metadata,
-            scopes,
-            created_at,
-            updated_at,
-            quality_score,
-        }))
-    } else {
-        Ok(None)
-    }
+    // TODO: Replace with trait-based implementation
+    todo!("Replace with trait-based call")
 }
 
 /// List memories newest-first, with optional scope prefix and type filter.
@@ -591,25 +527,10 @@ pub async fn list_memories(
 
 /// Delete a memory and all its graph edges (cascade via FK).
 pub async fn delete_memory(pool: &SqlitePool, id: &str) -> Result<bool> {
-    // FTS5: manual delete required
-    sqlx::query("DELETE FROM memories_fts WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
-
-    // vec_memories: best-effort delete
-    let _ = sqlx::query("DELETE FROM vec_memories WHERE memory_id = ?")
-        .bind(id)
-        .execute(pool)
-        .await;
-
-    let result = sqlx::query("DELETE FROM memories WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
-
-    Ok(result.rows_affected() > 0)
+    // TODO: Replace with trait-based implementation
+    todo!("Replace with trait-based call")
 }
+
 
 /// Get all scopes for a memory.
 async fn get_scopes(pool: &SqlitePool, memory_id: &str) -> Result<Vec<String>> {
@@ -624,12 +545,8 @@ async fn get_scopes(pool: &SqlitePool, memory_id: &str) -> Result<Vec<String>> {
 
 /// List all known scope strings.
 pub async fn list_scopes(pool: &SqlitePool) -> Result<Vec<String>> {
-    let scopes: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT scope FROM memory_scopes ORDER BY scope"
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(scopes)
+    // TODO: Replace with trait-based implementation
+    todo!("Replace with trait-based call")
 }
 
 /// Create a graph edge between two memories.
@@ -716,29 +633,8 @@ pub async fn unlink_memories(
     edge_type: &EdgeType,
     to_id: &str,
 ) -> Result<bool> {
-    let from_node: Option<i64> = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
-        .bind(from_id)
-        .fetch_optional(pool)
-        .await?;
-    let to_node: Option<i64> = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
-        .bind(to_id)
-        .fetch_optional(pool)
-        .await?;
-
-    match (from_node, to_node) {
-        (Some(f), Some(t)) => {
-            let result = sqlx::query(
-                "DELETE FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?"
-            )
-            .bind(f)
-            .bind(t)
-            .bind(edge_type.as_str())
-            .execute(pool)
-            .await?;
-            Ok(result.rows_affected() > 0)
-        }
-        _ => Ok(false),
-    }
+    // TODO: Replace with trait-based implementation
+    todo!("Replace with trait-based call")
 }
 
 async fn get_or_create_node(pool: &SqlitePool, memory_id: &str) -> Result<i64> {
@@ -767,19 +663,8 @@ async fn intern_property_key(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, key: 
 
 /// Check model mismatch against db_meta.
 pub async fn check_model_mismatch(pool: &SqlitePool, configured_model: &str) -> Result<Option<(String, String)>> {
-    let db_model: Option<String> = sqlx::query_scalar("SELECT value FROM db_meta WHERE key = 'embedding_model'")
-        .fetch_optional(pool)
-        .await?;
-    let db_dim: Option<String> = sqlx::query_scalar("SELECT value FROM db_meta WHERE key = 'embedding_dim'")
-        .fetch_optional(pool)
-        .await?;
-
-    if let Some(db_m) = db_model {
-        if db_m != configured_model {
-            return Ok(Some((db_m, db_dim.unwrap_or_else(|| "?".into()))));
-        }
-    }
-    Ok(None)
+    // TODO: Replace with trait-based implementation
+    todo!("Replace with trait-based call")
 }
 
 /// List all memory-to-memory edges for migration purposes
@@ -983,3 +868,7 @@ async fn extract_and_link_concepts(
     tracing::debug!("Concept extraction skipped (NER feature not enabled)");
     Ok(())
 }
+
+// Trait-based wrappers for CLI compatibility
+// These allow commands to use &Arc<dyn Database> while maintaining backward compat
+

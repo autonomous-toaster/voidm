@@ -16,6 +16,8 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 
 voidm-core = { path = "../voidm-core", default-features = false }
+voidm-db-trait = { path = "../voidm-db-trait" }
+voidm-sqlite = { path = "../voidm-sqlite" }
 
 [features]
 default = ["sqlite"]

@@ -1,7 +1,9 @@
 use anyhow::Result;
+use std::sync::Arc;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{crud, models::EdgeType, resolve_id_sqlite};
+use voidm_core::{crud, crud_trait, models::{EdgeType, LinkResponse}};
+use voidm_db_trait::Database;
 
 #[derive(Args)]
 pub struct LinkArgs {
@@ -16,11 +18,12 @@ pub struct LinkArgs {
     pub note: Option<String>,
 }
 
-pub async fn run(args: LinkArgs, pool: &SqlitePool, json: bool) -> Result<()> {
+pub async fn run(args: LinkArgs, db: &Arc<dyn Database>, _pool: &SqlitePool, json: bool) -> Result<()> {
     let edge_type: EdgeType = args.rel.parse()?;
-    let from = resolve_id_sqlite(pool, &args.from).await?;
-    let to   = resolve_id_sqlite(pool, &args.to).await?;
-    let resp = crud::link_memories(pool, &from, &edge_type, &to, args.note.as_deref()).await?;
+    let from = crud::resolve_id(db.as_ref(), &args.from).await?;
+    let to   = crud::resolve_id(db.as_ref(), &args.to).await?;
+    let resp_json = crud_trait::link_memories(db, &from, edge_type.as_str(), &to, args.note.as_deref()).await?;
+    let resp: LinkResponse = serde_json::from_value(resp_json)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&resp)?);

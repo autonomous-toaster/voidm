@@ -14,8 +14,12 @@ path = "src/main.rs"
 
 [dependencies]
 voidm-core       = { path = "../voidm-core", default-features = false }
+voidm-db-trait   = { path = "../voidm-db-trait" }
 voidm-graph      = { path = "../voidm-graph" }
+voidm-sqlite     = { path = "../voidm-sqlite" }
+voidm-neo4j      = { path = "../voidm-neo4j" }
 voidm-ner        = { path = "../voidm-ner", optional = true }
+voidm-nli        = { path = "../voidm-nli", optional = true }
 voidm-redactor   = { path = "../voidm-redactor", optional = true }
 voidm-embeddings = { path = "../voidm-embeddings", optional = true }
 voidm-reranker   = { path = "../voidm-reranker", optional = true }
@@ -84,7 +88,7 @@ vector-search   = ["embeddings"]
 query-expansion = ["voidm-core/query-expansion"]
 
 # ─ NLP & Intelligence ─────────────────────────────────────────────────────
-nli             = ["voidm-core/nli"]
+nli             = ["voidm-nli"]
 ner             = ["voidm-core/ner", "voidm-ner"]
 reranker        = ["voidm-core/reranker", "voidm-reranker"]
 

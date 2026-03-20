@@ -816,3 +816,4 @@ mod tests {
         println!("- ms-marco-TinyBERT is faster but less precise");
     }
 }
+pub mod rrf;

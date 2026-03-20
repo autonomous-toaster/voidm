@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use sqlx::SqlitePool;
-use voidm_core::resolve_id_sqlite;
+use voidm_core::crud;
+use voidm_db_trait::Database;
+use std::sync::Arc;
 use voidm_graph;
 
 #[derive(Subcommand)]
@@ -70,11 +72,11 @@ pub struct ExportArgs {
     pub min_edges: usize,
 }
 
-pub async fn run(cmd: GraphCommands, pool: &SqlitePool, json: bool) -> Result<()> {
+pub async fn run(cmd: GraphCommands, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, json: bool) -> Result<()> {
     match cmd {
         GraphCommands::Cypher(args) => run_cypher(args, pool, json).await,
-        GraphCommands::Neighbors(args) => run_neighbors(args, pool, json).await,
-        GraphCommands::Path(args) => run_path(args, pool, json).await,
+        GraphCommands::Neighbors(args) => run_neighbors(args, db, pool, json).await,
+        GraphCommands::Path(args) => run_path(args, db, pool, json).await,
         GraphCommands::Pagerank(args) => run_pagerank(args, pool, json).await,
         GraphCommands::Stats => run_stats(pool, json).await,
         GraphCommands::Export(args) => run_export(args, pool, json).await,
@@ -95,8 +97,8 @@ async fn run_cypher(args: CypherArgs, pool: &SqlitePool, json: bool) -> Result<(
     Ok(())
 }
 
-async fn run_neighbors(args: NeighborsArgs, pool: &SqlitePool, json: bool) -> Result<()> {
-    let id = match resolve_id_sqlite(pool, &args.id).await {
+async fn run_neighbors(args: NeighborsArgs, db: &Arc<dyn Database>, pool: &SqlitePool, json: bool) -> Result<()> {
+    let id = match crud::resolve_id(db.as_ref(), &args.id).await {
         Ok(id) => id,
         Err(e) => {
             if json {
@@ -113,10 +115,10 @@ async fn run_neighbors(args: NeighborsArgs, pool: &SqlitePool, json: bool) -> Re
     } else {
         if results.is_empty() {
             println!("No neighbors found for '{}' at depth {}.", id, args.depth);
-            println!("Hint: Use 'voidm link {} <EDGE_TYPE> <target-id>' to create edges.", id);
+            println!("Hint: Use 'voidm link {} <EDGE_TYPE> <target-id>' to create edges.", &id);
         } else {
             for n in &results {
-                println!("[depth {}] {} --[{}]--> {} ({})", n.depth, id, n.rel_type, n.memory_id, n.direction);
+                println!("[depth {}] {} --[{}]--> {} ({})", n.depth, &id, n.rel_type, n.memory_id, n.direction);
             }
             println!("{} neighbor(s)", results.len());
         }
@@ -124,10 +126,10 @@ async fn run_neighbors(args: NeighborsArgs, pool: &SqlitePool, json: bool) -> Re
     Ok(())
 }
 
-async fn run_path(args: PathArgs, pool: &SqlitePool, json: bool) -> Result<()> {
+async fn run_path(args: PathArgs, db: &Arc<dyn Database>, pool: &SqlitePool, json: bool) -> Result<()> {
     // Resolve both IDs before same-ID check (so short IDs expand correctly)
-    let from = resolve_id_sqlite(pool, &args.from).await?;
-    let to   = resolve_id_sqlite(pool, &args.to).await?;
+    let from = crud::resolve_id(db.as_ref(), &args.from).await?;
+    let to   = crud::resolve_id(db.as_ref(), &args.to).await?;
 
     if from == to {
         if json {
@@ -136,7 +138,7 @@ async fn run_path(args: PathArgs, pool: &SqlitePool, json: bool) -> Result<()> {
                 "from": from, "to": to
             }));
         } else {
-            eprintln!("Error: Source and target IDs are the same ('{}').\nA path requires two distinct memory IDs.", from);
+            eprintln!("Error: Source and target IDs are the same ('{}').\nA path requires two distinct memory IDs.", &from);
         }
         std::process::exit(2);
     }
@@ -146,12 +148,12 @@ async fn run_path(args: PathArgs, pool: &SqlitePool, json: bool) -> Result<()> {
             if json {
                 println!("{}", serde_json::json!({
                     "path": null,
-                    "message": format!("No path found between '{}' and '{}'", from, to),
+                    "message": format!("No path found between '{}' and '{}'", &from, &to),
                     "hint": "Memories may not be connected. Use 'voidm link' to create edges."
                 }));
             } else {
-                println!("No path found between '{}' and '{}'.", from, to);
-                println!("Hint: Use 'voidm link {} <EDGE_TYPE> {}' to connect them.", from, to);
+                println!("No path found between '{}' and '{}'.", &from, &to);
+                println!("Hint: Use 'voidm link {} <EDGE_TYPE> {}' to connect them.", &from, &to);
             }
         }
         Some(path) => {

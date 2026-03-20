@@ -217,7 +217,7 @@ impl VoidmMcpServer {
             intent: params.intent,
         };
 
-        let db = voidm_core::db::sqlite::SqliteDatabase {
+        let db = voidm_sqlite::SqliteDatabase {
             pool: self.pool.clone(),
         };
         let resp = search(

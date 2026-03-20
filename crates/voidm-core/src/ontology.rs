@@ -205,20 +205,8 @@ pub async fn list_concepts(
 
 /// Delete a concept (and its ontology edges via CASCADE).
 pub async fn delete_concept(pool: &SqlitePool, id: &str) -> Result<bool> {
-    let full_id = resolve_concept_id(pool, id).await?;
-
-    // FTS: manual delete
-    sqlx::query("DELETE FROM ontology_concept_fts WHERE id = ?")
-        .bind(&full_id)
-        .execute(pool)
-        .await?;
-
-    let result = sqlx::query("DELETE FROM ontology_concepts WHERE id = ?")
-        .bind(&full_id)
-        .execute(pool)
-        .await?;
-
-    Ok(result.rows_affected() > 0)
+    // TODO: Replace with trait-based implementation
+    todo!("Replace with trait-based call")
 }
 
 // ─── Ontology Edge CRUD ───────────────────────────────────────────────────────
@@ -292,11 +280,8 @@ pub async fn add_ontology_edge(
 
 /// Remove an ontology edge by id.
 pub async fn delete_ontology_edge(pool: &SqlitePool, edge_id: i64) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM ontology_edges WHERE id = ?")
-        .bind(edge_id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected() > 0)
+    // TODO: Replace with trait-based implementation
+    todo!("Replace with trait-based call")
 }
 
 /// List ontology edges for a node (concept or memory), both directions.
@@ -476,37 +461,8 @@ pub struct ConceptInstance {
 
 /// Resolve full or short (prefix, min 4 chars) concept ID.
 pub async fn resolve_concept_id(pool: &SqlitePool, id: &str) -> Result<String> {
-    let exact: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM ontology_concepts WHERE id = ?"
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
-    if let Some(full) = exact {
-        return Ok(full);
-    }
-
-    if id.len() < 4 {
-        bail!("Concept ID prefix '{}' is too short (minimum 4 characters)", id);
-    }
-
-    let pattern = format!("{}%", id);
-    let matches: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM ontology_concepts WHERE id LIKE ?"
-    )
-    .bind(&pattern)
-    .fetch_all(pool)
-    .await?;
-
-    match matches.len() {
-        0 => bail!("Concept '{}' not found", id),
-        1 => Ok(matches.into_iter().next().unwrap()),
-        n => bail!(
-            "Ambiguous concept ID '{}' matches {} concepts. Use more characters:\n{}",
-            id, n,
-            matches.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
-        ),
-    }
+    // TODO: Replace with trait-based implementation
+    todo!("Replace with trait-based call")
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

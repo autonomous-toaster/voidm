@@ -2,12 +2,17 @@
 //!
 //! Supports: ms-marco-TinyBERT (11MB, 6-12ms/result) and bge-reranker-base (278MB, 20-30ms/result).
 //! Models are cached in ~/.local/share/voidm/rerankers/
+//!
+//! Reranker models are cached as static singletons (OnceCell) to ensure models are loaded once
+//! per CLI invocation and reused across multiple searches. This eliminates 500-1000ms overhead
+//! per search operation that would occur if models were reloaded each time.
 
 use anyhow::{Context, Result};
 use ort::session::Session;
 use ort::value::Tensor;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use once_cell::sync::OnceCell;
 
 // ─── Public API ────────────────────────────────────────────────────────────
 
@@ -24,12 +29,84 @@ pub struct RerankerScore {
     pub score: f32,
 }
 
+// ─── Singleton Model Cache ────────────────────────────────────────────────────
+// Ensures each reranker model is loaded exactly once per CLI invocation.
+
+/// Wrapper for SendSafe reranker model
+struct RerankerWrapper(Arc<CrossEncoderReranker>);
+
+unsafe impl Send for RerankerWrapper {}
+unsafe impl Sync for RerankerWrapper {}
+
+impl Clone for RerankerWrapper {
+    fn clone(&self) -> Self {
+        RerankerWrapper(self.0.clone())
+    }
+}
+
+/// Cache for loaded reranker models, keyed by model name.
+struct RerankerModelCache {
+    models: std::sync::Mutex<std::collections::HashMap<String, RerankerWrapper>>,
+}
+
+impl RerankerModelCache {
+    fn new() -> Self {
+        Self {
+            models: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn get(&self, model_name: &str) -> Option<RerankerWrapper> {
+        self.models.lock().unwrap().get(model_name).cloned()
+    }
+
+    fn insert(&self, model_name: String, model: RerankerWrapper) {
+        self.models.lock().unwrap().insert(model_name, model);
+    }
+}
+
+/// Global reranker model cache (singleton)
+static RERANKER_CACHE: OnceCell<RerankerModelCache> = OnceCell::new();
+static RERANKER_INIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn get_reranker_cache() -> &'static RerankerModelCache {
+    RERANKER_CACHE.get_or_init(|| RerankerModelCache::new())
+}
+
 impl CrossEncoderReranker {
     /// Load a reranker model. Downloads on first use.
     /// Fails with a descriptive error if the model cannot be loaded.
     pub async fn load(model_name: &str) -> Result<Self> {
         tracing::info!("Loading reranker: {}", model_name);
         Self::load_model_internal(model_name).await
+    }
+
+    /// Load a reranker model from cache (singleton). Returns cached model if already loaded.
+    /// This ensures each model is loaded only once per CLI invocation.
+    pub async fn load_cached(model_name: &str) -> Result<Arc<Self>> {
+        let cache = get_reranker_cache();
+        
+        // Check if already cached
+        if let Some(wrapper) = cache.get(model_name) {
+            tracing::debug!("Reranker '{}' found in cache, reusing", model_name);
+            return Ok(wrapper.0);
+        }
+        
+        // Not in cache - load it with lock to prevent concurrent loads of same model
+        let _guard = RERANKER_INIT.lock().await;
+        
+        // Double-check after acquiring lock (another task may have loaded it)
+        if let Some(wrapper) = cache.get(model_name) {
+            tracing::debug!("Reranker '{}' loaded by concurrent task, reusing", model_name);
+            return Ok(wrapper.0);
+        }
+        
+        tracing::info!("Loading reranker '{}' for first time (will be cached)", model_name);
+        let model = Arc::new(Self::load_model_internal(model_name).await?);
+        cache.insert(model_name.to_string(), RerankerWrapper(model.clone()));
+        tracing::debug!("Reranker '{}' cached successfully", model_name);
+        
+        Ok(model)
     }
 
     /// Internal model loading (shared by load() and load_with_fallback()).

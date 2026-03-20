@@ -501,8 +501,8 @@ async fn apply_reranker(
     tracing::info!("Reranker: Initializing reranking with model: {}", config.model);
     tracing::debug!("Reranker config: apply_to_top_k={}", config.apply_to_top_k);
     
-    let reranker = crate::reranker::CrossEncoderReranker::load(&config.model).await?;
-    tracing::info!("Reranker: Model '{}' loaded successfully", config.model);
+    let reranker = crate::reranker::CrossEncoderReranker::load_cached(&config.model).await?;
+    tracing::info!("Reranker: Model '{}' loaded successfully (cached)", config.model);
     
     // Extract passages using intelligent passage extraction
     let docs_to_rerank: Vec<String> = results[..apply_to_k]

@@ -104,13 +104,89 @@ pub async fn generate_tags_tinyllama(
     let prompt_template = prompts::get_prompt_for_type(&req.memory_type);
     let prompt = prompt_template.replace("{content}", &content);
 
-    // For now, return placeholder tags (model loading requires hf-hub setup)
-    // This allows the module to compile and tests to run
-    tracing::debug!("Tinyllama tag generation prompt prepared for memory type");
+    // Use query expansion infrastructure for LLM inference if available
+    #[cfg(feature = "query-expansion")]
+    {
+        return generate_tags_with_llm(&prompt, &content, config).await;
+    }
+
+    // Fallback: extract basic tags from content for testing
+    #[cfg(not(feature = "query-expansion"))]
+    {
+        tracing::debug!("Query expansion not available, using basic tag extraction");
+        let basic_tags = extract_basic_tags(&content);
+        Ok(basic_tags)
+    }
+}
+
+/// Generate tags using TinyLLaMA via query expansion infrastructure.
+#[cfg(feature = "query-expansion")]
+async fn generate_tags_with_llm(prompt: &str, content: &str, _config: &Config) -> Result<Vec<String>> {
+    use voidm_query_expansion::ensure_llm_model;
     
-    // Placeholder: extract some basic tags from content for testing
-    let basic_tags = extract_basic_tags(&content);
-    Ok(basic_tags)
+    tracing::debug!("Generating tags with TinyLLaMA (via query expansion cache)");
+    
+    const TINYLLAMA_MODEL: &str = "tinyllama";
+    
+    // Ensure model is loaded (will be cached by query expansion)
+    // This is a no-op if model is already loaded
+    ensure_llm_model(TINYLLAMA_MODEL).await
+        .context("Failed to load TinyLLaMA for tag generation")?;
+    
+    // Run inference on the prompt
+    // Note: We use the same model that query expansion uses, ensuring cache reuse
+    let llm_output = run_tinyllama_inference(prompt)
+        .context("Failed to run LLM inference for tag generation")?;
+    
+    // Parse tags from LLM output
+    let tags = parse_tags_from_output(&llm_output)
+        .unwrap_or_else(|_| {
+            tracing::warn!("Failed to parse tags from LLM output, extracting basic tags as fallback");
+            extract_basic_tags(content)
+        });
+    
+    // Validate and deduplicate
+    let validated_tags = validate_tags(&tags);
+    
+    tracing::debug!("Generated {} tags via TinyLLaMA: {:?}", validated_tags.len(), validated_tags);
+    Ok(validated_tags)
+}
+
+/// Run TinyLLaMA inference for tag generation prompt.
+/// The model is expected to already be loaded via ensure_llm_model().
+#[cfg(feature = "query-expansion")]
+fn run_tinyllama_inference(prompt: &str) -> Result<String> {
+    // Use the cached TinyLLaMA model loaded by ensure_llm_model()
+    // This function runs inference on a tag generation prompt
+    
+    use voidm_query_expansion::{QueryExpander, QueryExpansionConfig, IntentConfig};
+    
+    // Create a config for tag generation (same model, optimized for tags)
+    let config = QueryExpansionConfig {
+        enabled: true,
+        model: "tinyllama".to_string(),
+        timeout_ms: 5000,  // Allow up to 5 seconds for tag generation
+        intent: IntentConfig::default(),
+    };
+    
+    let expander = QueryExpander::new(config);
+    
+    // Run inference using the same cached model
+    // The LLM_CACHE is shared across both query expansion and tag generation
+    tracing::debug!("Running TinyLLaMA inference for tag generation (using cached model)");
+    
+    match tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(expander.expand(prompt))
+    }) {
+        Ok(output) => {
+            tracing::debug!("TinyLLaMA tag generation succeeded");
+            Ok(output)
+        }
+        Err(e) => {
+            tracing::warn!("TinyLLaMA tag generation failed: {}", e);
+            Err(anyhow::anyhow!("Tag generation inference failed: {}", e))
+        }
+    }
 }
 
 /// Merge tinyllama-generated tags with user-provided tags.

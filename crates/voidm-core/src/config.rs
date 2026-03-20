@@ -235,12 +235,39 @@ fn default_automerge_threshold() -> f32 {
     0.98
 }
 
+fn default_episodic_temporal_window() -> u64 {
+    86400 // 24 hours in seconds
+}
+
+fn default_episodic_preserve_temporal_separation() -> bool {
+    true
+}
+
 impl Default for IntentConfig {
     fn default() -> Self {
         Self {
             enabled: true,
             use_scope_as_fallback: true,
             default_intent: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodicConfig {
+    /// Time window for considering episodic memories as same event (seconds, default: 86400 = 24 hours)
+    #[serde(default = "default_episodic_temporal_window")]
+    pub temporal_window_secs: u64,
+    /// If true, link rather than merge episodic events outside temporal window (default: true)
+    #[serde(default = "default_episodic_preserve_temporal_separation")]
+    pub preserve_temporal_separation: bool,
+}
+
+impl Default for EpisodicConfig {
+    fn default() -> Self {
+        Self {
+            temporal_window_secs: 86400, // 24 hours
+            preserve_temporal_separation: true,
         }
     }
 }
@@ -262,6 +289,9 @@ pub struct InsertConfig {
     /// Automatically create missing concepts during extraction (default: true)
     #[serde(default = "default_concept_auto_create")]
     pub concept_auto_create: bool,
+    /// Episodic memory temporal awareness settings
+    #[serde(default)]
+    pub episodic: EpisodicConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -323,6 +353,7 @@ impl Default for InsertConfig {
             auto_extract_concepts: true,
             concept_min_score: 0.7,
             concept_auto_create: true,
+            episodic: EpisodicConfig::default(),
         }
     }
 }

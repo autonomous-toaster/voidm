@@ -281,6 +281,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     }
 
     // Post-insert: Check for auto-merge (very high similarity > 0.98)
+    // For episodic memories, also check temporal proximity
     if let Some(ref emb) = embedding_result {
         let merge_candidates = search::find_similar(
             pool, emb, &id, 1, config.insert.automerge_threshold,
@@ -288,23 +289,42 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
 
         if let Some((merge_id, merge_score)) = merge_candidates.first() {
             if let Ok(Some(dup_mem)) = get_memory(pool, merge_id).await {
-                // Auto-merge: consolidate tags and return merged ID
-                if let Err(e) = merge_memories(pool, &id, merge_id, &req.tags, &dup_mem.tags).await {
-                    tracing::warn!("Failed to merge memories: {}. Keeping both.", e);
+                // For episodic memories, check temporal compatibility
+                let should_merge = if memory_type_str == "episodic" {
+                    let (temporal_ok, reason) = check_episodic_temporal_compatibility(
+                        &now,
+                        &dup_mem.created_at,
+                        config,
+                    );
+                    if !temporal_ok && config.insert.episodic.preserve_temporal_separation {
+                        tracing::debug!("Episodic memory outside temporal window ({}): preserving separation", reason);
+                        false
+                    } else {
+                        true
+                    }
                 } else {
-                    println!("Duplicate, merged with {}", merge_id);
-                    return Ok(AddMemoryResponse {
-                        id: merge_id.clone(),
-                        memory_type: memory_type_str,
-                        content: dup_mem.content,
-                        scopes: dup_mem.scopes,
-                        tags: dup_mem.tags,
-                        importance: dup_mem.importance,
-                        created_at: dup_mem.created_at,
-                        quality_score: dup_mem.quality_score,
-                        suggested_links: vec![],
-                        duplicate_warning: None,
-                    });
+                    true
+                };
+
+                if should_merge {
+                    // Auto-merge: consolidate tags and return merged ID
+                    if let Err(e) = merge_memories(pool, &id, merge_id, &req.tags, &dup_mem.tags).await {
+                        tracing::warn!("Failed to merge memories: {}. Keeping both.", e);
+                    } else {
+                        println!("Duplicate, merged with {}", merge_id);
+                        return Ok(AddMemoryResponse {
+                            id: merge_id.clone(),
+                            memory_type: memory_type_str,
+                            content: dup_mem.content,
+                            scopes: dup_mem.scopes,
+                            tags: dup_mem.tags,
+                            importance: dup_mem.importance,
+                            created_at: dup_mem.created_at,
+                            quality_score: dup_mem.quality_score,
+                            suggested_links: vec![],
+                            duplicate_warning: None,
+                        });
+                    }
                 }
             }
         }
@@ -363,6 +383,32 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         suggested_links,
         duplicate_warning,
     })
+}
+
+/// Check if two episodic memories should be merged based on temporal proximity.
+/// Returns (should_merge, reason)
+fn check_episodic_temporal_compatibility(
+    new_created_at: &str,
+    existing_created_at: &str,
+    config: &Config,
+) -> (bool, &'static str) {
+    // Parse RFC3339 timestamps
+    if let (Ok(new_time), Ok(existing_time)) = (
+        chrono::DateTime::parse_from_rfc3339(new_created_at),
+        chrono::DateTime::parse_from_rfc3339(existing_created_at),
+    ) {
+        let duration = (new_time.timestamp() - existing_time.timestamp()).abs() as u64;
+        let temporal_window = config.insert.episodic.temporal_window_secs;
+
+        if duration <= temporal_window {
+            (true, "within temporal window")
+        } else {
+            (false, "outside temporal window")
+        }
+    } else {
+        // If we can't parse timestamps, use default merge behavior
+        (true, "timestamps unparseable, merging by default")
+    }
 }
 
 /// Merge a new memory into an existing memory with tag consolidation.

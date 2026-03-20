@@ -1,1 +1,1 @@
-{"run":2,"commit":"280b312","metric":231,"metrics":{},"status":"keep","description":"Phase 4A Task 2: Frame reading loop with preface exchange, SETTINGS handshake, and frame type dispatch. Added parse_frame_header, build_settings_frame, build_settings_ack_frame. 3 new tests. Tests: 231/231 passing (+3). Ready for HPACK decoding.","timestamp":1774045723461,"segment":1}
+{"type":"config","name":"HTTP/2 Phase 4A: Bridge Integration and E2E Testing","metricName":"tests_passing","metricUnit":"","bestDirection":"higher"}

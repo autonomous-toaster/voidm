@@ -231,6 +231,10 @@ fn default_concept_auto_create() -> bool {
     true
 }
 
+fn default_automerge_threshold() -> f32 {
+    0.98
+}
+
 impl Default for IntentConfig {
     fn default() -> Self {
         Self {
@@ -245,6 +249,9 @@ impl Default for IntentConfig {
 pub struct InsertConfig {
     pub auto_link_threshold: f32,
     pub duplicate_threshold: f32,
+    /// Threshold for auto-merging similar memories at insertion (default: 0.98)
+    #[serde(default = "default_automerge_threshold")]
+    pub automerge_threshold: f32,
     pub auto_link_limit: usize,
     /// Enable automatic concept extraction and linking during memory add (default: true)
     #[serde(default = "default_auto_extract_concepts")]
@@ -311,6 +318,7 @@ impl Default for InsertConfig {
         Self {
             auto_link_threshold: 0.7,
             duplicate_threshold: 0.95,
+            automerge_threshold: 0.98,
             auto_link_limit: 5,
             auto_extract_concepts: true,
             concept_min_score: 0.7,

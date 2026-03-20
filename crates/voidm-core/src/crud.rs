@@ -280,6 +280,36 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         }
     }
 
+    // Post-insert: Check for auto-merge (very high similarity > 0.98)
+    if let Some(ref emb) = embedding_result {
+        let merge_candidates = search::find_similar(
+            pool, emb, &id, 1, config.insert.automerge_threshold,
+        ).await.unwrap_or_default();
+
+        if let Some((merge_id, merge_score)) = merge_candidates.first() {
+            if let Ok(Some(dup_mem)) = get_memory(pool, merge_id).await {
+                // Auto-merge: consolidate tags and return merged ID
+                if let Err(e) = merge_memories(pool, &id, merge_id, &req.tags, &dup_mem.tags).await {
+                    tracing::warn!("Failed to merge memories: {}. Keeping both.", e);
+                } else {
+                    println!("Duplicate, merged with {}", merge_id);
+                    return Ok(AddMemoryResponse {
+                        id: merge_id.clone(),
+                        memory_type: memory_type_str,
+                        content: dup_mem.content,
+                        scopes: dup_mem.scopes,
+                        tags: dup_mem.tags,
+                        importance: dup_mem.importance,
+                        created_at: dup_mem.created_at,
+                        quality_score: dup_mem.quality_score,
+                        suggested_links: vec![],
+                        duplicate_warning: None,
+                    });
+                }
+            }
+        }
+    }
+
     // Post-insert: compute suggested_links and duplicate_warning (outside tx)
     let (suggested_links, duplicate_warning) = if let Some(ref emb) = embedding_result {
         let dup_candidates = search::find_similar(
@@ -333,6 +363,76 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         suggested_links,
         duplicate_warning,
     })
+}
+
+/// Merge a new memory into an existing memory with tag consolidation.
+/// Returns the target memory ID.
+async fn merge_memories(
+    pool: &SqlitePool,
+    new_id: &str,
+    target_id: &str,
+    new_tags: &[String],
+    target_tags: &[String],
+) -> Result<String> {
+    // Consolidate tags: deduplicate across both
+    let mut merged_tags = target_tags.to_vec();
+    for tag in new_tags {
+        let normalized = tag.trim().to_lowercase();
+        if !merged_tags.iter().any(|t| t.trim().to_lowercase() == normalized) {
+            merged_tags.push(tag.clone());
+        }
+    }
+
+    // Update target tags
+    let tags_json = serde_json::to_string(&merged_tags)?;
+    sqlx::query("UPDATE memories SET tags = ? WHERE id = ?")
+        .bind(&tags_json)
+        .bind(target_id)
+        .execute(pool)
+        .await?;
+
+    // Delete all graph edges from new_id
+    let new_node: Option<i64> = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+        .bind(new_id)
+        .fetch_optional(pool)
+        .await?;
+
+    if let Some(node_id) = new_node {
+        sqlx::query("DELETE FROM graph_edges WHERE source_id = ? OR target_id = ?")
+            .bind(node_id)
+            .bind(node_id)
+            .execute(pool)
+            .await?;
+
+        // Delete graph node
+        sqlx::query("DELETE FROM graph_nodes WHERE id = ?")
+            .bind(node_id)
+            .execute(pool)
+            .await?;
+    }
+
+    // Delete memory and related tables
+    sqlx::query("DELETE FROM memories_fts WHERE id = ?")
+        .bind(new_id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query("DELETE FROM vec_memories WHERE memory_id = ?")
+        .bind(new_id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query("DELETE FROM memory_scopes WHERE memory_id = ?")
+        .bind(new_id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query("DELETE FROM memories WHERE id = ?")
+        .bind(new_id)
+        .execute(pool)
+        .await?;
+
+    Ok(target_id.to_string())
 }
 
 /// Get a single memory by ID.

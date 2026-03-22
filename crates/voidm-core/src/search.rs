@@ -620,7 +620,11 @@ pub async fn search_with_rrf(
             }
 
             let importance_boost = (m.importance as f32 - 5.0) * 0.02;
-            let final_score = rrf_result.rrf_score + importance_boost;
+            let mut final_score = rrf_result.rrf_score + importance_boost;
+            
+            if let Some(ref meta_config) = config_search.metadata_ranking {
+                final_score = apply_metadata_ranking(&m, final_score, meta_config);
+            }
             
             best_score = Some(best_score.unwrap_or(final_score).max(final_score));
 
@@ -673,3 +677,81 @@ pub async fn search_with_rrf(
         best_score,
     })
 }
+
+// ─── Metadata Ranking Signals ───────────────────────────────────────────────
+
+/// Compute recency signal: exp(-days_since_created / half_life)
+pub fn compute_recency(created_at: &str, half_life_days: u32) -> f32 {
+    if let Ok(created) = chrono::DateTime::parse_from_rfc3339(created_at) {
+        let now = chrono::Utc::now();
+        let days_since = (now.timestamp() - created.timestamp()) as f64 / 86400.0;
+        (-days_since / half_life_days as f64).exp() as f32
+    } else {
+        1.0
+    }
+}
+
+/// Quality signal: use quality_score directly, default 1.0
+pub fn compute_quality(quality_score: Option<f32>) -> f32 {
+    quality_score.unwrap_or(1.0).max(0.0).min(1.0)
+}
+
+/// Author trust multiplier: user=1.0, assistant=0.6, unknown=0.3
+pub fn compute_author_trust(author: Option<&str>) -> f32 {
+    match author.unwrap_or("user") {
+        "assistant" => 0.6,
+        "unknown" => 0.3,
+        _ => 1.0,
+    }
+}
+
+/// Citation signal: logarithmic with diminishing returns
+/// 1 citation = 0.11, 10 = 1.0, 100 = 1.0 (saturates)
+pub fn compute_citation_boost(count: u32) -> f32 {
+    ((count as f64 + 1.0).ln() / (11.0_f64).ln()) as f32
+}
+
+/// Source reliability multiplier
+pub fn compute_source_reliability(source: Option<&str>, boosts: &std::collections::HashMap<String, f32>) -> f32 {
+    boosts.get(source.unwrap_or("unknown"))
+        .copied()
+        .unwrap_or(0.0)
+}
+
+pub fn apply_metadata_ranking(
+    memory: &Memory,
+    base_score: f32,
+    config: &crate::config::MetadataRankingConfig,
+) -> f32 {
+    let author = memory.metadata
+        .get("author")
+        .and_then(|v| v.as_str());
+    
+    let source = memory.metadata
+        .get("source_reliability")
+        .and_then(|v| v.as_str());
+
+    let quality_signal = compute_quality(memory.quality_score);
+    let recency_signal = compute_recency(&memory.created_at, config.recency_half_life_days);
+    let author_boost = compute_author_trust(author);
+    let source_boost = compute_source_reliability(source, &config.source_reliability_boost);
+
+    base_score
+        + config.weight_quality * quality_signal
+        + config.weight_recency * recency_signal
+        + config.weight_author * author_boost
+        + config.weight_source * source_boost
+}
+
+/// Query citation count for a memory (references from/to graph edges)
+pub async fn query_citation_count(
+    db: &dyn voidm_db_trait::Database,
+    memory_id: &str,
+) -> u32 {
+    // TODO: Phase 4 - Implement via database trait method
+    // Query: SELECT COUNT(*) FROM graph_edges WHERE target_id = ?
+    // Optimization: Use batch query for multiple memories
+    // Index available: idx_graph_edges_target
+    0
+}
+

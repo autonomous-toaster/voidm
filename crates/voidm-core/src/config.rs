@@ -123,6 +123,9 @@ pub struct SearchConfig {
     /// Graph-aware retrieval configuration (optional).
     #[serde(default)]
     pub graph_retrieval: Option<crate::graph_retrieval::GraphRetrievalConfig>,
+    /// Metadata-driven ranking signals
+    #[serde(default)]
+    pub metadata_ranking: Option<MetadataRankingConfig>,
 }
 
 
@@ -151,6 +154,58 @@ impl Default for RerankerConfig {
             passage_extraction: PassageExtractionConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetadataRankingConfig {
+    #[serde(default = "default_weight_importance")]
+    pub weight_importance: f32,
+    #[serde(default = "default_weight_quality")]
+    pub weight_quality: f32,
+    #[serde(default = "default_weight_recency")]
+    pub weight_recency: f32,
+    #[serde(default = "default_weight_citations")]
+    pub weight_citations: f32,
+    #[serde(default = "default_weight_author")]
+    pub weight_author: f32,
+    #[serde(default = "default_weight_source")]
+    pub weight_source: f32,
+    #[serde(default = "default_recency_half_life")]
+    pub recency_half_life_days: u32,
+    #[serde(default = "default_source_boost")]
+    pub source_reliability_boost: std::collections::HashMap<String, f32>,
+}
+
+impl Default for MetadataRankingConfig {
+    fn default() -> Self {
+        Self {
+            weight_importance: default_weight_importance(),
+            weight_quality: default_weight_quality(),
+            weight_recency: default_weight_recency(),
+            weight_citations: default_weight_citations(),
+            weight_author: default_weight_author(),
+            weight_source: default_weight_source(),
+            recency_half_life_days: default_recency_half_life(),
+            source_reliability_boost: default_source_boost(),
+        }
+    }
+}
+
+fn default_weight_importance() -> f32 { 0.15 }
+fn default_weight_quality() -> f32 { 0.1 }
+fn default_weight_recency() -> f32 { 0.05 }
+fn default_weight_citations() -> f32 { 0.0 }
+fn default_weight_author() -> f32 { 0.08 }
+fn default_weight_source() -> f32 { 0.05 }
+fn default_recency_half_life() -> u32 { 30 }
+
+fn default_source_boost() -> std::collections::HashMap<String, f32> {
+    let mut m = std::collections::HashMap::new();
+    m.insert("academic".to_string(), 1.0);
+    m.insert("verified".to_string(), 0.7);
+    m.insert("user".to_string(), 0.4);
+    m.insert("unknown".to_string(), 0.0);
+    m
 }
 
 fn default_reranker_model() -> String {
@@ -339,6 +394,7 @@ impl Default for SearchConfig {
             reranker: None,
             query_expansion: None,
             graph_retrieval: None,
+            metadata_ranking: None,
         }
     }
 }
@@ -620,6 +676,25 @@ enabled = true
             assert_eq!(r.enabled, true);
             assert_eq!(r.model, "ms-marco-MiniLM-L-6-v2", "should use default model");
             assert_eq!(r.apply_to_top_k, 15, "should use default top_k");
+        }
+    }
+
+    #[test]
+    fn test_metadata_ranking_config() {
+        let toml_str = r#"
+[search.metadata_ranking]
+weight_importance = 0.15
+weight_quality = 0.1
+weight_recency = 0.05
+weight_citations = 0.1
+weight_author = 0.08
+recency_half_life_days = 30
+"#;
+        let config: Config = toml::from_str(toml_str).expect("Failed to parse");
+        if let Some(mr) = &config.search.metadata_ranking {
+            assert_eq!(mr.weight_importance, 0.15);
+            assert_eq!(mr.weight_author, 0.08);
+            assert_eq!(mr.recency_half_life_days, 30);
         }
     }
 }

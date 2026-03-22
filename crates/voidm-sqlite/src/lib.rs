@@ -178,10 +178,10 @@ impl Database for SqliteDatabase {
                 CREATE TABLE IF NOT EXISTS ontology_edges (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     from_id TEXT NOT NULL,
-                    from_kind TEXT NOT NULL,
+                    from_type TEXT NOT NULL,
                     rel_type TEXT NOT NULL,
                     to_id TEXT NOT NULL,
-                    to_kind TEXT NOT NULL,
+                    to_type TEXT NOT NULL,
                     note TEXT,
                     created_at TEXT NOT NULL
                 )
@@ -409,7 +409,7 @@ impl Database for SqliteDatabase {
     fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
         let pool = self.pool.clone();
         Box::pin(async move {
-            let rows = sqlx::query("SELECT id, from_id, from_kind, rel_type, to_id, to_kind, note FROM ontology_edges")
+            let rows = sqlx::query("SELECT id, from_id, from_type, rel_type, to_id, to_type, note FROM ontology_edges")
                 .fetch_all(&pool)
                 .await
                 .context("Failed to list ontology edges")?;
@@ -418,10 +418,10 @@ impl Database for SqliteDatabase {
                 json!({
                     "id": r.get::<i64, _>("id"),
                     "from_id": r.get::<String, _>("from_id"),
-                    "from_kind": r.get::<String, _>("from_kind"),
+                    "from_type": r.get::<String, _>("from_type"),
                     "rel_type": r.get::<String, _>("rel_type"),
                     "to_id": r.get::<String, _>("to_id"),
-                    "to_kind": r.get::<String, _>("to_kind"),
+                    "to_type": r.get::<String, _>("to_type"),
                     "note": r.get::<Option<String>, _>("note")
                 })
             }).collect())
@@ -446,7 +446,7 @@ impl Database for SqliteDatabase {
 
         Box::pin(async move {
             sqlx::query(
-                "INSERT INTO ontology_edges (from_id, from_kind, rel_type, to_id, to_kind, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO ontology_edges (from_id, from_type, rel_type, to_id, to_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(&from_id)
             .bind(&from_type)
@@ -650,7 +650,7 @@ impl Database for SqliteDatabase {
 
         Box::pin(async move {
             sqlx::query(
-                "INSERT INTO ontology_edges (from_id, from_kind, rel_type, to_id, to_kind, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO ontology_edges (from_id, from_type, rel_type, to_id, to_type, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&from_id)
             .bind("concept")

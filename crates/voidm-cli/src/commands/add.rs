@@ -26,6 +26,14 @@ pub struct AddArgs {
     #[arg(long, default_value = "5")]
     pub importance: i64,
 
+    /// Author trust tier: user, assistant, unknown (default: user)
+    #[arg(long)]
+    pub author: Option<String>,
+
+    /// Source reliability: academic, verified, user, unknown (default: unknown)
+    #[arg(long)]
+    pub source: Option<String>,
+
     /// Link to existing memory: <id>:<EDGE_TYPE> or <id>:<EDGE_TYPE>:<note>
     /// RELATES_TO requires a note: <id>:RELATES_TO:<reason>
     #[arg(long = "link")]
@@ -56,6 +64,14 @@ pub async fn run(args: AddArgs, db: &Arc<dyn Database>, pool: &SqlitePool, confi
         link_specs.push(spec);
     }
 
+    let mut metadata = serde_json::Map::new();
+    if let Some(author) = args.author {
+        metadata.insert("author".to_string(), serde_json::json!(author));
+    }
+    if let Some(source) = args.source {
+        metadata.insert("source_reliability".to_string(), serde_json::json!(source));
+    }
+
     let req = AddMemoryRequest {
         id: None,
         content: args.content,
@@ -63,7 +79,7 @@ pub async fn run(args: AddArgs, db: &Arc<dyn Database>, pool: &SqlitePool, confi
         scopes: args.scope,
         tags,
         importance: args.importance,
-        metadata: serde_json::Value::Object(Default::default()),
+        metadata: serde_json::Value::Object(metadata),
         links: link_specs,
     };
 

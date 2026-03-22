@@ -78,6 +78,11 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     let id = req.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
     let now = Utc::now().to_rfc3339();
     
+    // Set author="user" unless already set
+    if !req.metadata.get("author").is_some() {
+        req.metadata["author"] = serde_json::json!("user");
+    }
+    
     let tags_json = serde_json::to_string(&req.tags)?;
     let metadata_json = serde_json::to_string(&req.metadata)?;
     let memory_type_str = req.memory_type.to_string();

@@ -245,12 +245,12 @@ impl Default for MetadataRankingConfig {
     }
 }
 
-fn default_weight_importance() -> f32 { 0.15 }
-fn default_weight_quality() -> f32 { 0.1 }
-fn default_weight_recency() -> f32 { 0.05 }
+fn default_weight_importance() -> f32 { 0.08 }
+fn default_weight_quality() -> f32 { 0.05 }
+fn default_weight_recency() -> f32 { 0.025 }
 fn default_weight_citations() -> f32 { 0.0 }
-fn default_weight_author() -> f32 { 0.08 }
-fn default_weight_source() -> f32 { 0.05 }
+fn default_weight_author() -> f32 { 0.04 }
+fn default_weight_source() -> f32 { 0.025 }
 fn default_recency_half_life() -> u32 { 30 }
 
 fn default_source_boost() -> std::collections::HashMap<String, f32> {

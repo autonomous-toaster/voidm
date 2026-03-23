@@ -4,8 +4,17 @@ use sqlx::SqlitePool;
 /// Run all migrations: memories, memory_scopes, db_meta, and all graph_* tables.
 /// Idempotent — safe to run on every startup.
 pub async fn run(pool: &SqlitePool) -> Result<()> {
-    sqlx::query(SCHEMA).execute(pool).await?;
+    // Split SCHEMA by semicolons and execute each statement separately
+    // (sqlx::query().execute() only executes the first statement in a multi-statement string)
+    for statement in SCHEMA.split(';') {
+        let trimmed = statement.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        sqlx::query(trimmed).execute(pool).await?;
+    }
     upgrade_add_quality_score(pool).await?;
+    upgrade_add_context(pool).await?;
     Ok(())
 }
 
@@ -31,6 +40,25 @@ async fn upgrade_add_quality_score(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+/// Add context column to existing memories table (Phase 3)
+/// Safe to run multiple times (idempotent via IF NOT EXISTS... / PRAGMA table_info)
+async fn upgrade_add_context(pool: &SqlitePool) -> Result<()> {
+    // Check if context column already exists
+    let column_exists: (bool,) = sqlx::query_as(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('memories') WHERE name = 'context'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !column_exists.0 {
+        sqlx::query("ALTER TABLE memories ADD COLUMN context TEXT")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
 const SCHEMA: &str = r#"
 -- Core memory storage
 CREATE TABLE IF NOT EXISTS memories (
@@ -41,6 +69,7 @@ CREATE TABLE IF NOT EXISTS memories (
     tags          TEXT NOT NULL DEFAULT '[]',
     metadata      TEXT NOT NULL DEFAULT '{}',
     quality_score REAL,
+    context       TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );

@@ -155,6 +155,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                 metadata: $metadata, 
                 scopes: $scopes, 
                 quality_score: $quality_score,
+                context: $context,
                 author: $author,
                 source: $source,
                 created_at: $created_at, 
@@ -172,6 +173,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                 .param("metadata", metadata_str)
                 .param("scopes", scopes_str)
                 .param("quality_score", quality.score)
+                .param("context", req.context.clone())
                 .param("author", author.clone())
                 .param("source", source.clone())
                 .param("created_at", created_at.clone())
@@ -209,6 +211,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                 metadata: req.metadata,
                 suggested_links: vec![],
                 duplicate_warning: None,
+                context: req.context,
             };
 
             serde_json::to_value(response).context("Failed to serialize AddMemoryResponse")
@@ -242,6 +245,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                     created_at: node.get("created_at").context("Missing created_at")?,
                     updated_at: node.get("updated_at").context("Missing updated_at")?,
                     quality_score: None,
+                    context: node.get("context").ok(),
                 };
                 
                 Ok(Some(serde_json::to_value(memory).context("Failed to serialize Memory")?))
@@ -279,6 +283,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                     created_at: node.get("created_at").context("Missing created_at")?,
                     updated_at: node.get("updated_at").unwrap_or_default(),
                     quality_score: None,
+                    context: node.get("context").ok(),
                 };
                 
                 let memory_json = serde_json::to_value(memory).context("Failed to serialize Memory")?;

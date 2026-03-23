@@ -119,92 +119,9 @@ impl Database for SqliteDatabase {
     fn ensure_schema(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         let pool = self.pool.clone();
         Box::pin(async move {
-            // Create memories table
-            sqlx::query(
-                r#"
-                CREATE TABLE IF NOT EXISTS memories (
-                    id TEXT PRIMARY KEY,
-                    type TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    importance INTEGER DEFAULT 5,
-                    tags TEXT DEFAULT '[]',
-                    scopes TEXT DEFAULT '[]',
-                    metadata TEXT DEFAULT '{}',
-                    quality_score REAL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                "#,
-            )
-            .execute(&pool)
-            .await
-            .ok();
-
-            // Create edges table
-            sqlx::query(
-                r#"
-                CREATE TABLE IF NOT EXISTS memory_edges (
-                    id TEXT PRIMARY KEY,
-                    from_id TEXT NOT NULL,
-                    rel_type TEXT NOT NULL,
-                    to_id TEXT NOT NULL,
-                    note TEXT,
-                    created_at TEXT NOT NULL
-                )
-                "#,
-            )
-            .execute(&pool)
-            .await
-            .ok();
-
-            // Create ontology tables
-            sqlx::query(
-                r#"
-                CREATE TABLE IF NOT EXISTS ontology_concepts (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    description TEXT,
-                    scope TEXT,
-                    created_at TEXT NOT NULL
-                )
-                "#,
-            )
-            .execute(&pool)
-            .await
-            .ok();
-
-            sqlx::query(
-                r#"
-                CREATE TABLE IF NOT EXISTS ontology_edges (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    from_id TEXT NOT NULL,
-                    from_type TEXT NOT NULL,
-                    rel_type TEXT NOT NULL,
-                    to_id TEXT NOT NULL,
-                    to_type TEXT NOT NULL,
-                    note TEXT,
-                    created_at TEXT NOT NULL
-                )
-                "#,
-            )
-            .execute(&pool)
-            .await
-            .ok();
-
-            // Vector embeddings table
-            sqlx::query(
-                r#"
-                CREATE TABLE IF NOT EXISTS vec_memories (
-                    memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-                    embedding BLOB NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                "#,
-            )
-            .execute(&pool)
-            .await
-            .ok();
-
+            // Use voidm_core::migrate to run the complete schema
+            // This ensures all tables and migrations are applied properly
+            voidm_core::migrate::run(&pool).await?;
             Ok(())
         })
     }
@@ -236,6 +153,7 @@ impl Database for SqliteDatabase {
                 "importance": resp.importance,
                 "created_at": resp.created_at,
                 "quality_score": resp.quality_score,
+                "context": resp.context,
                 "suggested_links": resp.suggested_links,
                 "duplicate_warning": resp.duplicate_warning,
             }))
@@ -358,7 +276,15 @@ impl Database for SqliteDatabase {
             .await
             .context("Failed to link memories")?;
 
-            Ok(json!({"edge_id": id, "from_id": from_id, "rel_type": rel, "to_id": to_id}))
+            // Return proper LinkResponse struct matching voidm-core::models::LinkResponse
+            let response = serde_json::json!({
+                "created": true,
+                "from": from_id,
+                "rel": rel,
+                "to": to_id,
+                "conflict_warning": serde_json::Value::Null
+            });
+            Ok(response)
         })
     }
 

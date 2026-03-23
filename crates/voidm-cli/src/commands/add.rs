@@ -34,6 +34,10 @@ pub struct AddArgs {
     #[arg(long)]
     pub source: Option<String>,
 
+    /// Memory context: gotcha, decision, procedure, reference (optional)
+    #[arg(long)]
+    pub context: Option<String>,
+
     /// Link to existing memory: <id>:<EDGE_TYPE> or <id>:<EDGE_TYPE>:<note>
     /// RELATES_TO requires a note: <id>:RELATES_TO:<reason>
     #[arg(long = "link")]
@@ -72,6 +76,11 @@ pub async fn run(args: AddArgs, db: &Arc<dyn Database>, pool: &SqlitePool, confi
         metadata.insert("source_reliability".to_string(), serde_json::json!(source));
     }
 
+    // Validate context if provided
+    if let Some(ref ctx) = args.context {
+        let _: voidm_core::models::MemoryContext = ctx.parse()?;
+    }
+
     let req = AddMemoryRequest {
         id: None,
         content: args.content,
@@ -81,6 +90,7 @@ pub async fn run(args: AddArgs, db: &Arc<dyn Database>, pool: &SqlitePool, confi
         importance: args.importance,
         metadata: serde_json::Value::Object(metadata),
         links: link_specs,
+        context: args.context,
     };
 
     let resp = crud_trait::add_memory(db, req, config).await?;

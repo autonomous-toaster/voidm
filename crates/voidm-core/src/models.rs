@@ -123,6 +123,98 @@ impl std::str::FromStr for EdgeType {
     }
 }
 
+/// Valid memory context types (creation-time categorization).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryContext {
+    Gotcha,
+    Decision,
+    Procedure,
+    Reference,
+}
+
+impl MemoryContext {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MemoryContext::Gotcha => "gotcha",
+            MemoryContext::Decision => "decision",
+            MemoryContext::Procedure => "procedure",
+            MemoryContext::Reference => "reference",
+        }
+    }
+}
+
+impl fmt::Display for MemoryContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for MemoryContext {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "gotcha" => Ok(MemoryContext::Gotcha),
+            "decision" => Ok(MemoryContext::Decision),
+            "procedure" => Ok(MemoryContext::Procedure),
+            "reference" => Ok(MemoryContext::Reference),
+            other => Err(anyhow::anyhow!(
+                "Unknown memory context: '{}'. Valid contexts: gotcha, decision, procedure, reference",
+                other
+            )),
+        }
+    }
+}
+
+/// Valid search intent types (search-time categorization).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchIntent {
+    Debug,
+    Optimize,
+    Implement,
+    Understand,
+    Architecture,
+    Troubleshoot,
+}
+
+impl SearchIntent {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SearchIntent::Debug => "debug",
+            SearchIntent::Optimize => "optimize",
+            SearchIntent::Implement => "implement",
+            SearchIntent::Understand => "understand",
+            SearchIntent::Architecture => "architecture",
+            SearchIntent::Troubleshoot => "troubleshoot",
+        }
+    }
+}
+
+impl fmt::Display for SearchIntent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for SearchIntent {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "debug" => Ok(SearchIntent::Debug),
+            "optimize" => Ok(SearchIntent::Optimize),
+            "implement" => Ok(SearchIntent::Implement),
+            "understand" => Ok(SearchIntent::Understand),
+            "architecture" => Ok(SearchIntent::Architecture),
+            "troubleshoot" => Ok(SearchIntent::Troubleshoot),
+            other => Err(anyhow::anyhow!(
+                "Unknown search intent: '{}'. Valid intents: debug, optimize, implement, understand, architecture, troubleshoot",
+                other
+            )),
+        }
+    }
+}
+
 /// A memory record as stored in the DB.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memory {
@@ -138,6 +230,8 @@ pub struct Memory {
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality_score: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
 /// Request to add a memory.
@@ -151,6 +245,7 @@ pub struct AddMemoryRequest {
     pub importance: i64,
     pub metadata: serde_json::Value,
     pub links: Vec<LinkSpec>,
+    pub context: Option<String>,
 }
 
 /// A link spec from --link id:TYPE or --link id:RELATES_TO:"note"
@@ -177,6 +272,8 @@ pub struct AddMemoryResponse {
     pub metadata: serde_json::Value,
     pub suggested_links: Vec<SuggestedLink>,
     pub duplicate_warning: Option<DuplicateWarning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

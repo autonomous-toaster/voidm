@@ -168,6 +168,7 @@ async fn migrate_memories(
             importance: mem.importance,
             metadata: mem.metadata.clone(),
             links: vec![],
+            context: mem.context,
         };
 
         let req_json = serde_json::to_value(&req)?;

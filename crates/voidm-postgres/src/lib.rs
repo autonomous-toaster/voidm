@@ -80,6 +80,7 @@ impl Database for PostgresDatabase {
                     tags JSONB NOT NULL DEFAULT '[]'::jsonb,
                     scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
                     importance INTEGER NOT NULL DEFAULT 0,
+                    context VARCHAR(50),
                     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
@@ -150,6 +151,13 @@ impl Database for PostgresDatabase {
             .await
             .context("Failed to create ontology_edges table")?;
 
+            // Add context column if it doesn't exist (migration for existing DBs)
+            let _ = sqlx::query(
+                "ALTER TABLE memories ADD COLUMN IF NOT EXISTS context VARCHAR(50)"
+            )
+            .execute(&pool)
+            .await;
+
             Ok(())
         })
     }
@@ -172,12 +180,13 @@ impl Database for PostgresDatabase {
                 arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
             ).unwrap_or_default();
             let importance = req_json.get("importance").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let context = req_json.get("context").and_then(|v| v.as_str()).map(|s| s.to_string());
 
             let id = Uuid::new_v4();
             let tags_json = serde_json::to_value(&tags)?;
             let scopes_json = serde_json::to_value(&scopes)?;
             sqlx::query(
-                "INSERT INTO memories (id, content, memory_type, tags, scopes, importance) VALUES ($1, $2, $3, $4, $5, $6)",
+                "INSERT INTO memories (id, content, memory_type, tags, scopes, importance, context) VALUES ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(id)
             .bind(content)
@@ -185,6 +194,7 @@ impl Database for PostgresDatabase {
             .bind(tags_json)
             .bind(scopes_json)
             .bind(importance)
+            .bind(&context)
             .execute(&pool)
             .await
             .context("Failed to insert memory")?;
@@ -198,7 +208,7 @@ impl Database for PostgresDatabase {
         let id = id.to_string();
         Box::pin(async move {
             let row = sqlx::query(
-                "SELECT id::text, content, memory_type, tags, scopes, importance, created_at, updated_at FROM memories WHERE id::text = $1 OR id::text LIKE $2 LIMIT 1",
+                "SELECT id::text, content, memory_type, tags, scopes, importance, context, created_at, updated_at FROM memories WHERE id::text = $1 OR id::text LIKE $2 LIMIT 1",
             )
             .bind(&id)
             .bind(format!("{}%", id))
@@ -207,7 +217,7 @@ impl Database for PostgresDatabase {
             .context("Failed to fetch memory")?;
 
             Ok(row.map(|r| {
-                json!({
+                let mut obj = json!({
                     "id": r.get::<String, _>("id"),
                     "content": r.get::<String, _>("content"),
                     "memory_type": r.get::<String, _>("memory_type"),
@@ -216,7 +226,11 @@ impl Database for PostgresDatabase {
                     "importance": r.get::<i32, _>("importance"),
                     "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
                     "updated_at": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at").to_rfc3339()
-                })
+                });
+                if let Some(context) = r.get::<Option<String>, _>("context") {
+                    obj["context"] = json!(context);
+                }
+                obj
             }))
         })
     }
@@ -225,14 +239,14 @@ impl Database for PostgresDatabase {
         let pool = self.pool.clone();
         Box::pin(async move {
             let limit = limit.unwrap_or(100) as i64;
-            let rows = sqlx::query("SELECT id::text, content, memory_type, tags, scopes, importance, created_at, updated_at FROM memories ORDER BY created_at DESC LIMIT $1")
+            let rows = sqlx::query("SELECT id::text, content, memory_type, tags, scopes, importance, context, created_at, updated_at FROM memories ORDER BY created_at DESC LIMIT $1")
                 .bind(limit)
                 .fetch_all(&pool)
                 .await
                 .context("Failed to list memories")?;
 
             Ok(rows.into_iter().map(|r| {
-                json!({
+                let mut obj = json!({
                     "id": r.get::<String, _>("id"),
                     "content": r.get::<String, _>("content"),
                     "memory_type": r.get::<String, _>("memory_type"),
@@ -241,7 +255,11 @@ impl Database for PostgresDatabase {
                     "importance": r.get::<i32, _>("importance"),
                     "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
                     "updated_at": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at").to_rfc3339()
-                })
+                });
+                if let Some(context) = r.get::<Option<String>, _>("context") {
+                    obj["context"] = json!(context);
+                }
+                obj
             }).collect())
         })
     }
@@ -335,7 +353,15 @@ impl Database for PostgresDatabase {
             .await
             .context("Failed to link memories")?;
 
-            Ok(json!({"edge_id": format!("{}-{}-{}", from_uuid, rel, to_uuid), "conflict_warnings": []}))
+            // Return proper LinkResponse struct matching voidm-core::models::LinkResponse
+            let response = serde_json::json!({
+                "created": true,
+                "from": from_id,
+                "rel": rel,
+                "to": to_id,
+                "conflict_warning": serde_json::Value::Null
+            });
+            Ok(response)
         })
     }
 

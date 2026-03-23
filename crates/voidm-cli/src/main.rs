@@ -231,8 +231,7 @@ async fn run(cli: Cli) -> Result<()> {
             let pool = open_pool(&db_path).await?;
             let db = Arc::new(voidm_sqlite::SqliteDatabase::new(pool.clone())) as Arc<dyn voidm_db_trait::Database>;
 
-            // Run migrations
-            voidm_core::migrate::run(&pool).await?;
+            // Migrations already run in open_pool() via ensure_schema()
             let _ = voidm_core::vector::cleanup_stale_temp_table(&pool).await;
 
             // Check model mismatch
@@ -248,7 +247,7 @@ async fn run(cli: Cli) -> Result<()> {
                 }
             }
 
-            match cli.command {
+            let result = match cli.command {
                 Commands::Add(args) => commands::add::run(args, &db, &pool, &config, cli.json).await,
                 Commands::Get(args) => commands::get::run(args, &db, &pool, cli.json).await,
                 Commands::Search(args) => commands::search::run(args, &db, &pool, &config, cli.json).await,
@@ -269,8 +268,15 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Migrate(_) => unreachable!(),
                 Commands::CheckUpdate(_) => unreachable!(),
                 Commands::Stats(args) => commands::stats::run(args, &db, &pool, &config, cli.json).await,
-                Commands::Mcp(args) => commands::mcp::run(args, pool, config).await,
-            }
+                Commands::Mcp(args) => commands::mcp::run(args, pool.clone(), config).await,
+            };
+
+            // Ensure WAL checkpoint and synchronous flush
+            let _ = sqlx::query("PRAGMA synchronous = FULL").execute(&pool).await;
+            let _ = sqlx::query("PRAGMA wal_checkpoint(RESTART)").execute(&pool).await;
+            pool.close().await;
+            
+            result
         }
     }
 }

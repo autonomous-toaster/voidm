@@ -83,8 +83,8 @@ pub struct SearchArgs {
     #[arg(long)]
     pub query_expand_model: Option<String>,
 
-    /// Intent/context for query expansion (e.g., "oauth2", "database-design")
-    /// When provided, guides expansion toward this context. Falls back to scope if not set.
+    /// Intent/context for query expansion and scoring (debug, optimize, implement, understand, architecture, troubleshoot)
+    /// When provided, guides expansion and applies scoring boost when aligned with memory context.
     #[arg(long)]
     pub intent: Option<String>,
 
@@ -99,6 +99,11 @@ pub struct SearchArgs {
 
 pub async fn run(args: SearchArgs, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, config: &Config, json: bool) -> Result<()> {
     let mode: SearchMode = args.mode.parse()?;
+
+    // Validate intent if provided
+    if let Some(ref intent) = args.intent {
+        let _: voidm_core::models::SearchIntent = intent.parse()?;
+    }
 
     // Apply CLI reranker overrides to config
     let mut config = config.clone();

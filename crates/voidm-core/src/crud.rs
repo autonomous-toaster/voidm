@@ -148,10 +148,10 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     // 2–8: Atomic transaction
     let mut tx = pool.begin().await?;
 
-    // Insert memory with persistent quality_score
+    // Insert memory with persistent quality_score and context
     sqlx::query(
-        "INSERT INTO memories (id, type, content, importance, tags, metadata, quality_score, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO memories (id, type, content, importance, tags, metadata, quality_score, context, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&id)
     .bind(&memory_type_str)
@@ -160,6 +160,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     .bind(&tags_json)
     .bind(&metadata_json)
     .bind(quality.score)
+    .bind(&req.context)
     .bind(&now)
     .bind(&now)
     .execute(&mut *tx)
@@ -310,6 +311,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
                             metadata: dup_mem.metadata,
                             suggested_links: vec![],
                             duplicate_warning: None,
+                            context: dup_mem.context,
                         });
                     }
                 }
@@ -370,6 +372,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         metadata: req.metadata,
         suggested_links,
         duplicate_warning,
+        context: req.context,
     })
 }
 
@@ -471,8 +474,8 @@ async fn merge_memories(
 
 /// Get a single memory by ID.
 pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
-    let row: Option<(String, String, String, i64, String, String, Option<f32>, String, String)> = sqlx::query_as(
-        "SELECT id, type, content, importance, tags, metadata, quality_score, created_at, updated_at
+    let row: Option<(String, String, String, i64, String, String, Option<f32>, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT id, type, content, importance, tags, metadata, quality_score, context, created_at, updated_at
          FROM memories WHERE id = ?"
     )
     .bind(id)
@@ -481,7 +484,7 @@ pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
 
     match row {
         None => Ok(None),
-        Some((id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, created_at, updated_at)) => {
+        Some((id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, context, created_at, updated_at)) => {
             let scopes = get_scopes(pool, &id).await?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_default();
@@ -507,6 +510,7 @@ pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
                 created_at,
                 updated_at,
                 quality_score,
+                context,
             }))
         }
     }
@@ -520,10 +524,10 @@ pub async fn list_memories(
     limit: usize,
 ) -> Result<Vec<Memory>> {
     // Build query dynamically
-    let rows: Vec<(String, String, String, i64, String, String, Option<f32>, String, String)> = if let Some(scope) = scope_filter {
+    let rows: Vec<(String, String, String, i64, String, String, Option<f32>, Option<String>, String, String)> = if let Some(scope) = scope_filter {
         let scope_prefix = format!("{}%", scope);
         sqlx::query_as(
-            "SELECT DISTINCT m.id, m.type, m.content, m.importance, m.tags, m.metadata, m.quality_score, m.created_at, m.updated_at
+            "SELECT DISTINCT m.id, m.type, m.content, m.importance, m.tags, m.metadata, m.quality_score, m.context, m.created_at, m.updated_at
              FROM memories m
              JOIN memory_scopes ms ON ms.memory_id = m.id
              WHERE ms.scope LIKE ?
@@ -535,7 +539,7 @@ pub async fn list_memories(
         .await?
     } else {
         sqlx::query_as(
-            "SELECT id, type, content, importance, tags, metadata, quality_score, created_at, updated_at
+            "SELECT id, type, content, importance, tags, metadata, quality_score, context, created_at, updated_at
              FROM memories ORDER BY created_at DESC LIMIT ?"
         )
         .bind(limit as i64)
@@ -544,7 +548,7 @@ pub async fn list_memories(
     };
 
     let mut memories = Vec::new();
-    for (id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, created_at, updated_at) in rows {
+    for (id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, context, created_at, updated_at) in rows {
         if let Some(t) = type_filter {
             if memory_type != t { continue; }
         }
@@ -573,6 +577,7 @@ pub async fn list_memories(
             created_at, 
             updated_at,
             quality_score,
+            context,
         });
     }
     Ok(memories)
@@ -590,8 +595,28 @@ pub async fn delete_memory(pool: &SqlitePool, id: &str) -> Result<bool> {
         return Ok(false);
     }
 
-    // Delete in order of dependencies (FKs cascade)
-    sqlx::query("DELETE FROM graph_edges WHERE from_id = ? OR to_id = ?")
+    // Delete graph_edges (using source_id and target_id, not from_id/to_id)
+    // First get the graph node IDs for this memory
+    let node_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+        .bind(id)
+        .fetch_all(pool)
+        .await?;
+    
+    for node_id in node_ids {
+        sqlx::query("DELETE FROM graph_edges WHERE source_id = ? OR target_id = ?")
+            .bind(node_id)
+            .bind(node_id)
+            .execute(pool)
+            .await?;
+        
+        sqlx::query("DELETE FROM graph_nodes WHERE id = ?")
+            .bind(node_id)
+            .execute(pool)
+            .await?;
+    }
+
+    // Delete memory_edges (which uses from_id and to_id)
+    sqlx::query("DELETE FROM memory_edges WHERE from_id = ? OR to_id = ?")
         .bind(id)
         .bind(id)
         .execute(pool)

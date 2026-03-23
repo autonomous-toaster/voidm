@@ -117,7 +117,7 @@ pub async fn search(
     let fetch_limit = if config_search.reranker.as_ref().map_or(false, |r| r.enabled) {
         (opts.limit * 5).max(config_search.reranker.as_ref().map(|r| r.apply_to_top_k * 2).unwrap_or(30))
     } else {
-        opts.limit * 27  // Fine-tuned for near-ceiling recall
+        opts.limit * 12  // Balanced configuration: high recall with good precision
     };
     
     tracing::debug!("Search: fetch_limit={} (reranker enabled: {})", 

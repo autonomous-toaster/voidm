@@ -26,8 +26,8 @@ const TEST_QUERIES: &[(&str, &str)] = &[
 /// Expected expansion categories for validation
 #[derive(Debug, Clone)]
 struct ExpansionCategories {
-    keywords: Vec<String>,        // BM25/lex expansion
-    semantic_phrases: Vec<String>, // vec/semantic expansion
+    keywords: Vec<String>,            // BM25/lex expansion
+    semantic_phrases: Vec<String>,    // vec/semantic expansion
     hypothetical_doc: Option<String>, // hyde expansion
 }
 
@@ -172,10 +172,16 @@ fn main() -> Result<()> {
     // Statistics
     let avg_diversity_onnx =
         onnx_metrics.iter().map(|m| m.diversity_score).sum::<f32>() / onnx_metrics.len() as f32;
-    let avg_relevance_onnx =
-        onnx_metrics.iter().map(|m| m.semantic_relevance).sum::<f32>() / onnx_metrics.len() as f32;
-    let avg_latency_onnx =
-        onnx_metrics.iter().map(|m| m.latency_ms as f32).sum::<f32>() / onnx_metrics.len() as f32;
+    let avg_relevance_onnx = onnx_metrics
+        .iter()
+        .map(|m| m.semantic_relevance)
+        .sum::<f32>()
+        / onnx_metrics.len() as f32;
+    let avg_latency_onnx = onnx_metrics
+        .iter()
+        .map(|m| m.latency_ms as f32)
+        .sum::<f32>()
+        / onnx_metrics.len() as f32;
 
     println!("      ─────────────────────────────────────────────────────");
     println!("      ONNX Baseline Statistics:");
@@ -290,8 +296,16 @@ fn main() -> Result<()> {
         gguf_metrics.push(metric);
 
         println!("Query: \"{}\"", query);
-        println!("  Keywords:  {} items (+{})", keywords, keywords.saturating_sub(4));
-        println!("  Semantic:  {} items (+{})", semantic, semantic.saturating_sub(3));
+        println!(
+            "  Keywords:  {} items (+{})",
+            keywords,
+            keywords.saturating_sub(4)
+        );
+        println!(
+            "  Semantic:  {} items (+{})",
+            semantic,
+            semantic.saturating_sub(3)
+        );
         println!("  HyDE:      {}", if has_hyde { "✓" } else { "✗" });
         println!("  Diversity: {:.2}", diversity.min(1.0));
         println!("  Relevance: {:.2}", metric.semantic_relevance);
@@ -301,10 +315,16 @@ fn main() -> Result<()> {
     // Statistics
     let avg_diversity_gguf =
         gguf_metrics.iter().map(|m| m.diversity_score).sum::<f32>() / gguf_metrics.len() as f32;
-    let avg_relevance_gguf =
-        gguf_metrics.iter().map(|m| m.semantic_relevance).sum::<f32>() / gguf_metrics.len() as f32;
-    let avg_latency_gguf =
-        gguf_metrics.iter().map(|m| m.latency_ms as f32).sum::<f32>() / gguf_metrics.len() as f32;
+    let avg_relevance_gguf = gguf_metrics
+        .iter()
+        .map(|m| m.semantic_relevance)
+        .sum::<f32>()
+        / gguf_metrics.len() as f32;
+    let avg_latency_gguf = gguf_metrics
+        .iter()
+        .map(|m| m.latency_ms as f32)
+        .sum::<f32>()
+        / gguf_metrics.len() as f32;
 
     println!("      ─────────────────────────────────────────────────────");
     println!("      GGUF Model Statistics:");
@@ -315,28 +335,48 @@ fn main() -> Result<()> {
     println!("[4/5] Comparative Analysis...");
     println!("      ─────────────────────────────────────────────────────\n");
 
-    let diversity_improvement = ((avg_diversity_gguf - avg_diversity_onnx) / avg_diversity_onnx * 100.0).max(0.0);
-    let relevance_improvement = ((avg_relevance_gguf - avg_relevance_onnx) / avg_relevance_onnx * 100.0).max(0.0);
+    let diversity_improvement =
+        ((avg_diversity_gguf - avg_diversity_onnx) / avg_diversity_onnx * 100.0).max(0.0);
+    let relevance_improvement =
+        ((avg_relevance_gguf - avg_relevance_onnx) / avg_relevance_onnx * 100.0).max(0.0);
     let latency_same = (avg_latency_gguf - avg_latency_onnx).abs() < 5.0;
 
     println!("Metric Comparison:");
-    println!("  Diversity:       {:.2} → {:.2} (+{:.1}%)", avg_diversity_onnx, avg_diversity_gguf, diversity_improvement);
-    println!("  Relevance:       {:.2} → {:.2} (+{:.1}%)", avg_relevance_onnx, avg_relevance_gguf, relevance_improvement);
-    println!("  Latency:         {:.1} ms → {:.1} ms {}", 
-        avg_latency_onnx, avg_latency_gguf, 
-        if latency_same { "✓ Same" } else { "" });
+    println!(
+        "  Diversity:       {:.2} → {:.2} (+{:.1}%)",
+        avg_diversity_onnx, avg_diversity_gguf, diversity_improvement
+    );
+    println!(
+        "  Relevance:       {:.2} → {:.2} (+{:.1}%)",
+        avg_relevance_onnx, avg_relevance_gguf, relevance_improvement
+    );
+    println!(
+        "  Latency:         {:.1} ms → {:.1} ms {}",
+        avg_latency_onnx,
+        avg_latency_gguf,
+        if latency_same { "✓ Same" } else { "" }
+    );
 
     println!("\nQuality Assessment:");
     if diversity_improvement > 10.0 {
-        println!("  ✅ GGUF has significantly better diversity (+{:.1}%)", diversity_improvement);
+        println!(
+            "  ✅ GGUF has significantly better diversity (+{:.1}%)",
+            diversity_improvement
+        );
     } else if diversity_improvement > 5.0 {
-        println!("  ✅ GGUF has better diversity (+{:.1}%)", diversity_improvement);
+        println!(
+            "  ✅ GGUF has better diversity (+{:.1}%)",
+            diversity_improvement
+        );
     } else {
         println!("  ≈ Diversity comparable");
     }
 
     if relevance_improvement > 5.0 {
-        println!("  ✅ GGUF has better semantic relevance (+{:.1}%)", relevance_improvement);
+        println!(
+            "  ✅ GGUF has better semantic relevance (+{:.1}%)",
+            relevance_improvement
+        );
     } else {
         println!("  ≈ Relevance comparable");
     }
@@ -344,7 +384,10 @@ fn main() -> Result<()> {
     if latency_same {
         println!("  ✅ Latency identical (no performance penalty)");
     } else {
-        println!("  ⚠️ Latency difference: {:.1} ms", (avg_latency_gguf - avg_latency_onnx).abs());
+        println!(
+            "  ⚠️ Latency difference: {:.1} ms",
+            (avg_latency_gguf - avg_latency_onnx).abs()
+        );
     }
 
     println!("\n[5/5] Recommendation...");
@@ -382,12 +425,18 @@ fn main() -> Result<()> {
     println!("╚═══════════════════════════════════════════════════════════════════════╝");
 
     println!("\n📊 Summary:");
-    println!("   ONNX Baseline:  Diversity={:.2}, Relevance={:.2}, Latency={:.0}ms", 
-        avg_diversity_onnx, avg_relevance_onnx, avg_latency_onnx);
-    println!("   GGUF Model:     Diversity={:.2}, Relevance={:.2}, Latency={:.0}ms", 
-        avg_diversity_gguf, avg_relevance_gguf, avg_latency_gguf);
-    println!("   Improvement:    +{:.1}% (Diversity) +{:.1}% (Relevance)", 
-        diversity_improvement, relevance_improvement);
+    println!(
+        "   ONNX Baseline:  Diversity={:.2}, Relevance={:.2}, Latency={:.0}ms",
+        avg_diversity_onnx, avg_relevance_onnx, avg_latency_onnx
+    );
+    println!(
+        "   GGUF Model:     Diversity={:.2}, Relevance={:.2}, Latency={:.0}ms",
+        avg_diversity_gguf, avg_relevance_gguf, avg_latency_gguf
+    );
+    println!(
+        "   Improvement:    +{:.1}% (Diversity) +{:.1}% (Relevance)",
+        diversity_improvement, relevance_improvement
+    );
 
     println!("\n📝 Next Phase (Phase 4: Final Integration Decision):");
     println!("   - Review recommendation above");

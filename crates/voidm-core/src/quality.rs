@@ -48,7 +48,8 @@ fn entity_specificity_score(content: &str) -> f32 {
     }
 
     // Count tokens in named entities
-    let entity_token_count: usize = entities.iter()
+    let entity_token_count: usize = entities
+        .iter()
         .map(|e| e.text.split_whitespace().count())
         .sum();
 
@@ -56,18 +57,18 @@ fn entity_specificity_score(content: &str) -> f32 {
 
     // Score based on density distribution
     if entity_density < 0.1 {
-        0.95  // Low density but has some anchors
+        0.95 // Low density but has some anchors
     } else if entity_density < 0.3 {
-        1.0   // Sweet spot: balanced concrete + generic
+        1.0 // Sweet spot: balanced concrete + generic
     } else if entity_density < 0.5 {
-        0.8   // Getting specific
+        0.8 // Getting specific
     } else {
-        0.5   // Too entity-heavy, overly specific/instance-focused
+        0.5 // Too entity-heavy, overly specific/instance-focused
     }
 }
 
 /// Compute quality score for a memory.
-/// 
+///
 /// Scoring factors (weighted):
 /// - Genericity (0.20): Language reuse across projects vs personal context
 /// - Abstraction (0.20): Principle/pattern vs specific instance
@@ -76,15 +77,15 @@ fn entity_specificity_score(content: &str) -> f32 {
 /// - Content substance (0.20): Word count (50+ preferred)
 /// - Entity specificity (0.05): Named entity density (10-30% optimal, captures concrete vs instance-specific)
 /// - Anti-pattern penalties (context-aware): Task language excluded for procedural/conceptual
-pub fn compute_quality_score(
-    content: &str,
-    memory_type: &MemoryType,
-) -> QualityScore {
+pub fn compute_quality_score(content: &str, memory_type: &MemoryType) -> QualityScore {
     let content_lower = content.to_lowercase();
     let word_count = content.split_whitespace().count();
 
     // 1. Genericity: penalize personal pronouns and project-specific language
-    let personal_pronouns = count_matches(&content_lower, &[" i ", " we ", " my ", " our ", " me ", " us "]);
+    let personal_pronouns = count_matches(
+        &content_lower,
+        &[" i ", " we ", " my ", " our ", " me ", " us "],
+    );
     let has_this_project = content_lower.contains("this project");
     let personal_count = personal_pronouns + (if has_this_project { 1 } else { 0 });
     let genericity = (1.0 - (personal_count as f32 * 0.25).min(1.0)).max(0.0);
@@ -100,17 +101,27 @@ pub fn compute_quality_score(
 
     // 3. Temporal independence: penalize temporal markers
     let temporal_keywords = &[
-        "today", "tomorrow", "yesterday", "this session", "this morning", "this afternoon",
-        "this week", "this month", "this year", "right now",
+        "today",
+        "tomorrow",
+        "yesterday",
+        "this session",
+        "this morning",
+        "this afternoon",
+        "this week",
+        "this month",
+        "this year",
+        "right now",
     ];
-    let has_temporal = temporal_keywords.iter().any(|kw| content_lower.contains(kw));
+    let has_temporal = temporal_keywords
+        .iter()
+        .any(|kw| content_lower.contains(kw));
     // Penalty: 0.4 instead of 0.05 to allow some legitimate temporal context in examples
     let temporal_independence = if has_temporal { 0.4 } else { 0.95 };
 
     // 4. Task independence: penalize task/TODO references and status prefixes
     let has_status_prefix = is_status_prefix_line(content);
     let has_todo_refs = content.contains("TODO-") && contains_hex_after_todo(&content);
-    
+
     let mut task_independence: f32 = 0.95;
     if has_status_prefix {
         task_independence -= 0.3;
@@ -129,7 +140,7 @@ pub fn compute_quality_score(
             || content_lower.ends_with(kw)
             || content_lower.starts_with(kw)
     });
-    
+
     let mut task_language_penalty = 0.0;
     if has_task_language {
         match memory_type {
@@ -166,7 +177,8 @@ pub fn compute_quality_score(
         + temporal_independence * 0.25
         + task_independence * 0.15
         + substance * 0.20
-        + entity_specificity * 0.05) - task_language_penalty;
+        + entity_specificity * 0.05)
+        - task_language_penalty;
 
     QualityScore {
         score: score.max(0.0).min(1.0),
@@ -216,14 +228,22 @@ mod tests {
     fn test_good_semantic_memory() {
         let content = "Separation of ontology_concepts and ontology_edges prevents concept reuse issues. Concepts should be first-class entities.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
-        assert!(score.score > 0.7, "Good semantic memory should score >0.7, got {}", score.score);
+        assert!(
+            score.score > 0.7,
+            "Good semantic memory should score >0.7, got {}",
+            score.score
+        );
     }
 
     #[test]
     fn test_bad_task_log() {
         let content = "Today I completed the refactor. Task done.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
-        assert!(score.score < 0.5, "Task log should score <0.5, got {}", score.score);
+        assert!(
+            score.score < 0.5,
+            "Task log should score <0.5, got {}",
+            score.score
+        );
     }
 
     #[test]
@@ -232,7 +252,11 @@ mod tests {
         let content = "Run cargo build. Once done, commit changes.";
         let score = compute_quality_score(content, &MemoryType::Procedural);
         // Should not heavily penalize task language for procedural
-        assert!(score.score > 0.4, "Procedural with 'done' should not be heavily penalized, got {}", score.score);
+        assert!(
+            score.score > 0.4,
+            "Procedural with 'done' should not be heavily penalized, got {}",
+            score.score
+        );
     }
 
     #[test]
@@ -240,28 +264,44 @@ mod tests {
         let content = "Today I worked on the auth service.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
         // Temporal penalty is now 0.4 instead of 0.05 to allow legitimate temporal context in examples
-        assert!(score.score < 0.65, "Temporal markers should lower score, got {}", score.score);
+        assert!(
+            score.score < 0.65,
+            "Temporal markers should lower score, got {}",
+            score.score
+        );
     }
 
     #[test]
     fn test_short_content_penalty() {
         let content = "Done.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
-        assert!(score.score < 0.70, "Very short content with task language should score low, got {}", score.score);
+        assert!(
+            score.score < 0.70,
+            "Very short content with task language should score low, got {}",
+            score.score
+        );
     }
 
     #[test]
     fn test_personal_pronouns_penalty() {
         let content = "I built a service. We deployed it. My implementation works.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
-        assert!(score.score < 0.60, "Personal pronouns should lower score significantly, got {}", score.score);
+        assert!(
+            score.score < 0.60,
+            "Personal pronouns should lower score significantly, got {}",
+            score.score
+        );
     }
 
     #[test]
     fn test_generic_principle() {
         let content = "Service isolation prevents cascading failures in distributed systems. Proper circuit breakers and bulkheads are essential patterns.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
-        assert!(score.score > 0.75, "Generic principle should score high, got {}", score.score);
+        assert!(
+            score.score > 0.75,
+            "Generic principle should score high, got {}",
+            score.score
+        );
     }
 
     #[test]
@@ -270,7 +310,11 @@ mod tests {
         let content = "Docker containers need proper resource limits to prevent host interference. Always set CPU and memory constraints.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
         // Should score well: has concrete anchor (Docker) but generic principle
-        assert!(score.score > 0.65, "Balanced concrete+generic should score >0.65, got {}", score.score);
+        assert!(
+            score.score > 0.65,
+            "Balanced concrete+generic should score >0.65, got {}",
+            score.score
+        );
     }
 
     #[test]
@@ -280,7 +324,11 @@ mod tests {
         let content = "I met John Smith in Tokyo last Tuesday. He works at Acme Corp in the Tokyo office. John told me about their project.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
         // Should score lower: too many temporal markers + personal pronouns + instance-specific
-        assert!(score.score < 0.85, "Overly specific instance narrative should score <0.85, got {}", score.score);
+        assert!(
+            score.score < 0.85,
+            "Overly specific instance narrative should score <0.85, got {}",
+            score.score
+        );
     }
 
     #[test]
@@ -290,18 +338,26 @@ mod tests {
         let content = "When designing distributed systems, consider consistency models and partition tolerance.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
         // entity_specificity should be populated in the struct
-        assert!(score.entity_specificity >= 0.0 && score.entity_specificity <= 1.0, 
-            "entity_specificity should be in valid range, got {}", score.entity_specificity);
+        assert!(
+            score.entity_specificity >= 0.0 && score.entity_specificity <= 1.0,
+            "entity_specificity should be in valid range, got {}",
+            score.entity_specificity
+        );
     }
 
     #[test]
     fn test_entity_specificity_signal_sweet_spot() {
         // In unit test context, entity_specificity returns neutral 0.95
         // This test verifies balanced content scores well
-        let content = "PostgreSQL uses MVCC for isolation. This prevents read locks in most scenarios.";
+        let content =
+            "PostgreSQL uses MVCC for isolation. This prevents read locks in most scenarios.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
         // Should score reasonably high (no personal pronouns, no temporal markers)
-        assert!(score.score > 0.70, "Sweet spot content should score high, got {}", score.score);
+        assert!(
+            score.score > 0.70,
+            "Sweet spot content should score high, got {}",
+            score.score
+        );
     }
 
     #[test]
@@ -312,17 +368,25 @@ mod tests {
         let content = "Alice and Bob and Charlie and David and Eve work at company X";
         let score = compute_quality_score(content, &MemoryType::Semantic);
         // Verify entity_specificity field exists and is in valid range
-        assert!(score.entity_specificity >= 0.0 && score.entity_specificity <= 1.0, 
-            "entity_specificity should be in valid range, got {}", score.entity_specificity);
+        assert!(
+            score.entity_specificity >= 0.0 && score.entity_specificity <= 1.0,
+            "entity_specificity should be in valid range, got {}",
+            score.entity_specificity
+        );
     }
 
     #[test]
     fn test_quality_with_product_specific_knowledge() {
         // Product-specific but useful knowledge (AWS + Stripe)
-        let content = "AWS Lambda integrates with Stripe for payment processing. Set timeout appropriately.";
+        let content =
+            "AWS Lambda integrates with Stripe for payment processing. Set timeout appropriately.";
         let score = compute_quality_score(content, &MemoryType::Semantic);
         // Should score reasonably (useful concrete knowledge)
         // Entity density: ~3 entities (AWS, Lambda, Stripe) / ~13 tokens = 23% = sweet spot
-        assert!(score.score > 0.5, "Product-specific knowledge should score >0.5, got {}", score.score);
+        assert!(
+            score.score > 0.5,
+            "Product-specific knowledge should score >0.5, got {}",
+            score.score
+        );
     }
 }

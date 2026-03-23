@@ -94,9 +94,9 @@ pub struct ReturnExpr {
 
 #[derive(Debug, Clone)]
 pub enum ReturnItem {
-    Property(String, String),   // var.prop
-    Variable(String),           // whole node/var
-    Count(Option<String>),      // COUNT(*) or COUNT(var)
+    Property(String, String), // var.prop
+    Variable(String),         // whole node/var
+    Count(Option<String>),    // COUNT(*) or COUNT(var)
 }
 
 #[derive(Debug, Clone)]

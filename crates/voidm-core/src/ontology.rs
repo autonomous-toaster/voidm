@@ -130,7 +130,7 @@ pub async fn add_concept(
 
     sqlx::query(
         "INSERT INTO ontology_concepts (id, name, description, scope, created_at)
-         VALUES (?, ?, ?, ?, ?)"
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(name)
@@ -163,14 +163,20 @@ pub async fn add_concept(
 pub async fn get_concept(pool: &SqlitePool, id: &str) -> Result<Concept> {
     let full_id = resolve_concept_id(pool, id).await?;
     let row: (String, String, Option<String>, Option<String>, String) = sqlx::query_as(
-        "SELECT id, name, description, scope, created_at FROM ontology_concepts WHERE id = ?"
+        "SELECT id, name, description, scope, created_at FROM ontology_concepts WHERE id = ?",
     )
     .bind(&full_id)
     .fetch_one(pool)
     .await
     .with_context(|| format!("Concept '{}' not found", id))?;
 
-    Ok(Concept { id: row.0, name: row.1, description: row.2, scope: row.3, created_at: row.4 })
+    Ok(Concept {
+        id: row.0,
+        name: row.1,
+        description: row.2,
+        scope: row.3,
+        created_at: row.4,
+    })
 }
 
 /// List concepts, optionally filtered by scope prefix.
@@ -179,28 +185,38 @@ pub async fn list_concepts(
     scope_filter: Option<&str>,
     limit: usize,
 ) -> Result<Vec<Concept>> {
-    let rows: Vec<(String, String, Option<String>, Option<String>, String)> = if let Some(scope) = scope_filter {
-        let prefix = format!("{}%", scope);
-        sqlx::query_as(
-            "SELECT id, name, description, scope, created_at
+    let rows: Vec<(String, String, Option<String>, Option<String>, String)> =
+        if let Some(scope) = scope_filter {
+            let prefix = format!("{}%", scope);
+            sqlx::query_as(
+                "SELECT id, name, description, scope, created_at
              FROM ontology_concepts WHERE scope LIKE ?
-             ORDER BY name ASC LIMIT ?"
-        )
-        .bind(&prefix)
-        .bind(limit as i64)
-        .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query_as(
-            "SELECT id, name, description, scope, created_at
-             FROM ontology_concepts ORDER BY name ASC LIMIT ?"
-        )
-        .bind(limit as i64)
-        .fetch_all(pool)
-        .await?
-    };
+             ORDER BY name ASC LIMIT ?",
+            )
+            .bind(&prefix)
+            .bind(limit as i64)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as(
+                "SELECT id, name, description, scope, created_at
+             FROM ontology_concepts ORDER BY name ASC LIMIT ?",
+            )
+            .bind(limit as i64)
+            .fetch_all(pool)
+            .await?
+        };
 
-    Ok(rows.into_iter().map(|(id, name, description, scope, created_at)| Concept { id, name, description, scope, created_at }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, description, scope, created_at)| Concept {
+            id,
+            name,
+            description,
+            scope,
+            created_at,
+        })
+        .collect())
 }
 
 /// Delete a concept (and its ontology edges via CASCADE).
@@ -256,7 +272,7 @@ pub async fn add_ontology_edge(
     sqlx::query(
         "INSERT OR IGNORE INTO ontology_edges
          (from_id, from_type, rel_type, to_id, to_type, note, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)"
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(from_id)
     .bind(from_kind.to_string())
@@ -270,7 +286,7 @@ pub async fn add_ontology_edge(
     .context("Failed to insert ontology edge")?;
 
     let id: i64 = sqlx::query_scalar(
-        "SELECT id FROM ontology_edges WHERE from_id = ? AND to_id = ? AND rel_type = ?"
+        "SELECT id FROM ontology_edges WHERE from_id = ? AND to_id = ? AND rel_type = ?",
     )
     .bind(from_id)
     .bind(to_id)
@@ -300,35 +316,42 @@ pub async fn delete_ontology_edge(pool: &SqlitePool, edge_id: i64) -> Result<boo
 }
 
 /// List ontology edges for a node (concept or memory), both directions.
-pub async fn list_ontology_edges(
-    pool: &SqlitePool,
-    node_id: &str,
-) -> Result<Vec<OntologyEdge>> {
-    let rows: Vec<(i64, String, String, String, String, String, Option<String>, String)> =
-        sqlx::query_as(
-            "SELECT id, from_id, from_type, rel_type, to_id, to_type, note, created_at
+pub async fn list_ontology_edges(pool: &SqlitePool, node_id: &str) -> Result<Vec<OntologyEdge>> {
+    let rows: Vec<(
+        i64,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+    )> = sqlx::query_as(
+        "SELECT id, from_id, from_type, rel_type, to_id, to_type, note, created_at
              FROM ontology_edges
              WHERE from_id = ? OR to_id = ?
-             ORDER BY created_at ASC"
-        )
-        .bind(node_id)
-        .bind(node_id)
-        .fetch_all(pool)
-        .await?;
+             ORDER BY created_at ASC",
+    )
+    .bind(node_id)
+    .bind(node_id)
+    .fetch_all(pool)
+    .await?;
 
     rows.into_iter()
-        .map(|(id, from_id, from_type, rel_type, to_id, to_type, note, created_at)| {
-            Ok(OntologyEdge {
-                id,
-                from_id,
-                from_type: from_type.parse()?,
-                rel_type,
-                to_id,
-                to_type: to_type.parse()?,
-                note,
-                created_at,
-            })
-        })
+        .map(
+            |(id, from_id, from_type, rel_type, to_id, to_type, note, created_at)| {
+                Ok(OntologyEdge {
+                    id,
+                    from_id,
+                    from_type: from_type.parse()?,
+                    rel_type,
+                    to_id,
+                    to_type: to_type.parse()?,
+                    note,
+                    created_at,
+                })
+            },
+        )
         .collect()
 }
 
@@ -351,10 +374,7 @@ pub enum HierarchyDirection {
 }
 
 /// Return all ancestors (IS_A chain upward) and descendants (IS_A chain downward) of a concept.
-pub async fn concept_hierarchy(
-    pool: &SqlitePool,
-    concept_id: &str,
-) -> Result<Vec<HierarchyNode>> {
+pub async fn concept_hierarchy(pool: &SqlitePool, concept_id: &str) -> Result<Vec<HierarchyNode>> {
     let full_id = resolve_concept_id(pool, concept_id).await?;
     let mut results = Vec::new();
 
@@ -374,14 +394,20 @@ pub async fn concept_hierarchy(
          SELECT c.id, c.name, c.description, a.depth
          FROM ancestors a
          JOIN ontology_concepts c ON c.id = a.id
-         ORDER BY a.depth ASC"
+         ORDER BY a.depth ASC",
     )
     .bind(&full_id)
     .fetch_all(pool)
     .await?;
 
     for (id, name, description, depth) in ancestors {
-        results.push(HierarchyNode { id, name, description, depth, direction: HierarchyDirection::Ancestor });
+        results.push(HierarchyNode {
+            id,
+            name,
+            description,
+            depth,
+            direction: HierarchyDirection::Ancestor,
+        });
     }
 
     // Descendants: follow IS_A incoming edges downward (find all x where x IS_A ... root)
@@ -400,14 +426,20 @@ pub async fn concept_hierarchy(
          SELECT c.id, c.name, c.description, d.depth
          FROM descendants d
          JOIN ontology_concepts c ON c.id = d.id
-         ORDER BY d.depth ASC"
+         ORDER BY d.depth ASC",
     )
     .bind(&full_id)
     .fetch_all(pool)
     .await?;
 
     for (id, name, description, depth) in descendants {
-        results.push(HierarchyNode { id, name, description, depth, direction: HierarchyDirection::Descendant });
+        results.push(HierarchyNode {
+            id,
+            name,
+            description,
+            depth,
+            direction: HierarchyDirection::Descendant,
+        });
     }
 
     Ok(results)
@@ -431,7 +463,7 @@ pub async fn concept_instances(
            JOIN subclasses s ON e.to_id = s.id
            WHERE e.rel_type = 'IS_A' AND e.from_type = 'concept' AND e.to_type = 'concept'
          )
-         SELECT id FROM subclasses"
+         SELECT id FROM subclasses",
     )
     .bind(&full_id)
     .fetch_all(pool)
@@ -445,7 +477,7 @@ pub async fn concept_instances(
         let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
             "SELECT from_id, from_type, to_id, note
              FROM ontology_edges
-             WHERE to_id = ? AND rel_type = 'INSTANCE_OF'"
+             WHERE to_id = ? AND rel_type = 'INSTANCE_OF'",
         )
         .bind(cid)
         .fetch_all(pool)
@@ -476,35 +508,40 @@ pub struct ConceptInstance {
 
 /// Resolve full or short (prefix, min 4 chars) concept ID.
 pub async fn resolve_concept_id(pool: &SqlitePool, id: &str) -> Result<String> {
-    let exact: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM ontology_concepts WHERE id = ?"
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+    let exact: Option<String> = sqlx::query_scalar("SELECT id FROM ontology_concepts WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
     if let Some(full) = exact {
         return Ok(full);
     }
 
     if id.len() < 4 {
-        bail!("Concept ID prefix '{}' is too short (minimum 4 characters)", id);
+        bail!(
+            "Concept ID prefix '{}' is too short (minimum 4 characters)",
+            id
+        );
     }
 
     let pattern = format!("{}%", id);
-    let matches: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM ontology_concepts WHERE id LIKE ?"
-    )
-    .bind(&pattern)
-    .fetch_all(pool)
-    .await?;
+    let matches: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM ontology_concepts WHERE id LIKE ?")
+            .bind(&pattern)
+            .fetch_all(pool)
+            .await?;
 
     match matches.len() {
         0 => bail!("Concept '{}' not found", id),
         1 => Ok(matches.into_iter().next().unwrap()),
         n => bail!(
             "Ambiguous concept ID '{}' matches {} concepts. Use more characters:\n{}",
-            id, n,
-            matches.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
+            id,
+            n,
+            matches
+                .iter()
+                .map(|m| format!("  {}", m))
+                .collect::<Vec<_>>()
+                .join("\n")
         ),
     }
 }
@@ -514,23 +551,20 @@ pub async fn resolve_concept_id(pool: &SqlitePool, id: &str) -> Result<String> {
 async fn validate_node(pool: &SqlitePool, id: &str, kind: &NodeKind) -> Result<()> {
     match kind {
         NodeKind::Concept => {
-            let exists: Option<String> = sqlx::query_scalar(
-                "SELECT id FROM ontology_concepts WHERE id = ?"
-            )
-            .bind(id)
-            .fetch_optional(pool)
-            .await?;
+            let exists: Option<String> =
+                sqlx::query_scalar("SELECT id FROM ontology_concepts WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(pool)
+                    .await?;
             if exists.is_none() {
                 bail!("Concept '{}' not found", id);
             }
         }
         NodeKind::Memory => {
-            let exists: Option<String> = sqlx::query_scalar(
-                "SELECT id FROM memories WHERE id = ?"
-            )
-            .bind(id)
-            .fetch_optional(pool)
-            .await?;
+            let exists: Option<String> = sqlx::query_scalar("SELECT id FROM memories WHERE id = ?")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
             if exists.is_none() {
                 bail!("Memory '{}' not found", id);
             }
@@ -598,20 +632,22 @@ pub async fn enrich_memories(
              FROM memories m
              JOIN memory_scopes ms ON ms.memory_id = m.id
              WHERE ms.scope LIKE ?
-             ORDER BY m.created_at DESC"
+             ORDER BY m.created_at DESC",
         )
         .bind(&prefix)
         .fetch_all(pool)
         .await?
     } else {
-        sqlx::query_as(
-            "SELECT id, content FROM memories ORDER BY created_at DESC"
-        )
-        .fetch_all(pool)
-        .await?
+        sqlx::query_as("SELECT id, content FROM memories ORDER BY created_at DESC")
+            .fetch_all(pool)
+            .await?
     };
 
-    let limit = if opts.limit == 0 { rows.len() } else { opts.limit.min(rows.len()) };
+    let limit = if opts.limit == 0 {
+        rows.len()
+    } else {
+        opts.limit.min(rows.len())
+    };
     let rows = &rows[..limit];
 
     let mut results = Vec::with_capacity(rows.len());
@@ -621,7 +657,7 @@ pub async fn enrich_memories(
         // Check if already processed
         if !opts.force {
             let already: Option<String> = sqlx::query_scalar(
-                "SELECT memory_id FROM ontology_ner_processed WHERE memory_id = ?"
+                "SELECT memory_id FROM ontology_ner_processed WHERE memory_id = ?",
             )
             .bind(memory_id)
             .fetch_optional(pool)
@@ -663,7 +699,8 @@ pub async fn enrich_memories(
             }
         };
 
-        let above_threshold: Vec<_> = entities.iter()
+        let above_threshold: Vec<_> = entities
+            .iter()
             .filter(|e| e.score >= opts.min_score)
             .collect();
 
@@ -675,7 +712,7 @@ pub async fn enrich_memories(
         for entity in &above_threshold {
             // Check for existing concept (case-insensitive)
             let existing: Option<(String, String)> = sqlx::query_as(
-                "SELECT id, name FROM ontology_concepts WHERE lower(name) = lower(?)"
+                "SELECT id, name FROM ontology_concepts WHERE lower(name) = lower(?)",
             )
             .bind(&entity.text)
             .fetch_optional(pool)
@@ -694,7 +731,9 @@ pub async fn enrich_memories(
                         Ok(c) => {
                             concepts_created.push(c.name.clone());
                             // Check for similar concepts (dedup detection)
-                            if let Ok(similars) = find_similar_concepts(pool, &entity.text, 0.85).await {
+                            if let Ok(similars) =
+                                find_similar_concepts(pool, &entity.text, 0.85).await
+                            {
                                 for sim in similars {
                                     similar_concepts.push((entity.text.clone(), sim));
                                 }
@@ -720,7 +759,8 @@ pub async fn enrich_memories(
                         &cid,
                         NodeKind::Concept,
                         None,
-                    ).await;
+                    )
+                    .await;
                 }
                 links_created += 1;
             }
@@ -759,7 +799,7 @@ async fn record_processed(
          ON CONFLICT(memory_id) DO UPDATE SET
            processed_at = excluded.processed_at,
            entity_count = excluded.entity_count,
-           link_count   = excluded.link_count"
+           link_count   = excluded.link_count",
     )
     .bind(memory_id)
     .bind(now)
@@ -798,10 +838,7 @@ pub struct Conflict {
 }
 
 /// List all CONTRADICTS edges that have not been resolved (no INVALIDATES edge from either endpoint).
-pub async fn list_conflicts(
-    pool: &SqlitePool,
-    scope: Option<&str>,
-) -> Result<Vec<Conflict>> {
+pub async fn list_conflicts(pool: &SqlitePool, scope: Option<&str>) -> Result<Vec<Conflict>> {
     // Get all CONTRADICTS edges not yet invalidated
     // "Resolved" = a subsequent INVALIDATES edge exists from winner→loser or loser→winner
     let rows: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(
@@ -816,7 +853,7 @@ pub async fn list_conflicts(
                  OR (inv.from_id = e.to_id AND inv.to_id = e.from_id)
                )
            )
-         ORDER BY e.created_at DESC"
+         ORDER BY e.created_at DESC",
     )
     .fetch_all(pool)
     .await?;
@@ -867,14 +904,14 @@ pub async fn list_conflicts(
 pub async fn get_conflict(pool: &SqlitePool, edge_id: i64) -> Result<Conflict> {
     let row: Option<(i64, String, String, String, String, String)> = sqlx::query_as(
         "SELECT id, from_id, from_type, to_id, to_type, created_at
-         FROM ontology_edges WHERE id = ? AND rel_type = 'CONTRADICTS'"
+         FROM ontology_edges WHERE id = ? AND rel_type = 'CONTRADICTS'",
     )
     .bind(edge_id)
     .fetch_optional(pool)
     .await?;
 
-    let (eid, from_id, from_type, to_id, to_type, created_at) = row
-        .ok_or_else(|| anyhow::anyhow!("CONTRADICTS edge #{} not found", edge_id))?;
+    let (eid, from_id, from_type, to_id, to_type, created_at) =
+        row.ok_or_else(|| anyhow::anyhow!("CONTRADICTS edge #{} not found", edge_id))?;
 
     let from_info = if from_type == "concept" {
         fetch_concept_info(pool, &from_id).await?
@@ -927,7 +964,7 @@ pub async fn resolve_conflict(
     sqlx::query(
         "INSERT OR IGNORE INTO ontology_edges
          (from_id, from_type, rel_type, to_id, to_type, note, created_at)
-         VALUES (?, ?, 'INVALIDATES', ?, ?, 'conflict resolution', ?)"
+         VALUES (?, ?, 'INVALIDATES', ?, ?, 'conflict resolution', ?)",
     )
     .bind(winner_id)
     .bind(&winner_kind)
@@ -942,7 +979,7 @@ pub async fn resolve_conflict(
         sqlx::query(
             "UPDATE ontology_concepts SET description =
                COALESCE(description, '') || ' [SUPERSEDED]'
-             WHERE id = ? AND (description IS NULL OR description NOT LIKE '%[SUPERSEDED]%')"
+             WHERE id = ? AND (description IS NULL OR description NOT LIKE '%[SUPERSEDED]%')",
         )
         .bind(loser_id)
         .execute(pool)
@@ -954,44 +991,53 @@ pub async fn resolve_conflict(
 
 // ─── Conflict helpers ─────────────────────────────────────────────────────────
 
-async fn fetch_concept_info(pool: &SqlitePool, id: &str) -> Result<(Option<String>, Option<String>)> {
-    let row: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT name, description FROM ontology_concepts WHERE id = ?"
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+async fn fetch_concept_info(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT name, description FROM ontology_concepts WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|(n, d)| (Some(n), d)).unwrap_or((None, None)))
 }
 
-async fn fetch_memory_preview(pool: &SqlitePool, id: &str) -> Result<(Option<String>, Option<String>)> {
-    let content: Option<String> = sqlx::query_scalar(
-        "SELECT content FROM memories WHERE id = ?"
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+async fn fetch_memory_preview(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    let content: Option<String> = sqlx::query_scalar("SELECT content FROM memories WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
     Ok((content.map(|c| preview(&c)), None))
 }
 
 async fn get_scope(pool: &SqlitePool, id: &str, kind: &str) -> Result<Option<String>> {
     if kind == "concept" {
-        let s: Option<String> = sqlx::query_scalar(
-            "SELECT scope FROM ontology_concepts WHERE id = ?"
-        ).bind(id).fetch_optional(pool).await?;
+        let s: Option<String> =
+            sqlx::query_scalar("SELECT scope FROM ontology_concepts WHERE id = ?")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
         Ok(s)
     } else {
-        let s: Option<String> = sqlx::query_scalar(
-            "SELECT scope FROM memory_scopes WHERE memory_id = ? LIMIT 1"
-        ).bind(id).fetch_optional(pool).await?;
+        let s: Option<String> =
+            sqlx::query_scalar("SELECT scope FROM memory_scopes WHERE memory_id = ? LIMIT 1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
         Ok(s)
     }
 }
 
 async fn node_kind_str(pool: &SqlitePool, id: &str) -> Result<String> {
-    let is_concept: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM ontology_concepts WHERE id = ?"
-    ).bind(id).fetch_optional(pool).await?;
+    let is_concept: Option<String> =
+        sqlx::query_scalar("SELECT id FROM ontology_concepts WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
     if is_concept.is_some() {
         Ok("concept".into())
     } else {
@@ -1023,38 +1069,48 @@ pub async fn search_concepts(
     // FTS5 MATCH — escape special chars to avoid parse errors
     let fts_query = query.replace('"', "\"\"");
 
-    let rows: Vec<(String, String, Option<String>, Option<String>, f64)> = if let Some(scope) = scope_filter {
-        let prefix = format!("{}%", scope);
-        sqlx::query_as(
-            "SELECT c.id, c.name, c.description, c.scope, bm25(ontology_concept_fts) AS score
+    let rows: Vec<(String, String, Option<String>, Option<String>, f64)> =
+        if let Some(scope) = scope_filter {
+            let prefix = format!("{}%", scope);
+            sqlx::query_as(
+                "SELECT c.id, c.name, c.description, c.scope, bm25(ontology_concept_fts) AS score
              FROM ontology_concept_fts f
              JOIN ontology_concepts c ON c.id = f.id
              WHERE ontology_concept_fts MATCH ?
                AND c.scope LIKE ?
-             ORDER BY score LIMIT ?"
-        )
-        .bind(&fts_query)
-        .bind(&prefix)
-        .bind(limit as i64)
-        .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query_as(
-            "SELECT c.id, c.name, c.description, c.scope, bm25(ontology_concept_fts) AS score
+             ORDER BY score LIMIT ?",
+            )
+            .bind(&fts_query)
+            .bind(&prefix)
+            .bind(limit as i64)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as(
+                "SELECT c.id, c.name, c.description, c.scope, bm25(ontology_concept_fts) AS score
              FROM ontology_concept_fts f
              JOIN ontology_concepts c ON c.id = f.id
              WHERE ontology_concept_fts MATCH ?
-             ORDER BY score LIMIT ?"
-        )
-        .bind(&fts_query)
-        .bind(limit as i64)
-        .fetch_all(pool)
-        .await?
-    };
+             ORDER BY score LIMIT ?",
+            )
+            .bind(&fts_query)
+            .bind(limit as i64)
+            .fetch_all(pool)
+            .await?
+        };
 
-    Ok(rows.into_iter().map(|(id, name, description, scope, score)| ConceptSearchResult {
-        id, name, description, scope, score: score.abs() as f32,
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, name, description, scope, score)| ConceptSearchResult {
+                id,
+                name,
+                description,
+                scope,
+                score: score.abs() as f32,
+            },
+        )
+        .collect())
 }
 
 // ─── Concept with instances ───────────────────────────────────────────────────
@@ -1088,7 +1144,10 @@ pub struct ConceptRef {
     pub name: String,
 }
 
-pub async fn get_concept_with_instances(pool: &SqlitePool, id: &str) -> Result<ConceptWithInstances> {
+pub async fn get_concept_with_instances(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<ConceptWithInstances> {
     let concept = get_concept(pool, id).await?;
 
     // Direct INSTANCE_OF edges (memory → this concept)
@@ -1097,38 +1156,47 @@ pub async fn get_concept_with_instances(pool: &SqlitePool, id: &str) -> Result<C
          FROM ontology_edges e
          JOIN memories m ON m.id = e.from_id
          WHERE e.to_id = ? AND e.rel_type = 'INSTANCE_OF' AND e.from_type = 'memory'
-         ORDER BY m.created_at DESC"
+         ORDER BY m.created_at DESC",
     )
     .bind(&concept.id)
     .fetch_all(pool)
     .await?;
 
-    let instances = instance_rows.into_iter().map(|(memory_id, content)| InstanceRef {
-        memory_id,
-        preview: preview(&content),
-    }).collect();
+    let instances = instance_rows
+        .into_iter()
+        .map(|(memory_id, content)| InstanceRef {
+            memory_id,
+            preview: preview(&content),
+        })
+        .collect();
 
     // Subclasses (IS_A where this concept is the parent/to_id)
     let sub_rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT c.id, c.name FROM ontology_edges e
          JOIN ontology_concepts c ON c.id = e.from_id
-         WHERE e.to_id = ? AND e.rel_type = 'IS_A'"
+         WHERE e.to_id = ? AND e.rel_type = 'IS_A'",
     )
     .bind(&concept.id)
     .fetch_all(pool)
     .await?;
-    let subclasses = sub_rows.into_iter().map(|(id, name)| ConceptRef { id, name }).collect();
+    let subclasses = sub_rows
+        .into_iter()
+        .map(|(id, name)| ConceptRef { id, name })
+        .collect();
 
     // Superclasses (IS_A where this concept is the child/from_id)
     let super_rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT c.id, c.name FROM ontology_edges e
          JOIN ontology_concepts c ON c.id = e.to_id
-         WHERE e.from_id = ? AND e.rel_type = 'IS_A'"
+         WHERE e.from_id = ? AND e.rel_type = 'IS_A'",
     )
     .bind(&concept.id)
     .fetch_all(pool)
     .await?;
-    let superclasses = super_rows.into_iter().map(|(id, name)| ConceptRef { id, name }).collect();
+    let superclasses = super_rows
+        .into_iter()
+        .map(|(id, name)| ConceptRef { id, name })
+        .collect();
 
     Ok(ConceptWithInstances {
         id: concept.id,
@@ -1148,11 +1216,10 @@ async fn find_similar_concepts(
     name: &str,
     threshold: f32,
 ) -> Result<Vec<SimilarConcept>> {
-    let all_concepts: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, name FROM ontology_concepts ORDER BY name"
-    )
-    .fetch_all(pool)
-    .await?;
+    let all_concepts: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, name FROM ontology_concepts ORDER BY name")
+            .fetch_all(pool)
+            .await?;
 
     let mut similar = Vec::new();
     let name_lower = name.to_lowercase();
@@ -1161,12 +1228,11 @@ async fn find_similar_concepts(
         let similarity = strsim::jaro_winkler(&name_lower, &concept_name.to_lowercase()) as f32;
         if similarity >= threshold && similarity < 1.0 {
             // Get edge count
-            let edge_count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ?"
-            )
-            .bind(&id)
-            .fetch_one(pool)
-            .await?;
+            let edge_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM ontology_edges WHERE to_id = ?")
+                    .bind(&id)
+                    .fetch_one(pool)
+                    .await?;
 
             similar.push(SimilarConcept {
                 id,
@@ -1177,7 +1243,11 @@ async fn find_similar_concepts(
         }
     }
 
-    similar.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+    similar.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(similar)
 }
 
@@ -1186,11 +1256,10 @@ pub async fn find_merge_candidates(
     pool: &SqlitePool,
     similarity_threshold: f32,
 ) -> Result<Vec<MergeCandidate>> {
-    let all_concepts: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, name FROM ontology_concepts ORDER BY name"
-    )
-    .fetch_all(pool)
-    .await?;
+    let all_concepts: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, name FROM ontology_concepts ORDER BY name")
+            .fetch_all(pool)
+            .await?;
 
     let mut candidates = Vec::new();
     let mut seen_pairs = std::collections::HashSet::new();
@@ -1213,19 +1282,20 @@ pub async fn find_merge_candidates(
             seen_pairs.insert(pair_key);
 
             // Jaro-Winkler similarity
-            let similarity = strsim::jaro_winkler(&name1.to_lowercase(), &name2.to_lowercase()) as f32;
+            let similarity =
+                strsim::jaro_winkler(&name1.to_lowercase(), &name2.to_lowercase()) as f32;
 
             if similarity >= similarity_threshold as f64 as f32 {
                 // Get edge counts to decide which is "larger" (more connections)
                 let count1: i64 = sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ? AND to_type = 'concept'"
+                    "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ? AND to_type = 'concept'",
                 )
                 .bind(id1)
                 .fetch_one(pool)
                 .await?;
 
                 let count2: i64 = sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ? AND to_type = 'concept'"
+                    "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ? AND to_type = 'concept'",
                 )
                 .bind(id2)
                 .fetch_one(pool)
@@ -1252,19 +1322,22 @@ pub async fn find_merge_candidates(
     }
 
     // Sort by similarity (highest first)
-    candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Ok(candidates)
 }
 
-
 /// Find merge candidates using both fuzzy matching and optional semantic similarity.
-/// 
+///
 /// When semantic_dedup config is enabled:
 /// 1. Uses fuzzy Jaro-Winkler as first filter (fast)
 /// 2. For fuzzy matches, computes semantic similarity
 /// 3. Filters based on semantic threshold if configured
-/// 
+///
 /// Fallback to fuzzy-only if semantic model fails to load.
 pub async fn find_merge_candidates_with_semantic(
     pool: &SqlitePool,
@@ -1272,55 +1345,58 @@ pub async fn find_merge_candidates_with_semantic(
     config: &crate::config::Config,
 ) -> Result<Vec<MergeCandidate>> {
     // Get semantic config if enabled
-    let semantic_config = config.enrichment.semantic_dedup.as_ref()
+    let semantic_config = config
+        .enrichment
+        .semantic_dedup
+        .as_ref()
         .filter(|c| c.enabled);
-    
+
     let candidates = find_merge_candidates(pool, fuzzy_threshold).await?;
-    
+
     // If semantic dedup is disabled, return fuzzy-based candidates
     let Some(sem_cfg) = semantic_config else {
         return Ok(candidates);
     };
-    
+
     // Try to compute semantic similarities for fuzzy matches
     let embeddings_model = &config.embeddings.model;
-    
+
     // Get all concept names for batch embedding
-    let concept_ids: Vec<String> = candidates.iter()
+    let concept_ids: Vec<String> = candidates
+        .iter()
         .flat_map(|c| vec![c.source_id.clone(), c.target_id.clone()])
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
-    
-    let mut id_to_name: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    let mut id_to_name: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for id in &concept_ids {
-        if let Ok(Some(name)) = sqlx::query_scalar::<_, String>(
-            "SELECT name FROM ontology_concepts WHERE id = ?"
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await {
+        if let Ok(Some(name)) =
+            sqlx::query_scalar::<_, String>("SELECT name FROM ontology_concepts WHERE id = ?")
+                .bind(id)
+                .fetch_optional(pool)
+                .await
+        {
             id_to_name.insert(id.clone(), name);
         }
     }
-    
+
     // Try to compute semantic similarities
     // Non-blocking: if this fails, fall back to fuzzy scores
     let mut enhanced_candidates = Vec::new();
-    
+
     for mut candidate in candidates {
-        let source_name = id_to_name.get(&candidate.source_id)
+        let source_name = id_to_name
+            .get(&candidate.source_id)
             .map(|n| n.as_str())
             .unwrap_or(&candidate.source_name);
-        let target_name = id_to_name.get(&candidate.target_id)
+        let target_name = id_to_name
+            .get(&candidate.target_id)
             .map(|n| n.as_str())
             .unwrap_or(&candidate.target_name);
-        
-        match crate::semantic_dedup::similarity(
-            source_name,
-            target_name,
-            embeddings_model
-        ) {
+
+        match crate::semantic_dedup::similarity(source_name, target_name, embeddings_model) {
             Ok(semantic_sim) => {
                 // Filter by semantic threshold if configured
                 if semantic_sim >= sem_cfg.threshold {
@@ -1332,7 +1408,10 @@ pub async fn find_merge_candidates_with_semantic(
             }
             Err(e) => {
                 // Log but don't fail - semantic similarity is optional
-                tracing::warn!("Semantic similarity computation failed: {}, falling back to fuzzy", e);
+                tracing::warn!(
+                    "Semantic similarity computation failed: {}, falling back to fuzzy",
+                    e
+                );
                 // Keep the candidate with fuzzy score
                 if candidate.similarity >= sem_cfg.threshold {
                     enhanced_candidates.push(candidate);
@@ -1340,12 +1419,14 @@ pub async fn find_merge_candidates_with_semantic(
             }
         }
     }
-    
+
     // Re-sort by similarity (now potentially semantic-based)
-    enhanced_candidates.sort_by(|a, b| 
-        b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal)
-    );
-    
+    enhanced_candidates.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     Ok(enhanced_candidates)
 }
 
@@ -1366,15 +1447,17 @@ pub async fn merge_concepts(
     let mut tx = pool.begin().await?;
 
     // Get source concept details for response
-    let source: (String, String) = sqlx::query_as("SELECT id, name FROM ontology_concepts WHERE id = ?")
-        .bind(&source_id_resolved)
-        .fetch_one(&mut *tx)
-        .await?;
+    let source: (String, String) =
+        sqlx::query_as("SELECT id, name FROM ontology_concepts WHERE id = ?")
+            .bind(&source_id_resolved)
+            .fetch_one(&mut *tx)
+            .await?;
 
-    let target: (String, String) = sqlx::query_as("SELECT id, name FROM ontology_concepts WHERE id = ?")
-        .bind(&target_id_resolved)
-        .fetch_one(&mut *tx)
-        .await?;
+    let target: (String, String) =
+        sqlx::query_as("SELECT id, name FROM ontology_concepts WHERE id = ?")
+            .bind(&target_id_resolved)
+            .fetch_one(&mut *tx)
+            .await?;
 
     // Delete any edges that would become duplicates after merge
     sqlx::query(
@@ -1388,39 +1471,33 @@ pub async fn merge_concepts(
     .await?;
 
     // Retarget all INSTANCE_OF edges (memory → source) to point to target
-    sqlx::query(
-        "UPDATE ontology_edges SET to_id = ? WHERE to_id = ? AND rel_type = 'INSTANCE_OF'"
-    )
-    .bind(&target_id_resolved)
-    .bind(&source_id_resolved)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE ontology_edges SET to_id = ? WHERE to_id = ? AND rel_type = 'INSTANCE_OF'")
+        .bind(&target_id_resolved)
+        .bind(&source_id_resolved)
+        .execute(&mut *tx)
+        .await?;
 
     // Count for response (all INSTANCE_OF edges now point to target)
     let memory_edges: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ? AND rel_type = 'INSTANCE_OF'"
+        "SELECT COUNT(*) FROM ontology_edges WHERE to_id = ? AND rel_type = 'INSTANCE_OF'",
     )
     .bind(&target_id_resolved)
     .fetch_one(&mut *tx)
     .await?;
 
     // Retarget IS_A edges where source is child (source IS_A parent) → target IS_A parent
-    sqlx::query(
-        "UPDATE ontology_edges SET from_id = ? WHERE from_id = ? AND rel_type = 'IS_A'"
-    )
-    .bind(&target_id_resolved)
-    .bind(&source_id_resolved)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE ontology_edges SET from_id = ? WHERE from_id = ? AND rel_type = 'IS_A'")
+        .bind(&target_id_resolved)
+        .bind(&source_id_resolved)
+        .execute(&mut *tx)
+        .await?;
 
     // Retarget IS_A edges where source is parent (child IS_A source) → child IS_A target
-    sqlx::query(
-        "UPDATE ontology_edges SET to_id = ? WHERE to_id = ? AND rel_type = 'IS_A'"
-    )
-    .bind(&target_id_resolved)
-    .bind(&source_id_resolved)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE ontology_edges SET to_id = ? WHERE to_id = ? AND rel_type = 'IS_A'")
+        .bind(&target_id_resolved)
+        .bind(&source_id_resolved)
+        .execute(&mut *tx)
+        .await?;
 
     // Delete source concept
     sqlx::query("DELETE FROM ontology_concepts WHERE id = ?")
@@ -1476,7 +1553,7 @@ pub struct MergeResult {
 
 // ── Batch merge operations (Phase 5) ────────────────────────────────────────
 
-use crate::models::{MergePlan, MergeLogEntry};
+use crate::models::{MergeLogEntry, MergePlan};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BatchMergeResult {
@@ -1486,14 +1563,11 @@ pub struct BatchMergeResult {
     pub failed: usize,
     pub conflicts: usize,
     pub edges_retargeted: usize,
-    pub errors: Vec<(String, String, String)>,  // (source, target, reason)
+    pub errors: Vec<(String, String, String)>, // (source, target, reason)
 }
 
 /// Analyze merge plan and return preview with impact stats (dry-run)
-pub async fn analyze_merge_plan(
-    pool: &SqlitePool,
-    plan: &MergePlan,
-) -> Result<BatchMergeResult> {
+pub async fn analyze_merge_plan(pool: &SqlitePool, plan: &MergePlan) -> Result<BatchMergeResult> {
     let batch_id = uuid::Uuid::new_v4().to_string();
     let mut succeeded = 0;
     let mut failed = 0;
@@ -1503,62 +1577,76 @@ pub async fn analyze_merge_plan(
 
     for pair in &plan.merges {
         // Verify both concepts exist
-        let source_exists: (i64,) = match sqlx::query_as(
-            "SELECT COUNT(*) FROM ontology_concepts WHERE id = ?"
-        )
-        .bind(&pair.source)
-        .fetch_one(pool)
-        .await {
-            Ok(r) => r,
-            Err(_) => {
-                failed += 1;
-                errors.push((pair.source.clone(), pair.target.clone(), "Source not found".to_string()));
-                continue;
-            }
-        };
+        let source_exists: (i64,) =
+            match sqlx::query_as("SELECT COUNT(*) FROM ontology_concepts WHERE id = ?")
+                .bind(&pair.source)
+                .fetch_one(pool)
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    failed += 1;
+                    errors.push((
+                        pair.source.clone(),
+                        pair.target.clone(),
+                        "Source not found".to_string(),
+                    ));
+                    continue;
+                }
+            };
 
         if source_exists.0 == 0 {
             failed += 1;
-            errors.push((pair.source.clone(), pair.target.clone(), "Source not found".to_string()));
+            errors.push((
+                pair.source.clone(),
+                pair.target.clone(),
+                "Source not found".to_string(),
+            ));
             continue;
         }
 
-        let target_exists: (i64,) = match sqlx::query_as(
-            "SELECT COUNT(*) FROM ontology_concepts WHERE id = ?"
-        )
-        .bind(&pair.target)
-        .fetch_one(pool)
-        .await {
-            Ok(r) => r,
-            Err(_) => {
-                failed += 1;
-                errors.push((pair.source.clone(), pair.target.clone(), "Target not found".to_string()));
-                continue;
-            }
-        };
+        let target_exists: (i64,) =
+            match sqlx::query_as("SELECT COUNT(*) FROM ontology_concepts WHERE id = ?")
+                .bind(&pair.target)
+                .fetch_one(pool)
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    failed += 1;
+                    errors.push((
+                        pair.source.clone(),
+                        pair.target.clone(),
+                        "Target not found".to_string(),
+                    ));
+                    continue;
+                }
+            };
 
         if target_exists.0 == 0 {
             failed += 1;
-            errors.push((pair.source.clone(), pair.target.clone(), "Target not found".to_string()));
+            errors.push((
+                pair.source.clone(),
+                pair.target.clone(),
+                "Target not found".to_string(),
+            ));
             continue;
         }
 
         // Count edges for both concepts
-        let source_edge_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?"
-        )
-        .bind(&pair.source)
-        .bind(&pair.source)
-        .fetch_one(pool)
-        .await?;
+        let source_edge_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?")
+                .bind(&pair.source)
+                .bind(&pair.source)
+                .fetch_one(pool)
+                .await?;
 
-        let _target_edge_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?"
-        )
-        .bind(&pair.target)
-        .bind(&pair.target)
-        .fetch_one(pool)
-        .await?;
+        let _target_edge_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?")
+                .bind(&pair.target)
+                .bind(&pair.target)
+                .fetch_one(pool)
+                .await?;
 
         edges_retargeted += source_edge_count.0 as usize;
 
@@ -1615,23 +1703,21 @@ pub async fn execute_merge_batch(
         let merge_id = uuid::Uuid::new_v4().to_string();
 
         // Determine direction: smaller concept (fewer edges) merges into larger
-        let source_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?"
-        )
-        .bind(&pair.source)
-        .bind(&pair.source)
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap_or((0,));
+        let source_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?")
+                .bind(&pair.source)
+                .bind(&pair.source)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap_or((0,));
 
-        let target_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?"
-        )
-        .bind(&pair.target)
-        .bind(&pair.target)
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap_or((0,));
+        let target_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM ontology_edges WHERE from_id = ? OR to_id = ?")
+                .bind(&pair.target)
+                .bind(&pair.target)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap_or((0,));
 
         let (source, target) = if source_count.0 < target_count.0 {
             // Source is smaller - merge it into target (use as-is)
@@ -1666,26 +1752,27 @@ pub async fn execute_merge_batch(
         }
 
         // Retarget edges from source to target
-        if let Err(_) = sqlx::query(
-            "UPDATE ontology_edges SET from_id = ? WHERE from_id = ?"
-        )
-        .bind(target)
-        .bind(source)
-        .execute(&mut *tx)
-        .await {
+        if let Err(_) = sqlx::query("UPDATE ontology_edges SET from_id = ? WHERE from_id = ?")
+            .bind(target)
+            .bind(source)
+            .execute(&mut *tx)
+            .await
+        {
             failed += 1;
-            errors.push((source.to_string(), target.to_string(), "Failed to retarget edges".to_string()));
+            errors.push((
+                source.to_string(),
+                target.to_string(),
+                "Failed to retarget edges".to_string(),
+            ));
             continue;
         }
 
         // Retarget incoming edges
-        let _ = sqlx::query(
-            "UPDATE ontology_edges SET to_id = ? WHERE to_id = ?"
-        )
-        .bind(target)
-        .bind(source)
-        .execute(&mut *tx)
-        .await;
+        let _ = sqlx::query("UPDATE ontology_edges SET to_id = ? WHERE to_id = ?")
+            .bind(target)
+            .bind(source)
+            .execute(&mut *tx)
+            .await;
 
         let edges_count = source_count.0 as usize;
         edges_retargeted += edges_count;
@@ -1694,9 +1781,14 @@ pub async fn execute_merge_batch(
         if let Err(_) = sqlx::query("DELETE FROM ontology_concepts WHERE id = ?")
             .bind(source)
             .execute(&mut *tx)
-            .await {
+            .await
+        {
             failed += 1;
-            errors.push((source.to_string(), target.to_string(), "Failed to delete source concept".to_string()));
+            errors.push((
+                source.to_string(),
+                target.to_string(),
+                "Failed to delete source concept".to_string(),
+            ));
             continue;
         }
 
@@ -1749,59 +1841,49 @@ pub async fn execute_merge_batch(
 }
 
 /// Rollback single merge operation
-pub async fn rollback_merge(
-    pool: &SqlitePool,
-    merge_id: &str,
-) -> Result<()> {
+pub async fn rollback_merge(pool: &SqlitePool, merge_id: &str) -> Result<()> {
     // Fetch merge log entry
     let entry: Option<(String, String, i32)> = sqlx::query_as(
-        "SELECT source_id, target_id, edges_retargeted FROM ontology_merge_log WHERE id = ?"
+        "SELECT source_id, target_id, edges_retargeted FROM ontology_merge_log WHERE id = ?",
     )
     .bind(merge_id)
     .fetch_optional(pool)
     .await?;
 
-    let (source_id, target_id, _edge_count) = entry.ok_or_else(|| anyhow::anyhow!("Merge not found: {}", merge_id))?;
+    let (source_id, target_id, _edge_count) =
+        entry.ok_or_else(|| anyhow::anyhow!("Merge not found: {}", merge_id))?;
     let now = chrono::Local::now().to_rfc3339();
 
     let mut tx = pool.begin().await?;
 
     // Restore source concept (recreate with same ID)
-    sqlx::query(
-        "INSERT INTO ontology_concepts (id, name, created_at) VALUES (?, ?, ?)"
-    )
-    .bind(&source_id)
-    .bind(&source_id)
-    .bind(&now)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("INSERT INTO ontology_concepts (id, name, created_at) VALUES (?, ?, ?)")
+        .bind(&source_id)
+        .bind(&source_id)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
 
     // Retarget edges back from target to source
-    sqlx::query(
-        "UPDATE ontology_edges SET from_id = ? WHERE from_id = ?"
-    )
-    .bind(&source_id)
-    .bind(&target_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE ontology_edges SET from_id = ? WHERE from_id = ?")
+        .bind(&source_id)
+        .bind(&target_id)
+        .execute(&mut *tx)
+        .await?;
 
-    sqlx::query(
-        "UPDATE ontology_edges SET to_id = ? WHERE to_id = ?"
-    )
-    .bind(&source_id)
-    .bind(&target_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE ontology_edges SET to_id = ? WHERE to_id = ?")
+        .bind(&source_id)
+        .bind(&target_id)
+        .execute(&mut *tx)
+        .await?;
 
     // Update merge log status
-    sqlx::query(
-        "UPDATE ontology_merge_log SET status = ?, completed_at = ? WHERE id = ?"
-    )
-    .bind("rolled_back")
-    .bind(&now)
-    .bind(merge_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE ontology_merge_log SET status = ?, completed_at = ? WHERE id = ?")
+        .bind("rolled_back")
+        .bind(&now)
+        .bind(merge_id)
+        .execute(&mut *tx)
+        .await?;
 
     tx.commit().await?;
 
@@ -1824,22 +1906,52 @@ pub async fn list_merge_history(
     }
     query.push_str(" ORDER BY created_at DESC LIMIT 1000");
 
-    let rows = sqlx::query_as::<_, (String, String, String, String, i32, i32, String, Option<String>, String, Option<String>)>(&query)
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            i32,
+            i32,
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+        ),
+    >(&query)
+    .fetch_all(pool)
+    .await?;
 
-    Ok(rows.into_iter().map(|(id, batch_id, source_id, target_id, edges_retargeted, conflicts_kept, status, reason, created_at, completed_at)| {
-        MergeLogEntry {
-            id,
-            batch_id,
-            source_id,
-            target_id,
-            edges_retargeted,
-            conflicts_kept,
-            status,
-            reason,
-            created_at,
-            completed_at,
-        }
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                batch_id,
+                source_id,
+                target_id,
+                edges_retargeted,
+                conflicts_kept,
+                status,
+                reason,
+                created_at,
+                completed_at,
+            )| {
+                MergeLogEntry {
+                    id,
+                    batch_id,
+                    source_id,
+                    target_id,
+                    edges_retargeted,
+                    conflicts_kept,
+                    status,
+                    reason,
+                    created_at,
+                    completed_at,
+                }
+            },
+        )
+        .collect())
 }

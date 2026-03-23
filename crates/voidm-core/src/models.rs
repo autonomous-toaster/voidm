@@ -219,9 +219,9 @@ pub struct MemoryEdge {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OntologyEdgeForMigration {
     pub from_id: String,
-    pub from_type: String,  // "memory" or "concept"
+    pub from_type: String, // "memory" or "concept"
     pub to_id: String,
-    pub to_type: String,    // "memory" or "concept"
+    pub to_type: String, // "memory" or "concept"
     pub rel_type: String,
     pub note: Option<String>,
 }
@@ -258,7 +258,6 @@ pub fn edge_hint(new_type: &str, existing_type: &str) -> &'static str {
         _ => "RELATES_TO (with note required)",
     }
 }
-
 
 // ── Batch merge operations ─────────────────────────────────────────────────
 

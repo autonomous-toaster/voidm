@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use voidm_core::{Config, crud, models::MemoryEdge, ontology::Concept, db::Database};
 use std::sync::Arc;
+use voidm_core::{crud, db::Database, models::MemoryEdge, ontology::Concept, Config};
 
 #[derive(Args)]
 pub struct ExportArgs {
@@ -56,7 +56,7 @@ pub struct ExportMetadata {
 
 pub async fn run(args: ExportArgs, pool: &SqlitePool, _config: &Config, _json: bool) -> Result<()> {
     let db = Arc::new(voidm_core::db::sqlite::SqliteDatabase { pool: pool.clone() });
-    
+
     let memories = crud::list_memories(pool, args.scope.as_deref(), None, args.limit).await?;
     let mut edges = Vec::new();
     let mut concepts = Vec::new();
@@ -69,13 +69,17 @@ pub async fn run(args: ExportArgs, pool: &SqlitePool, _config: &Config, _json: b
 
     // Get concepts if requested or format is "full"
     if args.with_concepts || args.format == "full" {
-        concepts = db.list_concepts(args.scope.as_deref(), args.limit).await.unwrap_or_default();
+        concepts = db
+            .list_concepts(args.scope.as_deref(), args.limit)
+            .await
+            .unwrap_or_default();
         ontology_edges = db.list_ontology_edges().await.unwrap_or_default();
     }
 
     let content = match args.format.as_str() {
         "json" | "full" => {
-            let scopes: Vec<String> = memories.iter()
+            let scopes: Vec<String> = memories
+                .iter()
                 .flat_map(|m| m.scopes.clone())
                 .collect::<std::collections::HashSet<_>>()
                 .into_iter()
@@ -100,10 +104,13 @@ pub async fn run(args: ExportArgs, pool: &SqlitePool, _config: &Config, _json: b
         "markdown" => {
             let mut md = String::new();
             md.push_str("# voidm Memory Export\n\n");
-            
+
             // Add metadata
             if !args.format.is_empty() {
-                md.push_str(&format!("**Exported**: {}\n", chrono::Utc::now().to_rfc3339()));
+                md.push_str(&format!(
+                    "**Exported**: {}\n",
+                    chrono::Utc::now().to_rfc3339()
+                ));
                 md.push_str(&format!("**Memories**: {}\n", memories.len()));
                 if args.with_edges || args.format == "full" {
                     md.push_str(&format!("**Edges**: {}\n", edges.len()));
@@ -120,7 +127,10 @@ pub async fn run(args: ExportArgs, pool: &SqlitePool, _config: &Config, _json: b
             for m in &memories {
                 md.push_str(&format!("### {} [{}]\n\n", m.id, m.memory_type));
                 md.push_str(&format!("- **Importance**: {}\n", m.importance));
-                md.push_str(&format!("- **Quality**: {}\n", m.quality_score.unwrap_or(0.0)));
+                md.push_str(&format!(
+                    "- **Quality**: {}\n",
+                    m.quality_score.unwrap_or(0.0)
+                ));
                 md.push_str(&format!("- **Created**: {}\n", m.created_at));
                 if !m.scopes.is_empty() {
                     md.push_str(&format!("- **Scopes**: {}\n", m.scopes.join(", ")));
@@ -137,7 +147,10 @@ pub async fn run(args: ExportArgs, pool: &SqlitePool, _config: &Config, _json: b
             if (args.with_edges || args.format == "full") && !edges.is_empty() {
                 md.push_str("## Memory Relationships\n\n");
                 for edge in &edges {
-                    md.push_str(&format!("- `{}` **[{}]** → `{}`", edge.from_id, edge.rel_type, edge.to_id));
+                    md.push_str(&format!(
+                        "- `{}` **[{}]** → `{}`",
+                        edge.from_id, edge.rel_type, edge.to_id
+                    ));
                     if let Some(note) = &edge.note {
                         md.push_str(&format!(" ({})", note));
                     }
@@ -164,21 +177,31 @@ pub async fn run(args: ExportArgs, pool: &SqlitePool, _config: &Config, _json: b
             if (args.with_concepts || args.format == "full") && !ontology_edges.is_empty() {
                 md.push_str("## Ontology Relationships\n\n");
                 for edge in &ontology_edges {
-                    md.push_str(&format!("- `{}` ({}) **[{}]** → `{}` ({})\n", 
-                        edge.from_id, edge.from_type, edge.rel_type, edge.to_id, edge.to_type));
+                    md.push_str(&format!(
+                        "- `{}` ({}) **[{}]** → `{}` ({})\n",
+                        edge.from_id, edge.from_type, edge.rel_type, edge.to_id, edge.to_type
+                    ));
                 }
             }
 
             md
         }
-        other => anyhow::bail!("Unknown export format: '{}'. Valid: json, markdown, full", other),
+        other => anyhow::bail!(
+            "Unknown export format: '{}'. Valid: json, markdown, full",
+            other
+        ),
     };
 
     if let Some(path) = args.output {
         std::fs::write(&path, &content)?;
         let msg = if args.with_edges || args.with_concepts {
-            format!("Exported {} memories + {} edges + {} concepts to {}", 
-                memories.len(), edges.len(), concepts.len(), path)
+            format!(
+                "Exported {} memories + {} edges + {} concepts to {}",
+                memories.len(),
+                edges.len(),
+                concepts.len(),
+                path
+            )
         } else {
             format!("Exported {} memories to {}", memories.len(), path)
         };

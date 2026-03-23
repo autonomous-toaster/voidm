@@ -24,3 +24,8 @@ ort_cache/
 # Env
 .env
 .env.local
+
+# Generated graph files
+graph.dot
+graph.svg
+graph.json

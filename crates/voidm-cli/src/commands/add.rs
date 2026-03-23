@@ -1,7 +1,11 @@
 use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{Config, crud, models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType}};
+use voidm_core::{
+    crud,
+    models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType},
+    Config,
+};
 
 #[derive(Args)]
 pub struct AddArgs {
@@ -41,7 +45,8 @@ pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) 
         );
     }
 
-    let tags: Vec<String> = args.tags
+    let tags: Vec<String> = args
+        .tags
         .unwrap_or_default()
         .split(',')
         .map(|s| s.trim().to_string())
@@ -71,7 +76,10 @@ pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) 
         println!("{}", serde_json::to_string_pretty(&resp)?);
     } else {
         println!("Added memory: {}", resp.id);
-        println!("Type: {}  Importance: {}", resp.memory_type, resp.importance);
+        println!(
+            "Type: {}  Importance: {}",
+            resp.memory_type, resp.importance
+        );
         if let Some(qs) = resp.quality_score {
             println!("Quality: {:.2}", qs);
         }
@@ -81,7 +89,10 @@ pub async fn run(args: AddArgs, pool: &SqlitePool, config: &Config, json: bool) 
         if !resp.suggested_links.is_empty() {
             eprintln!("\nSuggested links:");
             for s in &resp.suggested_links {
-                eprintln!("  [{:.2}] {} ({}): {}", s.score, s.id, s.memory_type, s.hint);
+                eprintln!(
+                    "  [{:.2}] {} ({}): {}",
+                    s.score, s.id, s.memory_type, s.hint
+                );
             }
         }
         if let Some(ref dup) = resp.duplicate_warning {
@@ -123,5 +134,9 @@ fn parse_link_spec(s: &str) -> Result<LinkSpec> {
         );
     }
 
-    Ok(LinkSpec { target_id, edge_type, note })
+    Ok(LinkSpec {
+        target_id,
+        edge_type,
+        note,
+    })
 }

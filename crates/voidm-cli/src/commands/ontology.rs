@@ -1,11 +1,9 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use sqlx::SqlitePool;
-use voidm_core::ontology::{
-    self, HierarchyDirection, NodeKind, OntologyRelType,
-};
-use voidm_core::Config;
 use uuid::Uuid;
+use voidm_core::ontology::{self, HierarchyDirection, NodeKind, OntologyRelType};
+use voidm_core::Config;
 
 // ─── Top-level subcommand tree ────────────────────────────────────────────────
 
@@ -283,7 +281,12 @@ pub struct InstancesArgs {
 
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
-pub async fn run(cmd: OntologyCommands, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+pub async fn run(
+    cmd: OntologyCommands,
+    pool: &SqlitePool,
+    config: &Config,
+    json: bool,
+) -> Result<()> {
     match cmd {
         OntologyCommands::Concept(sub) => run_concept(sub, pool, config, json).await,
         OntologyCommands::Link(args) => run_link(args, pool, json).await,
@@ -301,7 +304,12 @@ pub async fn run(cmd: OntologyCommands, pool: &SqlitePool, config: &Config, json
 
 // ─── Concept handlers ─────────────────────────────────────────────────────────
 
-async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+async fn run_concept(
+    cmd: ConceptCommands,
+    pool: &SqlitePool,
+    config: &Config,
+    json: bool,
+) -> Result<()> {
     match cmd {
         ConceptCommands::Add(args) => {
             let concept = ontology::add_concept(
@@ -317,8 +325,16 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
                 let concept_text = format!(
                     "{}{}{}",
                     &concept.name,
-                    concept.description.as_ref().map(|d| format!(" - {}", d)).unwrap_or_default(),
-                    concept.scope.as_ref().map(|s| format!(" ({})", s)).unwrap_or_default()
+                    concept
+                        .description
+                        .as_ref()
+                        .map(|d| format!(" - {}", d))
+                        .unwrap_or_default(),
+                    concept
+                        .scope
+                        .as_ref()
+                        .map(|s| format!(" ({})", s))
+                        .unwrap_or_default()
                 );
                 run_enrichment_for_concept(&concept.id, &concept_text, pool, config, 10).await
             } else {
@@ -331,9 +347,13 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
                 println!("{}", serde_json::to_string_pretty(&resp)?);
             } else {
                 println!("Concept added: {} ({})", concept.name, &concept.id[..8]);
-                if let Some(ref d) = concept.description { println!("  Description: {}", d); }
-                if let Some(ref s) = concept.scope { println!("  Scope: {}", s); }
-                
+                if let Some(ref d) = concept.description {
+                    println!("  Description: {}", d);
+                }
+                if let Some(ref s) = concept.scope {
+                    println!("  Scope: {}", s);
+                }
+
                 // Show similar concepts warning
                 if !concept.similar_concepts.is_empty() {
                     println!("\n⚠ Similar concepts found (consider merging):");
@@ -343,14 +363,18 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
                             &concept.id[..8], &sim.id[..8]);
                     }
                 }
-                
+
                 if !suggestions.is_empty() {
                     println!("\nSuggested relations ({}):", suggestions.len());
                     for s in &suggestions {
-                        println!("  [{:.2}] {} --[{}]--> {} \"{}\"",
-                            s.confidence, &concept.id[..8], s.suggested_rel,
+                        println!(
+                            "  [{:.2}] {} --[{}]--> {} \"{}\"",
+                            s.confidence,
+                            &concept.id[..8],
+                            s.suggested_rel,
                             &s.candidate_id[..8.min(s.candidate_id.len())],
-                            &s.candidate_text[..60.min(s.candidate_text.len())]);
+                            &s.candidate_text[..60.min(s.candidate_text.len())]
+                        );
                     }
                     println!("Use 'voidm ontology link' to confirm any of the above.");
                 }
@@ -362,14 +386,34 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
                 println!("{}", serde_json::to_string_pretty(&concept)?);
             } else {
                 println!("[{}] {}", &concept.id[..8], concept.name);
-                if let Some(ref d) = concept.description { println!("  {}", d); }
-                if let Some(ref s) = concept.scope { println!("  scope: {}", s); }
+                if let Some(ref d) = concept.description {
+                    println!("  {}", d);
+                }
+                if let Some(ref s) = concept.scope {
+                    println!("  scope: {}", s);
+                }
                 println!("  created: {}", concept.created_at);
                 if !concept.superclasses.is_empty() {
-                    println!("  IS_A: {}", concept.superclasses.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", "));
+                    println!(
+                        "  IS_A: {}",
+                        concept
+                            .superclasses
+                            .iter()
+                            .map(|c| c.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                 }
                 if !concept.subclasses.is_empty() {
-                    println!("  Subclasses: {}", concept.subclasses.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", "));
+                    println!(
+                        "  Subclasses: {}",
+                        concept
+                            .subclasses
+                            .iter()
+                            .map(|c| c.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                 }
                 if concept.instances.is_empty() {
                     println!("  Instances: none");
@@ -387,12 +431,26 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
                 println!("{}", serde_json::to_string_pretty(&concepts)?);
             } else {
                 if concepts.is_empty() {
-                    println!("No concepts found. Use 'voidm ontology concept add <name>' to create one.");
+                    println!(
+                        "No concepts found. Use 'voidm ontology concept add <name>' to create one."
+                    );
                 } else {
                     for c in &concepts {
-                        let scope_str = c.scope.as_deref().map(|s| format!(" ({})", s)).unwrap_or_default();
-                        let desc_str = c.description.as_deref()
-                            .map(|d| if d.len() > 60 { format!(" — {}…", &d[..60]) } else { format!(" — {}", d) })
+                        let scope_str = c
+                            .scope
+                            .as_deref()
+                            .map(|s| format!(" ({})", s))
+                            .unwrap_or_default();
+                        let desc_str = c
+                            .description
+                            .as_deref()
+                            .map(|d| {
+                                if d.len() > 60 {
+                                    format!(" — {}…", &d[..60])
+                                } else {
+                                    format!(" — {}", d)
+                                }
+                            })
                             .unwrap_or_default();
                         println!("[{}]{} {}{}", &c.id[..8], scope_str, c.name, desc_str);
                     }
@@ -403,7 +461,10 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
         ConceptCommands::Delete(args) => {
             let deleted = ontology::delete_concept(pool, &args.id).await?;
             if json {
-                println!("{}", serde_json::json!({ "deleted": deleted, "id": args.id }));
+                println!(
+                    "{}",
+                    serde_json::json!({ "deleted": deleted, "id": args.id })
+                );
             } else if deleted {
                 println!("Concept '{}' deleted.", args.id);
             } else {
@@ -417,43 +478,61 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
             if json {
                 println!("{}", serde_json::to_string(&result)?);
             } else {
-                println!("Merged concept '{}' into '{}'", result.source_name, result.target_name);
+                println!(
+                    "Merged concept '{}' into '{}'",
+                    result.source_name, result.target_name
+                );
                 println!("  Memory edges retargeted: {}", result.memory_edges_merged);
             }
         }
 
         ConceptCommands::FindMergeCandidates(args) => {
             let candidates = ontology::find_merge_candidates(pool, args.threshold).await?;
-            
+
             // Prepare JSON output
             let json_output = serde_json::to_string_pretty(&candidates)?;
-            
+
             // Write to file if --output specified
             if let Some(output_path) = &args.output {
                 std::fs::write(output_path, &json_output)?;
                 if !json {
-                    println!("✓ Wrote {} merge candidates to {}", candidates.len(), output_path);
+                    println!(
+                        "✓ Wrote {} merge candidates to {}",
+                        candidates.len(),
+                        output_path
+                    );
                 }
             } else if json {
                 println!("{}", json_output);
             } else {
                 if candidates.is_empty() {
-                    println!("No merge candidates found at similarity >= {}", args.threshold);
+                    println!(
+                        "No merge candidates found at similarity >= {}",
+                        args.threshold
+                    );
                 } else {
-                    println!("Found {} merge candidates (similarity >= {}):\n", candidates.len(), args.threshold);
+                    println!(
+                        "Found {} merge candidates (similarity >= {}):\n",
+                        candidates.len(),
+                        args.threshold
+                    );
                     for (idx, candidate) in candidates.iter().enumerate() {
-                        println!("{}. [{}] {} ({} edges) → [{}] {} ({} edges)", 
+                        println!(
+                            "{}. [{}] {} ({} edges) → [{}] {} ({} edges)",
                             idx + 1,
                             candidate.source_id.chars().take(8).collect::<String>(),
                             candidate.source_name,
                             candidate.source_edges,
                             candidate.target_id.chars().take(8).collect::<String>(),
                             candidate.target_name,
-                            candidate.target_edges);
+                            candidate.target_edges
+                        );
                         println!("   Similarity: {:.2}%", candidate.similarity * 100.0);
-                        println!("   Action: voidm ontology concept merge {} {}\n", 
+                        println!(
+                            "   Action: voidm ontology concept merge {} {}\n",
                             candidate.source_id.chars().take(8).collect::<String>(),
-                            candidate.target_id.chars().take(8).collect::<String>());
+                            candidate.target_id.chars().take(8).collect::<String>()
+                        );
                     }
                 }
             }
@@ -471,7 +550,15 @@ async fn run_concept(cmd: ConceptCommands, pool: &SqlitePool, config: &Config, j
             handle_merge_history(args.batch.as_deref(), args.status.as_deref(), pool, json).await?;
         }
         ConceptCommands::AutoMerge(args) => {
-            handle_automerge(args.threshold, args.use_semantic, args.dry_run, args.force, pool, json).await?;
+            handle_automerge(
+                args.threshold,
+                args.use_semantic,
+                args.dry_run,
+                args.force,
+                pool,
+                json,
+            )
+            .await?;
         }
     }
     Ok(())
@@ -504,7 +591,11 @@ async fn run_link(args: OntologyLinkArgs, pool: &SqlitePool, json: bool) -> Resu
     } else {
         println!(
             "Linked: {} ({}) --[{}]--> {} ({})",
-            &edge.from_id[..8], edge.from_type, edge.rel_type, &edge.to_id[..8], edge.to_type
+            &edge.from_id[..8],
+            edge.from_type,
+            edge.rel_type,
+            &edge.to_id[..8],
+            edge.to_type
         );
     }
     Ok(())
@@ -513,7 +604,10 @@ async fn run_link(args: OntologyLinkArgs, pool: &SqlitePool, json: bool) -> Resu
 async fn run_unlink(args: OntologyUnlinkArgs, pool: &SqlitePool, json: bool) -> Result<()> {
     let deleted = ontology::delete_ontology_edge(pool, args.edge_id).await?;
     if json {
-        println!("{}", serde_json::json!({ "deleted": deleted, "edge_id": args.edge_id }));
+        println!(
+            "{}",
+            serde_json::json!({ "deleted": deleted, "edge_id": args.edge_id })
+        );
     } else if deleted {
         println!("Ontology edge {} removed.", args.edge_id);
     } else {
@@ -564,8 +658,14 @@ async fn run_hierarchy(args: HierarchyArgs, pool: &SqlitePool, json: bool) -> Re
         return Ok(());
     }
 
-    let ancestors: Vec<_> = nodes.iter().filter(|n| matches!(n.direction, HierarchyDirection::Ancestor)).collect();
-    let descendants: Vec<_> = nodes.iter().filter(|n| matches!(n.direction, HierarchyDirection::Descendant)).collect();
+    let ancestors: Vec<_> = nodes
+        .iter()
+        .filter(|n| matches!(n.direction, HierarchyDirection::Ancestor))
+        .collect();
+    let descendants: Vec<_> = nodes
+        .iter()
+        .filter(|n| matches!(n.direction, HierarchyDirection::Descendant))
+        .collect();
 
     if ancestors.is_empty() && descendants.is_empty() {
         println!("'{}' has no IS_A connections yet.", concept.name);
@@ -576,7 +676,13 @@ async fn run_hierarchy(args: HierarchyArgs, pool: &SqlitePool, json: bool) -> Re
     if !ancestors.is_empty() {
         println!("Ancestors (IS_A chain upward):");
         for n in &ancestors {
-            println!("  {:indent$}{} [{}]", "", n.name, &n.id[..8], indent = (n.depth as usize - 1) * 2);
+            println!(
+                "  {:indent$}{} [{}]",
+                "",
+                n.name,
+                &n.id[..8],
+                indent = (n.depth as usize - 1) * 2
+            );
         }
     }
 
@@ -585,7 +691,13 @@ async fn run_hierarchy(args: HierarchyArgs, pool: &SqlitePool, json: bool) -> Re
     if !descendants.is_empty() {
         println!("Descendants (subclasses):");
         for n in &descendants {
-            println!("  {:indent$}{} [{}]", "", n.name, &n.id[..8], indent = (n.depth as usize - 1) * 2);
+            println!(
+                "  {:indent$}{} [{}]",
+                "",
+                n.name,
+                &n.id[..8],
+                indent = (n.depth as usize - 1) * 2
+            );
         }
     }
 
@@ -604,8 +716,14 @@ async fn run_instances(args: InstancesArgs, pool: &SqlitePool, json: bool) -> Re
     }
 
     if instances.is_empty() {
-        println!("No instances of '{}' (including subclasses) found.", concept.name);
-        println!("Use 'voidm ontology link <id> --from-kind memory INSTANCE_OF {}' to link a memory.", &concept.id[..8]);
+        println!(
+            "No instances of '{}' (including subclasses) found.",
+            concept.name
+        );
+        println!(
+            "Use 'voidm ontology link <id> --from-kind memory INSTANCE_OF {}' to link a memory.",
+            &concept.id[..8]
+        );
     } else {
         println!("Instances of '{}' (including subclasses):", concept.name);
         for inst in &instances {
@@ -618,7 +736,10 @@ async fn run_instances(args: InstancesArgs, pool: &SqlitePool, json: bool) -> Re
                 "  [{}] {} {}{}",
                 &inst.instance_id[..8.min(inst.instance_id.len())],
                 inst.instance_kind,
-                inst.note.as_deref().map(|n| format!("— {}", n)).unwrap_or_default(),
+                inst.note
+                    .as_deref()
+                    .map(|n| format!("— {}", n))
+                    .unwrap_or_default(),
                 via
             );
         }
@@ -651,7 +772,10 @@ async fn run_enrichment_for_concept(
 ) -> Vec<voidm_core::nli::RelationSuggestion> {
     // Ensure model is loaded
     if let Err(e) = voidm_core::nli::ensure_nli_model().await {
-        eprintln!("Warning: NLI model load failed: {}. Skipping enrichment.", e);
+        eprintln!(
+            "Warning: NLI model load failed: {}. Skipping enrichment.",
+            e
+        );
         return vec![];
     }
 
@@ -677,9 +801,12 @@ async fn run_enrichment_for_concept(
 
     // If embeddings available, compute actual cosine similarity
     if config.embeddings.enabled {
-        if let Ok(query_emb) = voidm_core::embeddings::embed_text(&config.embeddings.model, concept_text) {
+        if let Ok(query_emb) =
+            voidm_core::embeddings::embed_text(&config.embeddings.model, concept_text)
+        {
             for (_id, text, sim) in &mut scored_candidates {
-                if let Ok(emb) = voidm_core::embeddings::embed_text(&config.embeddings.model, text) {
+                if let Ok(emb) = voidm_core::embeddings::embed_text(&config.embeddings.model, text)
+                {
                     *sim = cosine_similarity(&query_emb, &emb);
                 }
             }
@@ -701,32 +828,48 @@ fn concept_text_from(c: &ontology::Concept) -> String {
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() { return 0.0; }
+    if a.len() != b.len() {
+        return 0.0;
+    }
     let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 { 0.0 } else { dot / (norm_a * norm_b) }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        0.0
+    } else {
+        dot / (norm_a * norm_b)
+    }
 }
 
-async fn run_enrich(args: EnrichArgs, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+async fn run_enrich(
+    args: EnrichArgs,
+    pool: &SqlitePool,
+    config: &Config,
+    json: bool,
+) -> Result<()> {
     let concepts = ontology::list_concepts(pool, None, 1000).await?;
     if concepts.is_empty() {
         if json {
-            println!("{}", serde_json::json!({ "enriched": 0, "message": "No concepts to enrich." }));
+            println!(
+                "{}",
+                serde_json::json!({ "enriched": 0, "message": "No concepts to enrich." })
+            );
         } else {
             println!("No concepts to enrich.");
         }
         return Ok(());
     }
 
-    println!("Enriching {} concept(s) with NLI relation suggestions …", concepts.len());
+    println!(
+        "Enriching {} concept(s) with NLI relation suggestions …",
+        concepts.len()
+    );
 
     let mut all_suggestions: Vec<serde_json::Value> = vec![];
     for concept in &concepts {
         let text = concept_text_from(concept);
-        let suggestions = run_enrichment_for_concept(
-            &concept.id, &text, pool, config, args.top_k,
-        ).await;
+        let suggestions =
+            run_enrichment_for_concept(&concept.id, &text, pool, config, args.top_k).await;
 
         if !suggestions.is_empty() {
             if json {
@@ -738,11 +881,14 @@ async fn run_enrich(args: EnrichArgs, pool: &SqlitePool, config: &Config, json: 
             } else {
                 println!("\n[{}] {}:", &concept.id[..8], concept.name);
                 for s in &suggestions {
-                    println!("  [{:.2}] --[{}]--> {} ({}) \"{}\"",
-                        s.confidence, s.suggested_rel,
+                    println!(
+                        "  [{:.2}] --[{}]--> {} ({}) \"{}\"",
+                        s.confidence,
+                        s.suggested_rel,
                         &s.candidate_id[..8.min(s.candidate_id.len())],
                         s.suggested_rel,
-                        &s.candidate_text[..60.min(s.candidate_text.len())]);
+                        &s.candidate_text[..60.min(s.candidate_text.len())]
+                    );
                 }
             }
         }
@@ -782,36 +928,56 @@ async fn run_extract(args: ExtractArgs, pool: &SqlitePool, json: bool) -> Result
     let entities = voidm_core::ner::extract_entities(&args.text)?;
 
     // Filter by min_score
-    let filtered: Vec<_> = entities.iter()
+    let filtered: Vec<_> = entities
+        .iter()
         .filter(|e| e.score >= args.min_score)
         .collect();
 
     if filtered.is_empty() {
         if json {
-            println!("{}", serde_json::json!({ "candidates": [], "message": "No entities found above threshold." }));
+            println!(
+                "{}",
+                serde_json::json!({ "candidates": [], "message": "No entities found above threshold." })
+            );
         } else {
-            println!("No entities found above score threshold {:.2}.", args.min_score);
+            println!(
+                "No entities found above score threshold {:.2}.",
+                args.min_score
+            );
             println!("Try lowering --min-score or providing more descriptive text.");
         }
         return Ok(());
     }
 
     // Check against existing concepts
-    let entities_owned: Vec<voidm_core::ner::NamedEntity> = filtered.iter().map(|e| (*e).clone()).collect();
+    let entities_owned: Vec<voidm_core::ner::NamedEntity> =
+        filtered.iter().map(|e| (*e).clone()).collect();
     let candidates = voidm_core::ner::entities_to_candidates(&entities_owned, pool).await?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&candidates)?);
-        if !args.add { return Ok(()); }
+        if !args.add {
+            return Ok(());
+        }
     } else {
         println!("Extracted {} candidate(s):", candidates.len());
         for c in &candidates {
             let status = if c.already_exists {
-                format!(" [exists: {}]", c.existing_id.as_deref().unwrap_or("?").get(..8).unwrap_or("?"))
+                format!(
+                    " [exists: {}]",
+                    c.existing_id
+                        .as_deref()
+                        .unwrap_or("?")
+                        .get(..8)
+                        .unwrap_or("?")
+                )
             } else {
                 String::new()
             };
-            println!("  [{:.2}] {:5} {}{}", c.score, c.entity_type, c.name, status);
+            println!(
+                "  [{:.2}] {:5} {}{}",
+                c.score, c.entity_type, c.name, status
+            );
         }
     }
 
@@ -819,23 +985,34 @@ async fn run_extract(args: ExtractArgs, pool: &SqlitePool, json: bool) -> Result
     if args.add {
         let new_candidates: Vec<_> = candidates.iter().filter(|c| !c.already_exists).collect();
         if new_candidates.is_empty() {
-            if !json { println!("All candidates already exist as concepts."); }
+            if !json {
+                println!("All candidates already exist as concepts.");
+            }
             return Ok(());
         }
 
-        if !json { println!("\nAdding {} new concept(s):", new_candidates.len()); }
+        if !json {
+            println!("\nAdding {} new concept(s):", new_candidates.len());
+        }
 
         let mut added = Vec::new();
         for c in &new_candidates {
             match ontology::add_concept(pool, &c.name, None, args.scope.as_deref()).await {
                 Ok(concept) => {
                     if !json {
-                        println!("  ✓ {} [{}] ({})", concept.name, &concept.id[..8], c.entity_type);
+                        println!(
+                            "  ✓ {} [{}] ({})",
+                            concept.name,
+                            &concept.id[..8],
+                            c.entity_type
+                        );
                     }
                     added.push(concept);
                 }
                 Err(e) => {
-                    if !json { eprintln!("  ✗ {}: {}", c.name, e); }
+                    if !json {
+                        eprintln!("  ✗ {}: {}", c.name, e);
+                    }
                 }
             }
         }
@@ -843,10 +1020,15 @@ async fn run_extract(args: ExtractArgs, pool: &SqlitePool, json: bool) -> Result
         if json {
             println!("{}", serde_json::to_string_pretty(&added)?);
         } else {
-            println!("\n{} concept(s) added. Use 'voidm ontology link' to build the hierarchy.", added.len());
+            println!(
+                "\n{} concept(s) added. Use 'voidm ontology link' to build the hierarchy.",
+                added.len()
+            );
         }
     } else if !json {
-        println!("\nUse 'voidm ontology extract \"...\" --add' to automatically add new candidates.");
+        println!(
+            "\nUse 'voidm ontology extract \"...\" --add' to automatically add new candidates."
+        );
         println!("Or 'voidm ontology concept add \"<name>\"' to add individually.");
     }
 
@@ -871,7 +1053,7 @@ async fn run_enrich_memories(
     let opts = voidm_core::ontology::EnrichMemoriesOpts {
         scope: args.scope.as_deref(),
         min_score: args.min_score,
-        add: true,  // ALWAYS add new concepts (default behavior changed)
+        add: true, // ALWAYS add new concepts (default behavior changed)
         force: args.force,
         dry_run: args.dry_run,
         limit: args.limit,
@@ -907,18 +1089,15 @@ async fn run_enrich_memories(
                 parts.push(format!("created: {}", r.concepts_created.join(", ")));
             }
             if parts.is_empty() {
-                format!("{} entities, 0 links (no matching concepts)", r.entities_found)
+                format!(
+                    "{} entities, 0 links (no matching concepts)",
+                    r.entities_found
+                )
             } else {
                 parts.join(" | ")
             }
         };
-        println!(
-            "[{}/{}] {} → {}",
-            i + 1,
-            processed,
-            r.preview,
-            status,
-        );
+        println!("[{}/{}] {} → {}", i + 1, processed, r.preview, status,);
     }
 
     if skipped > 0 {
@@ -964,26 +1143,35 @@ async fn run_enrich_memories(
 
 // ─── Batch merge handlers ─────────────────────────────────────────────────────
 
-async fn handle_merge_batch(path: &str, execute: bool, pool: &SqlitePool, json: bool) -> Result<()> {
+async fn handle_merge_batch(
+    path: &str,
+    execute: bool,
+    pool: &SqlitePool,
+    json: bool,
+) -> Result<()> {
     use std::fs;
     use voidm_core::models::MergePlan;
 
     // Load and parse merge plan JSON
     let plan_str = fs::read_to_string(path)?;
-    
+
     // Try to parse as MergePlan first; if that fails, try MergeCandidate array and convert
     let plan: MergePlan = match serde_json::from_str(&plan_str) {
         Ok(p) => p,
         Err(_) => {
             // Try parsing as array of MergeCandidate (from find-merge-candidates output)
-            let candidates: Vec<voidm_core::ontology::MergeCandidate> = serde_json::from_str(&plan_str)?;
-            
+            let candidates: Vec<voidm_core::ontology::MergeCandidate> =
+                serde_json::from_str(&plan_str)?;
+
             // Convert to MergePlan
-            let merges = candidates.into_iter().map(|c| voidm_core::models::MergePair {
-                source: c.source_id,
-                target: c.target_id,
-            }).collect();
-            
+            let merges = candidates
+                .into_iter()
+                .map(|c| voidm_core::models::MergePair {
+                    source: c.source_id,
+                    target: c.target_id,
+                })
+                .collect();
+
             MergePlan { merges }
         }
     };
@@ -1031,12 +1219,18 @@ async fn handle_merge_batch(path: &str, execute: bool, pool: &SqlitePool, json: 
                 }
             }
             if result.conflicts > 0 {
-                println!("⚠ Conflicts detected: {} (both have CONTRADICTS)", result.conflicts);
+                println!(
+                    "⚠ Conflicts detected: {} (both have CONTRADICTS)",
+                    result.conflicts
+                );
                 println!("  → Will keep both CONTRADICTS edges on target");
             }
             println!("Edges to retarget: {}", result.edges_retargeted);
             println!("\nStatus: This is a dry-run preview. To execute, use --execute flag:");
-            println!("voidm ontology concept merge-batch --from {} --execute", path);
+            println!(
+                "voidm ontology concept merge-batch --from {} --execute",
+                path
+            );
         }
     }
 
@@ -1059,7 +1253,10 @@ async fn handle_rollback_merge(merge_id: &str, pool: &SqlitePool, json: bool) ->
     ontology::rollback_merge(pool, merge_id).await?;
 
     if json {
-        println!("{{\"status\": \"rolled_back\", \"merge_id\": \"{}\"}}", merge_id);
+        println!(
+            "{{\"status\": \"rolled_back\", \"merge_id\": \"{}\"}}",
+            merge_id
+        );
     } else {
         println!("✓ Rolled back merge: {}", merge_id);
     }
@@ -1129,7 +1326,10 @@ async fn handle_automerge(
 
     if candidates.is_empty() {
         if !json {
-            println!("✓ Database is clean: no duplicate concepts found above {:.0}% similarity", threshold * 100.0);
+            println!(
+                "✓ Database is clean: no duplicate concepts found above {:.0}% similarity",
+                threshold * 100.0
+            );
         } else {
             println!("{{\"status\": \"clean\", \"candidates\": 0}}");
         }
@@ -1152,23 +1352,41 @@ async fn handle_automerge(
         if !json {
             println!("Auto-Merge Preview:");
             println!("───────────────────────────────────────────────────────────");
-            let dedup_info = if use_semantic { " (semantic dedup enabled)" } else { "" };
-            println!("Found {} duplicate concept pairs above {:.0}% similarity{}", candidates.len(), threshold * 100.0, dedup_info);
+            let dedup_info = if use_semantic {
+                " (semantic dedup enabled)"
+            } else {
+                ""
+            };
+            println!(
+                "Found {} duplicate concept pairs above {:.0}% similarity{}",
+                candidates.len(),
+                threshold * 100.0,
+                dedup_info
+            );
             println!();
             for (idx, candidate) in candidates.iter().enumerate() {
-                println!("{}. [{}] {} ({} edges) → [{}] {} ({} edges)",
+                println!(
+                    "{}. [{}] {} ({} edges) → [{}] {} ({} edges)",
                     idx + 1,
                     candidate.source_id.chars().take(8).collect::<String>(),
                     candidate.source_name,
                     candidate.source_edges,
                     candidate.target_id.chars().take(8).collect::<String>(),
                     candidate.target_name,
-                    candidate.target_edges);
+                    candidate.target_edges
+                );
                 println!("   Similarity: {:.1}%\n", candidate.similarity * 100.0);
             }
-            println!("Execute merge with: voidm ontology concept automerge --threshold {} --force", threshold);
+            println!(
+                "Execute merge with: voidm ontology concept automerge --threshold {} --force",
+                threshold
+            );
         } else {
-            println!("{{\"status\": \"preview\", \"candidates\": {}, \"threshold\": {}}}", candidates.len(), threshold);
+            println!(
+                "{{\"status\": \"preview\", \"candidates\": {}, \"threshold\": {}}}",
+                candidates.len(),
+                threshold
+            );
         }
         return Ok(());
     }
@@ -1183,7 +1401,10 @@ async fn handle_automerge(
         println!("Auto-Merge Complete:");
         println!("───────────────────────────────────────────────────────────");
         println!("✓ Batch ID: {}", result.batch_id);
-        println!("✓ Merged: {}/{} concept pairs", result.succeeded, result.total);
+        println!(
+            "✓ Merged: {}/{} concept pairs",
+            result.succeeded, result.total
+        );
         if result.failed > 0 {
             println!("⚠ Failed: {}", result.failed);
             for (source, target, reason) in &result.errors {
@@ -1191,7 +1412,10 @@ async fn handle_automerge(
             }
         }
         if result.conflicts > 0 {
-            println!("⚠ Conflicts kept: {} (both CONTRADICTS edges preserved)", result.conflicts);
+            println!(
+                "⚠ Conflicts kept: {} (both CONTRADICTS edges preserved)",
+                result.conflicts
+            );
         }
         println!("Edges retargeted: {}", result.edges_retargeted);
         println!("\nDatabase improved. Run again to check for more duplicates.");
@@ -1202,11 +1426,7 @@ async fn handle_automerge(
 
 // ─── Auto-improve handler ──────────────────────────────────────────────────────
 
-async fn run_auto_improve(
-    args: AutoImproveArgs,
-    pool: &SqlitePool,
-    json: bool,
-) -> Result<()> {
+async fn run_auto_improve(args: AutoImproveArgs, pool: &SqlitePool, json: bool) -> Result<()> {
     if !json && !args.merge_only {
         println!("Auto-Improve: Enriching memories + Auto-merging duplicates");
         println!("═══════════════════════════════════════════════════════════\n");
@@ -1223,10 +1443,10 @@ async fn run_auto_improve(
         let enrich_args = EnrichMemoriesArgs {
             scope: args.scope.clone(),
             min_score: args.min_score,
-            add: true,  // Always auto-add new concepts
-            force: args.force,  // Pass through the force flag
+            add: true,         // Always auto-add new concepts
+            force: args.force, // Pass through the force flag
             dry_run: args.dry_run,
-            limit: 0,  // Process all
+            limit: 0, // Process all
         };
 
         if args.dry_run {
@@ -1258,14 +1478,20 @@ async fn run_auto_improve(
 
     // Step 2: Auto-merge duplicates (always run this)
     if !json {
-        println!("Step {}: Auto-merging similar concepts...", if args.merge_only { 1 } else { 2 });
+        println!(
+            "Step {}: Auto-merging similar concepts...",
+            if args.merge_only { 1 } else { 2 }
+        );
     }
 
     let candidates = ontology::find_merge_candidates(pool, args.threshold).await?;
 
     if candidates.is_empty() {
         if !json {
-            println!("✓ No duplicates found above {:.0}% similarity\n", args.threshold * 100.0);
+            println!(
+                "✓ No duplicates found above {:.0}% similarity\n",
+                args.threshold * 100.0
+            );
             println!("═══════════════════════════════════════════════════════════");
             println!("Database is clean and optimized.");
         } else {
@@ -1289,23 +1515,31 @@ async fn run_auto_improve(
     if args.dry_run {
         // Show preview in dry-run mode
         if !json {
-            println!("Found {} duplicate concept pairs above {:.0}% similarity\n", 
-                candidates.len(), args.threshold * 100.0);
+            println!(
+                "Found {} duplicate concept pairs above {:.0}% similarity\n",
+                candidates.len(),
+                args.threshold * 100.0
+            );
             for (idx, candidate) in candidates.iter().take(5).enumerate() {
-                println!("{}. [{}] {} → [{}] {} ({}% similar)",
+                println!(
+                    "{}. [{}] {} → [{}] {} ({}% similar)",
                     idx + 1,
                     candidate.source_id.chars().take(8).collect::<String>(),
                     candidate.source_name,
                     candidate.target_id.chars().take(8).collect::<String>(),
                     candidate.target_name,
-                    (candidate.similarity * 100.0) as i32);
+                    (candidate.similarity * 100.0) as i32
+                );
             }
             if candidates.len() > 5 {
                 println!("... and {} more", candidates.len() - 5);
             }
             println!("\n(dry-run: no changes will be made)");
         } else {
-            println!("{{\"status\":\"preview\",\"duplicates\":{}}}", candidates.len());
+            println!(
+                "{{\"status\":\"preview\",\"duplicates\":{}}}",
+                candidates.len()
+            );
         }
         return Ok(());
     }
@@ -1316,14 +1550,20 @@ async fn run_auto_improve(
 
     if json {
         // Agent-friendly JSON: minimal, single line
-        println!("{{\"status\":\"ok\",\"merged\":{},\"conflicts\":{}}}", result.succeeded, result.conflicts);
+        println!(
+            "{{\"status\":\"ok\",\"merged\":{},\"conflicts\":{}}}",
+            result.succeeded, result.conflicts
+        );
     } else {
         println!("✓ Merged {} concept pairs\n", result.succeeded);
         if result.failed > 0 {
             println!("⚠ Failed: {}", result.failed);
         }
         if result.conflicts > 0 {
-            println!("⚠ Conflicts: {} CONTRADICTS edges preserved", result.conflicts);
+            println!(
+                "⚠ Conflicts: {} CONTRADICTS edges preserved",
+                result.conflicts
+            );
         }
 
         println!("\n═══════════════════════════════════════════════════════════");

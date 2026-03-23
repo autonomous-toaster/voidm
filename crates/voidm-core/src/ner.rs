@@ -44,18 +44,14 @@ pub struct ConceptCandidate {
 
 // CoNLL-03 id2label in model order
 const LABELS: &[&str] = &[
-    "O",
-    "B-MISC", "I-MISC",
-    "B-PER",  "I-PER",
-    "B-ORG",  "I-ORG",
-    "B-LOC",  "I-LOC",
+    "O", "B-MISC", "I-MISC", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC",
 ];
 
 fn label_to_type(label: &str) -> Option<&'static str> {
     match label {
-        "B-PER"  | "I-PER"  => Some("PER"),
-        "B-ORG"  | "I-ORG"  => Some("ORG"),
-        "B-LOC"  | "I-LOC"  => Some("LOC"),
+        "B-PER" | "I-PER" => Some("PER"),
+        "B-ORG" | "I-ORG" => Some("ORG"),
+        "B-LOC" | "I-LOC" => Some("LOC"),
         "B-MISC" | "I-MISC" => Some("MISC"),
         _ => None,
     }
@@ -105,7 +101,10 @@ async fn load_or_download() -> Result<NerModel> {
 
     if !onnx_path.exists() || !tokenizer_path.exists() {
         tracing::info!("Downloading NER model '{}' (first use) …", NER_MODEL_ID);
-        eprintln!("Downloading NER model '{}' (~103MB, first use only) …", NER_MODEL_ID);
+        eprintln!(
+            "Downloading NER model '{}' (~103MB, first use only) …",
+            NER_MODEL_ID
+        );
         download_model_files(&cache_dir).await?;
         eprintln!("NER model ready at {}", cache_dir.display());
     }
@@ -118,11 +117,15 @@ async fn load_or_download() -> Result<NerModel> {
         .commit_from_file(&onnx_path)
         .context("Failed to load NER ONNX model")?;
 
-    Ok(NerModel { session: Mutex::new(session), tokenizer })
+    Ok(NerModel {
+        session: Mutex::new(session),
+        tokenizer,
+    })
 }
 
 async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
-    let hf_cache = cache_dir.parent()
+    let hf_cache = cache_dir
+        .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| cache_dir.clone());
 
@@ -133,13 +136,19 @@ async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
 
     let repo = api.model(NER_MODEL_ID.to_string());
 
-    let onnx_src = repo.get(NER_ONNX_FILE).await
+    let onnx_src = repo
+        .get(NER_ONNX_FILE)
+        .await
         .with_context(|| format!("Failed to download {} from {}", NER_ONNX_FILE, NER_MODEL_ID))?;
     std::fs::copy(&onnx_src, cache_dir.join("model_quantized.onnx"))
         .context("Failed to copy NER ONNX model to cache")?;
 
-    let tok_src = repo.get(NER_TOKENIZER_FILE).await
-        .with_context(|| format!("Failed to download {} from {}", NER_TOKENIZER_FILE, NER_MODEL_ID))?;
+    let tok_src = repo.get(NER_TOKENIZER_FILE).await.with_context(|| {
+        format!(
+            "Failed to download {} from {}",
+            NER_TOKENIZER_FILE, NER_MODEL_ID
+        )
+    })?;
     std::fs::copy(&tok_src, cache_dir.join("tokenizer.json"))
         .context("Failed to copy NER tokenizer to cache")?;
 
@@ -151,12 +160,14 @@ async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
 /// Extract named entities from `text`.
 /// Returns a list of entities with their type, span, and confidence score.
 pub fn extract_entities(text: &str) -> Result<Vec<NamedEntity>> {
-    let wrapper = NER_MODEL.get()
+    let wrapper = NER_MODEL
+        .get()
         .context("NER model not loaded. Call ensure_ner_model() first.")?;
     let model = &wrapper.0;
 
     // Tokenize — no truncation, but BERT has a 512 token limit
-    let encoding = model.tokenizer
+    let encoding = model
+        .tokenizer
         .encode(text, true)
         .map_err(|e| anyhow::anyhow!("NER tokenization failed: {}", e))?;
 
@@ -165,35 +176,39 @@ pub fn extract_entities(text: &str) -> Result<Vec<NamedEntity>> {
 
     let input_ids: Vec<i64> = ids[..seq_len].iter().map(|&x| x as i64).collect();
     let attention_mask: Vec<i64> = encoding.get_attention_mask()[..seq_len]
-        .iter().map(|&x| x as i64).collect();
+        .iter()
+        .map(|&x| x as i64)
+        .collect();
     let token_type_ids: Vec<i64> = encoding.get_type_ids()[..seq_len]
-        .iter().map(|&x| x as i64).collect();
+        .iter()
+        .map(|&x| x as i64)
+        .collect();
 
-    let ids_tensor = Tensor::<i64>::from_array(
-        ([1usize, seq_len], input_ids.into_boxed_slice())
-    ).context("NER input_ids tensor")?;
+    let ids_tensor = Tensor::<i64>::from_array(([1usize, seq_len], input_ids.into_boxed_slice()))
+        .context("NER input_ids tensor")?;
 
-    let mask_tensor = Tensor::<i64>::from_array(
-        ([1usize, seq_len], attention_mask.into_boxed_slice())
-    ).context("NER attention_mask tensor")?;
+    let mask_tensor =
+        Tensor::<i64>::from_array(([1usize, seq_len], attention_mask.into_boxed_slice()))
+            .context("NER attention_mask tensor")?;
 
-    let type_tensor = Tensor::<i64>::from_array(
-        ([1usize, seq_len], token_type_ids.into_boxed_slice())
-    ).context("NER token_type_ids tensor")?;
+    let type_tensor =
+        Tensor::<i64>::from_array(([1usize, seq_len], token_type_ids.into_boxed_slice()))
+            .context("NER token_type_ids tensor")?;
 
     // Perform inference and extract logits within the lock scope
     let logits_flat = {
         let mut session_lock = model.session.lock().unwrap();
-        let outputs = session_lock.run(
-            ort::inputs![
+        let outputs = session_lock
+            .run(ort::inputs![
                 "input_ids"      => ids_tensor,
                 "attention_mask" => mask_tensor,
                 "token_type_ids" => type_tensor
-            ]
-        ).context("NER inference failed")?;
+            ])
+            .context("NER inference failed")?;
 
         // logits: [1, seq_len, num_labels=9]
-        let logits_value = outputs.get("logits")
+        let logits_value = outputs
+            .get("logits")
             .context("No 'logits' output from NER model")?;
         let logits_tensor = logits_value
             .try_extract_tensor::<f32>()
@@ -209,14 +224,22 @@ pub fn extract_entities(text: &str) -> Result<Vec<NamedEntity>> {
     let mut token_labels: Vec<(&str, f32)> = Vec::new();
     for t in 0..seq_len {
         let start = t * num_labels;
-        if start + num_labels > logits_flat.len() { break; }
+        if start + num_labels > logits_flat.len() {
+            break;
+        }
         let token_logits = &logits_flat[start..start + num_labels];
         let probs = softmax(token_logits);
-        let (best_idx, best_prob) = probs.iter().enumerate()
+        let (best_idx, best_prob) = probs
+            .iter()
+            .enumerate()
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(i, p)| (i, *p))
             .unwrap_or((0, 1.0));
-        let label = if best_idx < LABELS.len() { LABELS[best_idx] } else { "O" };
+        let label = if best_idx < LABELS.len() {
+            LABELS[best_idx]
+        } else {
+            "O"
+        };
         token_labels.push((label, best_prob));
     }
 
@@ -241,8 +264,16 @@ pub fn extract_entities(text: &str) -> Result<Vec<NamedEntity>> {
         if let Some(entity_type) = label_to_type(label) {
             if is_begin(label) {
                 // Start of a new entity span
-                let char_start = if i < token_offsets.len() { token_offsets[i].0 } else { 0 };
-                let mut char_end = if i < token_offsets.len() { token_offsets[i].1 } else { 0 };
+                let char_start = if i < token_offsets.len() {
+                    token_offsets[i].0
+                } else {
+                    0
+                };
+                let mut char_end = if i < token_offsets.len() {
+                    token_offsets[i].1
+                } else {
+                    0
+                };
                 let mut scores = vec![prob];
 
                 // Consume continuation tokens:
@@ -253,11 +284,14 @@ pub fn extract_entities(text: &str) -> Result<Vec<NamedEntity>> {
                     let is_subword = j < tokens.len() && tokens[j].starts_with("##");
                     let (next_label, next_prob) = token_labels[j];
                     let next_type = label_to_type(next_label);
-                    let is_continuation =
-                        next_type == Some(entity_type) && !is_begin(next_label);
+                    let is_continuation = next_type == Some(entity_type) && !is_begin(next_label);
 
                     if is_subword || is_continuation {
-                        char_end = if j < token_offsets.len() { token_offsets[j].1 } else { char_end };
+                        char_end = if j < token_offsets.len() {
+                            token_offsets[j].1
+                        } else {
+                            char_end
+                        };
                         scores.push(next_prob);
                         j += 1;
                     } else {
@@ -265,15 +299,14 @@ pub fn extract_entities(text: &str) -> Result<Vec<NamedEntity>> {
                     }
                 }
 
-                let span_text = text.get(char_start..char_end)
+                let span_text = text
+                    .get(char_start..char_end)
                     .unwrap_or("")
                     .trim()
                     .to_string();
 
                 // Skip special tokens [CLS], [SEP], empty spans, single chars
-                if !span_text.is_empty() && span_text.len() > 1
-                    && !span_text.starts_with('[')
-                {
+                if !span_text.is_empty() && span_text.len() > 1 && !span_text.starts_with('[') {
                     let mean_score = scores.iter().sum::<f32>() / scores.len() as f32;
                     entities.push(NamedEntity {
                         text: span_text,
@@ -292,7 +325,11 @@ pub fn extract_entities(text: &str) -> Result<Vec<NamedEntity>> {
     }
 
     // Deduplicate by normalized text (case-insensitive), keep highest score
-    entities.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    entities.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     entities.retain(|e| seen.insert(e.text.to_lowercase()));
 
@@ -310,12 +347,11 @@ pub async fn entities_to_candidates(
 
     for entity in entities {
         // Check if a concept with this name already exists (case-insensitive)
-        let existing: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM ontology_concepts WHERE lower(name) = lower(?)"
-        )
-        .bind(&entity.text)
-        .fetch_optional(pool)
-        .await?;
+        let existing: Option<(String,)> =
+            sqlx::query_as("SELECT id FROM ontology_concepts WHERE lower(name) = lower(?)")
+                .bind(&entity.text)
+                .fetch_optional(pool)
+                .await?;
 
         candidates.push(ConceptCandidate {
             name: entity.text.clone(),
@@ -352,7 +388,6 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
     exps.iter().map(|&x| x / sum).collect()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,19 +401,34 @@ mod tests {
         let input_names: Vec<&str> = session.inputs().iter().map(|i| i.name()).collect();
         assert!(input_names.contains(&"input_ids"));
         assert!(input_names.contains(&"attention_mask"));
-        assert!(input_names.contains(&"token_type_ids"), "BERT-NER uses token_type_ids");
+        assert!(
+            input_names.contains(&"token_type_ids"),
+            "BERT-NER uses token_type_ids"
+        );
     }
 
     #[tokio::test]
     async fn test_extract_orgs_and_locs() {
         ensure_ner_model().await.expect("model load");
-        let entities = extract_entities(
-            "Google and Microsoft are building cloud services in London."
-        ).expect("extraction failed");
+        let entities =
+            extract_entities("Google and Microsoft are building cloud services in London.")
+                .expect("extraction failed");
         let names: Vec<&str> = entities.iter().map(|e| e.text.as_str()).collect();
-        assert!(names.contains(&"Google"), "should extract Google: got {:?}", names);
-        assert!(names.contains(&"Microsoft"), "should extract Microsoft: got {:?}", names);
-        assert!(names.contains(&"London"), "should extract London: got {:?}", names);
+        assert!(
+            names.contains(&"Google"),
+            "should extract Google: got {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Microsoft"),
+            "should extract Microsoft: got {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"London"),
+            "should extract London: got {:?}",
+            names
+        );
     }
 
     #[tokio::test]
@@ -392,10 +442,26 @@ mod tests {
         let names: Vec<&str> = entities.iter().map(|e| e.text.as_str()).collect();
         println!("Extracted: {:?}", names);
         // Full compound forms — not truncated
-        assert!(names.contains(&"RabbitMQ"), "should reconstruct RabbitMQ (was 'Rabbit'): got {:?}", names);
-        assert!(names.contains(&"Docker"), "should reconstruct Docker (was 'Dock'): got {:?}", names);
-        assert!(names.contains(&"GitHub"), "should reconstruct GitHub: got {:?}", names);
-        assert!(names.contains(&"Netflix"), "should extract Netflix: got {:?}", names);
+        assert!(
+            names.contains(&"RabbitMQ"),
+            "should reconstruct RabbitMQ (was 'Rabbit'): got {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Docker"),
+            "should reconstruct Docker (was 'Dock'): got {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"GitHub"),
+            "should reconstruct GitHub: got {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Netflix"),
+            "should extract Netflix: got {:?}",
+            names
+        );
     }
 
     #[tokio::test]

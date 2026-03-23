@@ -100,7 +100,10 @@ async fn run_neighbors(args: NeighborsArgs, pool: &SqlitePool, json: bool) -> Re
         Ok(id) => id,
         Err(e) => {
             if json {
-                println!("{}", serde_json::json!({ "error": e.to_string(), "id": args.id }));
+                println!(
+                    "{}",
+                    serde_json::json!({ "error": e.to_string(), "id": args.id })
+                );
             } else {
                 eprintln!("Error: {}", e);
             }
@@ -113,10 +116,16 @@ async fn run_neighbors(args: NeighborsArgs, pool: &SqlitePool, json: bool) -> Re
     } else {
         if results.is_empty() {
             println!("No neighbors found for '{}' at depth {}.", id, args.depth);
-            println!("Hint: Use 'voidm link {} <EDGE_TYPE> <target-id>' to create edges.", id);
+            println!(
+                "Hint: Use 'voidm link {} <EDGE_TYPE> <target-id>' to create edges.",
+                id
+            );
         } else {
             for n in &results {
-                println!("[depth {}] {} --[{}]--> {} ({})", n.depth, id, n.rel_type, n.memory_id, n.direction);
+                println!(
+                    "[depth {}] {} --[{}]--> {} ({})",
+                    n.depth, id, n.rel_type, n.memory_id, n.direction
+                );
             }
             println!("{} neighbor(s)", results.len());
         }
@@ -127,14 +136,17 @@ async fn run_neighbors(args: NeighborsArgs, pool: &SqlitePool, json: bool) -> Re
 async fn run_path(args: PathArgs, pool: &SqlitePool, json: bool) -> Result<()> {
     // Resolve both IDs before same-ID check (so short IDs expand correctly)
     let from = resolve_id(pool, &args.from).await?;
-    let to   = resolve_id(pool, &args.to).await?;
+    let to = resolve_id(pool, &args.to).await?;
 
     if from == to {
         if json {
-            println!("{}", serde_json::json!({
-                "error": "Source and target IDs are the same. A path requires two distinct memories.",
-                "from": from, "to": to
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "error": "Source and target IDs are the same. A path requires two distinct memories.",
+                    "from": from, "to": to
+                })
+            );
         } else {
             eprintln!("Error: Source and target IDs are the same ('{}').\nA path requires two distinct memory IDs.", from);
         }
@@ -144,27 +156,36 @@ async fn run_path(args: PathArgs, pool: &SqlitePool, json: bool) -> Result<()> {
     match voidm_graph::shortest_path(pool, &from, &to).await? {
         None => {
             if json {
-                println!("{}", serde_json::json!({
-                    "path": null,
-                    "message": format!("No path found between '{}' and '{}'", from, to),
-                    "hint": "Memories may not be connected. Use 'voidm link' to create edges."
-                }));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "path": null,
+                        "message": format!("No path found between '{}' and '{}'", from, to),
+                        "hint": "Memories may not be connected. Use 'voidm link' to create edges."
+                    })
+                );
             } else {
                 println!("No path found between '{}' and '{}'.", from, to);
-                println!("Hint: Use 'voidm link {} <EDGE_TYPE> {}' to connect them.", from, to);
+                println!(
+                    "Hint: Use 'voidm link {} <EDGE_TYPE> {}' to connect them.",
+                    from, to
+                );
             }
         }
         Some(path) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&path)?);
             } else {
-                let parts: Vec<String> = path.iter().map(|s| {
-                    if let Some(ref r) = s.rel_type {
-                        format!("{} -[{}]->", s.memory_id, r)
-                    } else {
-                        s.memory_id.clone()
-                    }
-                }).collect();
+                let parts: Vec<String> = path
+                    .iter()
+                    .map(|s| {
+                        if let Some(ref r) = s.rel_type {
+                            format!("{} -[{}]->", s.memory_id, r)
+                        } else {
+                            s.memory_id.clone()
+                        }
+                    })
+                    .collect();
                 println!("{}", parts.join(" "));
             }
         }
@@ -176,13 +197,16 @@ async fn run_pagerank(args: PagerankArgs, pool: &SqlitePool, json: bool) -> Resu
     let mut results = voidm_graph::pagerank(pool, args.damping, args.iterations).await?;
     results.truncate(args.top);
     if json {
-        let v: Vec<_> = results.iter()
+        let v: Vec<_> = results
+            .iter()
             .map(|(id, score)| serde_json::json!({"id": id, "score": score}))
             .collect();
         println!("{}", serde_json::to_string_pretty(&v)?);
     } else {
         if results.is_empty() {
-            println!("No memories in graph yet. Use 'voidm add' and 'voidm link' to build the graph.");
+            println!(
+                "No memories in graph yet. Use 'voidm add' and 'voidm link' to build the graph."
+            );
         } else {
             for (i, (id, score)) in results.iter().enumerate() {
                 println!("#{} [{:.4}] {}", i + 1, score, id);
@@ -225,30 +249,28 @@ async fn run_export(args: ExportArgs, pool: &SqlitePool, _json: bool) -> Result<
 async fn export_dot(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
     // Get all memories
     let memories: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT id, type, SUBSTR(content, 1, 50) as preview FROM memories LIMIT 1000"
+        "SELECT id, type, SUBSTR(content, 1, 50) as preview FROM memories LIMIT 1000",
     )
     .fetch_all(pool)
     .await?;
 
     // Get all concepts
-    let concepts: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, name FROM ontology_concepts LIMIT 500"
-    )
-    .fetch_all(pool)
-    .await?;
+    let concepts: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, name FROM ontology_concepts LIMIT 500")
+            .fetch_all(pool)
+            .await?;
 
     // Get all edges
-    let edges: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000"
-    )
-    .fetch_all(pool)
-    .await?;
+    let edges: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000")
+            .fetch_all(pool)
+            .await?;
 
     // Start DOT file
     println!("digraph voidm {{");
     println!("  rankdir=LR;");
     println!("  node [shape=box, style=rounded];");
-    
+
     // Add memory nodes
     for (id, mem_type, preview) in &memories {
         let color = match mem_type.as_str() {
@@ -260,8 +282,12 @@ async fn export_dot(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
             _ => "white",
         };
         let label = preview.replace("\"", "\\\"");
-        println!("  \"m:{}\" [label=\"{}\", fillcolor=\"{}\", style=\"rounded,filled\"];", 
-                 &id[..8], label, color);
+        println!(
+            "  \"m:{}\" [label=\"{}\", fillcolor=\"{}\", style=\"rounded,filled\"];",
+            &id[..8],
+            label,
+            color
+        );
     }
 
     // Add concept nodes
@@ -273,17 +299,20 @@ async fn export_dot(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
 
     // Add edges
     for (from, to, rel) in &edges {
-        let from_node = if from.starts_with("m:") { 
-            from.clone() 
-        } else { 
-            format!("m:{}", &from[..8]) 
+        let from_node = if from.starts_with("m:") {
+            from.clone()
+        } else {
+            format!("m:{}", &from[..8])
         };
-        let to_node = if to.starts_with("c:") { 
-            to.clone() 
-        } else { 
-            format!("c:{}", &to[..8]) 
+        let to_node = if to.starts_with("c:") {
+            to.clone()
+        } else {
+            format!("c:{}", &to[..8])
         };
-        println!("  \"{}\" -> \"{}\" [label=\"{}\"];", from_node, to_node, rel);
+        println!(
+            "  \"{}\" -> \"{}\" [label=\"{}\"];",
+            from_node, to_node, rel
+        );
     }
 
     println!("}}");
@@ -292,24 +321,21 @@ async fn export_dot(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
 
 async fn export_json(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
     use serde_json::json;
-    
-    let memories: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, type FROM memories LIMIT 1000"
-    )
-    .fetch_all(pool)
-    .await?;
 
-    let concepts: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, name FROM ontology_concepts LIMIT 500"
-    )
-    .fetch_all(pool)
-    .await?;
+    let memories: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, type FROM memories LIMIT 1000")
+            .fetch_all(pool)
+            .await?;
 
-    let edges: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000"
-    )
-    .fetch_all(pool)
-    .await?;
+    let concepts: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, name FROM ontology_concepts LIMIT 500")
+            .fetch_all(pool)
+            .await?;
+
+    let edges: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000")
+            .fetch_all(pool)
+            .await?;
 
     let result = json!({
         "memories": memories.iter().map(|(id, t)| json!({"id": id, "type": t})).collect::<Vec<_>>(),
@@ -322,11 +348,10 @@ async fn export_json(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
 }
 
 async fn export_csv(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
-    let edges: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000"
-    )
-    .fetch_all(pool)
-    .await?;
+    let edges: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000")
+            .fetch_all(pool)
+            .await?;
 
     println!("from_id,to_id,relationship_type");
     for (from, to, rel) in edges {
@@ -334,4 +359,3 @@ async fn export_csv(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
     }
     Ok(())
 }
-

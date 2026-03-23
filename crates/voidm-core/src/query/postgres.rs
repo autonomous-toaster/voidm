@@ -10,8 +10,8 @@
 
 use super::translator::QueryTranslator;
 use super::QueryParams;
-use std::collections::HashMap;
 use serde_json::Value;
+use std::collections::HashMap;
 
 pub struct PostgresTranslator;
 
@@ -20,7 +20,10 @@ impl QueryTranslator for PostgresTranslator {
         "postgres"
     }
 
-    fn translate(&self, op: &super::cypher::CypherOperation) -> Result<(String, QueryParams), String> {
+    fn translate(
+        &self,
+        op: &super::cypher::CypherOperation,
+    ) -> Result<(String, QueryParams), String> {
         match op {
             super::cypher::CypherOperation::MemoryCreate {
                 id,
@@ -33,15 +36,29 @@ impl QueryTranslator for PostgresTranslator {
                 embedding,
                 metadata,
             } => self.translate_memory_create(
-                id, memory_type, content, *importance, tags, scopes, created_at, embedding.as_deref(), metadata.as_deref()
+                id,
+                memory_type,
+                content,
+                *importance,
+                tags,
+                scopes,
+                created_at,
+                embedding.as_deref(),
+                metadata.as_deref(),
             ),
             super::cypher::CypherOperation::MemoryGet { id } => self.translate_memory_get(id),
-            super::cypher::CypherOperation::MemoryList { limit } => self.translate_memory_list(*limit),
-            super::cypher::CypherOperation::MemoryDelete { id } => self.translate_memory_delete(id),
-            super::cypher::CypherOperation::MemoryUpdate { id, content, updated_at } => {
-                self.translate_memory_update(id, content, updated_at)
+            super::cypher::CypherOperation::MemoryList { limit } => {
+                self.translate_memory_list(*limit)
             }
-            super::cypher::CypherOperation::MemoryResolveId { prefix } => self.translate_memory_resolve_id(prefix),
+            super::cypher::CypherOperation::MemoryDelete { id } => self.translate_memory_delete(id),
+            super::cypher::CypherOperation::MemoryUpdate {
+                id,
+                content,
+                updated_at,
+            } => self.translate_memory_update(id, content, updated_at),
+            super::cypher::CypherOperation::MemoryResolveId { prefix } => {
+                self.translate_memory_resolve_id(prefix)
+            }
             super::cypher::CypherOperation::MemoryListScopes => self.translate_list_scopes(),
             super::cypher::CypherOperation::LinkMemories {
                 from_id,
@@ -49,7 +66,9 @@ impl QueryTranslator for PostgresTranslator {
                 to_id,
                 note,
                 created_at,
-            } => self.translate_link_memories(from_id, rel_type, to_id, note.as_deref(), created_at),
+            } => {
+                self.translate_link_memories(from_id, rel_type, to_id, note.as_deref(), created_at)
+            }
             super::cypher::CypherOperation::UnlinkMemories {
                 from_id,
                 rel_type,
@@ -62,19 +81,31 @@ impl QueryTranslator for PostgresTranslator {
                 description,
                 scope,
                 created_at,
-            } => self.translate_concept_create(id, name, description.as_deref(), scope.as_deref(), created_at),
+            } => self.translate_concept_create(
+                id,
+                name,
+                description.as_deref(),
+                scope.as_deref(),
+                created_at,
+            ),
             super::cypher::CypherOperation::ConceptGet { id } => self.translate_concept_get(id),
             super::cypher::CypherOperation::ConceptList { scope, limit } => {
                 self.translate_concept_list(scope.as_deref(), *limit)
             }
-            super::cypher::CypherOperation::ConceptDelete { id } => self.translate_concept_delete(id),
-            super::cypher::CypherOperation::ConceptResolveId { prefix } => self.translate_concept_resolve_id(prefix),
+            super::cypher::CypherOperation::ConceptDelete { id } => {
+                self.translate_concept_delete(id)
+            }
+            super::cypher::CypherOperation::ConceptResolveId { prefix } => {
+                self.translate_concept_resolve_id(prefix)
+            }
             super::cypher::CypherOperation::ConceptSearch {
                 query,
                 scope,
                 limit,
             } => self.translate_concept_search(query, scope.as_deref(), *limit),
-            super::cypher::CypherOperation::ConceptGetWithInstances { id } => self.translate_concept_get_with_instances(id),
+            super::cypher::CypherOperation::ConceptGetWithInstances { id } => {
+                self.translate_concept_get_with_instances(id)
+            }
             super::cypher::CypherOperation::OntologyEdgeCreate {
                 from_id,
                 from_type,
@@ -95,19 +126,41 @@ impl QueryTranslator for PostgresTranslator {
                 rel_type,
                 to_id,
             } => self.translate_ontology_edge_delete(from_id, rel_type, to_id),
-            super::cypher::CypherOperation::ListOntologyEdges => self.translate_list_ontology_edges(),
+            super::cypher::CypherOperation::ListOntologyEdges => {
+                self.translate_list_ontology_edges()
+            }
             super::cypher::CypherOperation::SearchHybrid {
                 query,
                 limit,
                 min_score,
                 scopes,
                 embedding,
-            } => self.translate_search_hybrid(query, *limit, *min_score, scopes, embedding.as_deref()),
-            super::cypher::CypherOperation::SearchHybridRRF { query, limit, min_score, scopes, embedding } => {
-                self.translate_search_hybrid_rrf(query, *limit, *min_score, scopes, embedding.as_deref())
-            },
-            super::cypher::CypherOperation::QueryCypher { query, params } => self.translate_query_cypher(query, params),
-            super::cypher::CypherOperation::GetNeighbors { id, depth } => self.translate_get_neighbors(id, *depth),
+            } => self.translate_search_hybrid(
+                query,
+                *limit,
+                *min_score,
+                scopes,
+                embedding.as_deref(),
+            ),
+            super::cypher::CypherOperation::SearchHybridRRF {
+                query,
+                limit,
+                min_score,
+                scopes,
+                embedding,
+            } => self.translate_search_hybrid_rrf(
+                query,
+                *limit,
+                *min_score,
+                scopes,
+                embedding.as_deref(),
+            ),
+            super::cypher::CypherOperation::QueryCypher { query, params } => {
+                self.translate_query_cypher(query, params)
+            }
+            super::cypher::CypherOperation::GetNeighbors { id, depth } => {
+                self.translate_get_neighbors(id, *depth)
+            }
         }
     }
 
@@ -191,7 +244,8 @@ impl QueryTranslator for PostgresTranslator {
             SELECT DISTINCT scope
             FROM memories, UNNEST(scopes) as scope
             ORDER BY scope
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -215,7 +269,8 @@ impl QueryTranslator for PostgresTranslator {
             INSERT INTO memory_edges (from_id, to_id, rel_type, note, created_at)
             VALUES ($from_id, $to_id, $rel_type, $note, $created_at)
             RETURNING *
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -232,7 +287,8 @@ impl QueryTranslator for PostgresTranslator {
         let sql = r#"
             DELETE FROM memory_edges
             WHERE from_id = $from_id AND to_id = $to_id AND rel_type = $rel_type
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -262,7 +318,8 @@ impl QueryTranslator for PostgresTranslator {
             INSERT INTO ontology_concepts (id, name, description, scope, created_at)
             VALUES ($id, $name, $description, $scope, $created_at)
             RETURNING *
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -284,7 +341,8 @@ impl QueryTranslator for PostgresTranslator {
             SELECT * FROM ontology_concepts
             WHERE scope IS NULL OR scope = $scope
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -310,18 +368,22 @@ impl QueryTranslator for PostgresTranslator {
             .with_param("query", query)
             .with_param("scope", scope)
             .with_param("limit", limit as i32);
-        
+
         // PostgreSQL full-text search with tsvector
         let sql = r#"
             SELECT * FROM ontology_concepts
             WHERE (name ILIKE $query OR description ILIKE $query)
               AND (scope IS NULL OR scope = $scope)
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
-    fn translate_concept_get_with_instances(&self, id: &str) -> Result<(String, QueryParams), String> {
+    fn translate_concept_get_with_instances(
+        &self,
+        id: &str,
+    ) -> Result<(String, QueryParams), String> {
         let params = QueryParams::new().with_param("id", id);
         // PostgreSQL JSON aggregation
         let sql = r#"
@@ -357,7 +419,8 @@ impl QueryTranslator for PostgresTranslator {
             INSERT INTO ontology_edges (from_id, from_type, rel_type, to_id, to_type, note)
             VALUES ($from_id, $from_type, $rel_type, $to_id, $to_type, $note)
             RETURNING *
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -374,13 +437,15 @@ impl QueryTranslator for PostgresTranslator {
         let sql = r#"
             DELETE FROM ontology_edges
             WHERE from_id = $from_id AND rel_type = $rel_type AND to_id = $to_id
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
     fn translate_list_ontology_edges(&self) -> Result<(String, QueryParams), String> {
         let params = QueryParams::new();
-        let sql = "SELECT from_id, from_type, to_id, to_type, rel_type, note FROM ontology_edges".to_string();
+        let sql = "SELECT from_id, from_type, to_id, to_type, rel_type, note FROM ontology_edges"
+            .to_string();
         Ok((sql, params))
     }
 
@@ -511,13 +576,18 @@ impl QueryTranslator for PostgresTranslator {
         Err("Cypher queries not supported on PostgreSQL backend".to_string())
     }
 
-    fn translate_get_neighbors(&self, id: &str, depth: usize) -> Result<(String, QueryParams), String> {
+    fn translate_get_neighbors(
+        &self,
+        id: &str,
+        depth: usize,
+    ) -> Result<(String, QueryParams), String> {
         let params = QueryParams::new()
             .with_param("id", id)
             .with_param("depth", depth as i32);
-        
+
         // PostgreSQL WITH RECURSIVE for graph traversal
-        let sql = format!(r#"
+        let sql = format!(
+            r#"
             WITH RECURSIVE neighbors(node_id, current_depth) AS (
               SELECT to_id, 1 FROM memory_edges WHERE from_id = $id
               UNION ALL
@@ -527,7 +597,9 @@ impl QueryTranslator for PostgresTranslator {
               WHERE neighbors.current_depth < {}
             )
             SELECT DISTINCT node_id FROM neighbors
-        "#, depth);
+        "#,
+            depth
+        );
 
         Ok((sql, params))
     }
@@ -540,9 +612,19 @@ mod tests {
     #[test]
     fn test_postgres_translator_memory_create() {
         let translator = PostgresTranslator;
-        let (query, params) = translator.translate_memory_create(
-            "id1", "semantic", "test content", 5, &[], &[], "2026-03-15", None, None
-        ).unwrap();
+        let (query, params) = translator
+            .translate_memory_create(
+                "id1",
+                "semantic",
+                "test content",
+                5,
+                &[],
+                &[],
+                "2026-03-15",
+                None,
+                None,
+            )
+            .unwrap();
         assert!(query.contains("INSERT"));
         assert!(query.contains("RETURNING"));
         assert!(params.get("id").is_some());

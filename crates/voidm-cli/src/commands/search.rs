@@ -1,7 +1,10 @@
 use anyhow::Result;
 use clap::Args;
 use sqlx::SqlitePool;
-use voidm_core::{Config, search::{SearchOptions, SearchMode, search}};
+use voidm_core::{
+    search::{search, SearchMode, SearchOptions},
+    Config,
+};
 
 #[derive(Args)]
 pub struct SearchArgs {
@@ -110,11 +113,19 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
             tracing::info!("CLI: Reranker override enabled={}", enabled);
         }
         if let Some(model) = args.reranker_model {
-            tracing::info!("CLI: Reranker model override: {} → {}", reranker_config.model, model);
+            tracing::info!(
+                "CLI: Reranker model override: {} → {}",
+                reranker_config.model,
+                model
+            );
             reranker_config.model = model;
         }
         if let Some(k) = args.reranker_top_k {
-            tracing::info!("CLI: Reranker apply_to_top_k override: {} → {}", reranker_config.apply_to_top_k, k);
+            tracing::info!(
+                "CLI: Reranker apply_to_top_k override: {} → {}",
+                reranker_config.apply_to_top_k,
+                k
+            );
             reranker_config.apply_to_top_k = k;
         }
         config.search.reranker = Some(reranker_config);
@@ -129,7 +140,11 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
             tracing::info!("CLI: Query expansion override enabled={}", enabled);
         }
         if let Some(model) = args.query_expand_model {
-            tracing::info!("CLI: Query expansion model override: {} → {}", expansion_config.model, model);
+            tracing::info!(
+                "CLI: Query expansion model override: {} → {}",
+                expansion_config.model,
+                model
+            );
             expansion_config.model = model;
         }
         config.search.query_expansion = Some(expansion_config);
@@ -147,17 +162,23 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
     if let Some(expansion_config) = &config.search.query_expansion {
         if expansion_config.enabled {
             tracing::debug!("CLI: Query expansion is enabled in config");
-            let expander = voidm_core::query_expansion::QueryExpander::new(expansion_config.clone());
-            
+            let expander =
+                voidm_core::query_expansion::QueryExpander::new(expansion_config.clone());
+
             // Use intent-aware expansion if intent is provided, otherwise use standard expansion
             let expansion_result = if let Some(ref intent) = args.intent {
-                tracing::info!("CLI: Requesting intent-aware query expansion with intent '{}'", intent);
-                expander.expand_with_intent(&args.query, Some(intent.as_str())).await
+                tracing::info!(
+                    "CLI: Requesting intent-aware query expansion with intent '{}'",
+                    intent
+                );
+                expander
+                    .expand_with_intent(&args.query, Some(intent.as_str()))
+                    .await
             } else {
                 tracing::info!("CLI: Requesting standard query expansion");
                 expander.expand(&args.query).await
             };
-            
+
             match expansion_result {
                 Ok(expanded) => {
                     expanded_query = expanded;
@@ -209,7 +230,8 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
         config.embeddings.enabled,
         config.search.min_score,
         &config.search,
-    ).await?;
+    )
+    .await?;
 
     if json {
         if resp.results.is_empty() {
@@ -218,25 +240,31 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
                 let threshold = resp.threshold_applied.unwrap_or(config.search.min_score);
                 let threshold_rounded = (threshold as f64 * 100.0).round() / 100.0;
                 let best_rounded = (best_score as f64 * 100.0).round() / 100.0;
-                println!("{}", serde_json::json!({
-                    "results": [],
-                    "threshold": threshold_rounded,
-                    "best_score": best_rounded,
-                    "hint": format!(
-                        "No results above score {:.2}. Best match scored {:.2}. \
-                         Try --min-score {:.1} or --mode semantic.",
-                        threshold,
-                        best_score,
-                        (best_score * 0.9).max(0.0)
-                    )
-                }));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "results": [],
+                        "threshold": threshold_rounded,
+                        "best_score": best_rounded,
+                        "hint": format!(
+                            "No results above score {:.2}. Best match scored {:.2}. \
+                             Try --min-score {:.1} or --mode semantic.",
+                            threshold,
+                            best_score,
+                            (best_score * 0.9).max(0.0)
+                        )
+                    })
+                );
             } else {
-                println!("{}", serde_json::json!({
-                    "results": [],
-                    "threshold": null,
-                    "best_score": null,
-                    "hint": "No memories found. Use 'voidm add' to create memories."
-                }));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "results": [],
+                        "threshold": null,
+                        "best_score": null,
+                        "hint": "No memories found. Use 'voidm add' to create memories."
+                    })
+                );
             }
         } else {
             println!("{}", serde_json::to_string_pretty(&resp.results)?);
@@ -265,8 +293,16 @@ pub async fn run(args: SearchArgs, pool: &SqlitePool, config: &Config, json: boo
                 let dir = r.direction.as_deref().unwrap_or("?");
                 let depth = r.hop_depth.unwrap_or(0);
                 let parent = r.parent_id.as_deref().unwrap_or("?");
-                println!("  ↳ [{:.3}] {} ({}) [graph: {} {} depth={}  parent={}]",
-                    r.score, r.id, r.memory_type, rel, dir, depth, &parent[..8.min(parent.len())]);
+                println!(
+                    "  ↳ [{:.3}] {} ({}) [graph: {} {} depth={}  parent={}]",
+                    r.score,
+                    r.id,
+                    r.memory_type,
+                    rel,
+                    dir,
+                    depth,
+                    &parent[..8.min(parent.len())]
+                );
             } else {
                 println!("[{:.3}] {} ({})", r.score, r.id, r.memory_type);
             }

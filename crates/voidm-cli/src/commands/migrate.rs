@@ -26,7 +26,13 @@ pub struct MigrateArgs {
     pub skip_ids: Option<String>,
 }
 
-pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<&str>, json: bool) -> Result<()> {
+pub async fn run(
+    args: MigrateArgs,
+    config: &voidm_core::Config,
+    cli_db: Option<&str>,
+    sqlite_path_override: Option<&str>,
+    json: bool,
+) -> Result<()> {
     // Validate backends
     let from_backend = args.from.to_lowercase();
     let to_backend = args.to.to_lowercase();
@@ -35,7 +41,10 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
         anyhow::bail!("Source and destination backends cannot be the same");
     }
 
-    if ![from_backend.as_str(), to_backend.as_str()].iter().all(|b| matches!(*b, "sqlite" | "neo4j")) {
+    if ![from_backend.as_str(), to_backend.as_str()]
+        .iter()
+        .all(|b| matches!(*b, "sqlite" | "neo4j"))
+    {
         anyhow::bail!("Backend must be 'sqlite' or 'neo4j'");
     }
 
@@ -48,20 +57,30 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
         .filter(|s| !s.is_empty())
         .collect();
 
-    let sqlite_path = config.db_path(cli_db).to_string_lossy().to_string();
+    let sqlite_path = config
+        .resolve_db_path(cli_db, sqlite_path_override)
+        .path
+        .to_string_lossy()
+        .to_string();
 
     // Open source database
     let source_db: Arc<dyn voidm_core::db::Database> = if from_backend == "sqlite" {
         let pool = voidm_core::db::sqlite::open_sqlite_pool(&sqlite_path).await?;
         Arc::new(voidm_core::db::sqlite::SqliteDatabase { pool })
     } else {
-        let neo4j_config = config.database.neo4j.as_ref()
+        let neo4j_config = config
+            .database
+            .neo4j
+            .as_ref()
             .context("Neo4j config missing for source")?;
-        Arc::new(voidm_core::db::neo4j::Neo4jDatabase::connect(
-            &neo4j_config.uri,
-            &neo4j_config.username,
-            &neo4j_config.password,
-        ).await?)
+        Arc::new(
+            voidm_core::db::neo4j::Neo4jDatabase::connect(
+                &neo4j_config.uri,
+                &neo4j_config.username,
+                &neo4j_config.password,
+            )
+            .await?,
+        )
     };
 
     // Open destination database
@@ -69,13 +88,19 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
         let pool = voidm_core::db::sqlite::open_sqlite_pool(&sqlite_path).await?;
         Arc::new(voidm_core::db::sqlite::SqliteDatabase { pool })
     } else {
-        let neo4j_config = config.database.neo4j.as_ref()
+        let neo4j_config = config
+            .database
+            .neo4j
+            .as_ref()
             .context("Neo4j config missing for destination")?;
-        Arc::new(voidm_core::db::neo4j::Neo4jDatabase::connect(
-            &neo4j_config.uri,
-            &neo4j_config.username,
-            &neo4j_config.password,
-        ).await?)
+        Arc::new(
+            voidm_core::db::neo4j::Neo4jDatabase::connect(
+                &neo4j_config.uri,
+                &neo4j_config.username,
+                &neo4j_config.password,
+            )
+            .await?,
+        )
     };
 
     // Ensure schemas are initialized
@@ -85,24 +110,57 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
     }
 
     // Migrate memories
-    migrate_memories(source_db.as_ref(), dest_db.as_ref(), config, &args.scope_filter, &skip_ids, args.dry_run, json).await?;
+    migrate_memories(
+        source_db.as_ref(),
+        dest_db.as_ref(),
+        config,
+        &args.scope_filter,
+        &skip_ids,
+        args.dry_run,
+        json,
+    )
+    .await?;
 
     // Migrate concepts
-    migrate_concepts(source_db.as_ref(), dest_db.as_ref(), &args.scope_filter, args.dry_run, json).await?;
+    migrate_concepts(
+        source_db.as_ref(),
+        dest_db.as_ref(),
+        &args.scope_filter,
+        args.dry_run,
+        json,
+    )
+    .await?;
 
     // Migrate relationships (memory-to-memory edges)
-    migrate_relationships(source_db.as_ref(), dest_db.as_ref(), &skip_ids, args.dry_run, json).await?;
+    migrate_relationships(
+        source_db.as_ref(),
+        dest_db.as_ref(),
+        &skip_ids,
+        args.dry_run,
+        json,
+    )
+    .await?;
 
     // Migrate ontology edges (concept-concept, concept-memory, etc.)
-    migrate_ontology_edges(source_db.as_ref(), dest_db.as_ref(), &skip_ids, args.dry_run, json).await?;
+    migrate_ontology_edges(
+        source_db.as_ref(),
+        dest_db.as_ref(),
+        &skip_ids,
+        args.dry_run,
+        json,
+    )
+    .await?;
 
     if !json {
         println!("\n✓ Migration complete!");
     } else {
-        println!("{}", serde_json::json!({
-            "status": "success",
-            "message": "Migration complete"
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "success",
+                "message": "Migration complete"
+            })
+        );
     }
 
     Ok(())
@@ -140,7 +198,10 @@ async fn migrate_memories(
         if dry_run {
             migrated += 1;
             if !json {
-                println!("  [DRY RUN] Would migrate memory: {} ({})", mem.id, mem.memory_type);
+                println!(
+                    "  [DRY RUN] Would migrate memory: {} ({})",
+                    mem.id, mem.memory_type
+                );
             }
             continue;
         }
@@ -186,7 +247,12 @@ async fn migrate_concepts(
     for concept in concepts {
         // Filter by scope if specified
         if let Some(filter) = scope_filter {
-            if !concept.scope.as_ref().map(|s| s.contains(filter)).unwrap_or(false) {
+            if !concept
+                .scope
+                .as_ref()
+                .map(|s| s.contains(filter))
+                .unwrap_or(false)
+            {
                 skipped += 1;
                 continue;
             }
@@ -195,12 +261,22 @@ async fn migrate_concepts(
         if dry_run {
             migrated += 1;
             if !json {
-                println!("  [DRY RUN] Would migrate concept: {} ({})", concept.id, concept.name);
+                println!(
+                    "  [DRY RUN] Would migrate concept: {} ({})",
+                    concept.id, concept.name
+                );
             }
             continue;
         }
 
-        let _ = dest.add_concept(&concept.name, concept.description.as_deref(), concept.scope.as_deref(), Some(&concept.id)).await?;
+        let _ = dest
+            .add_concept(
+                &concept.name,
+                concept.description.as_deref(),
+                concept.scope.as_deref(),
+                Some(&concept.id),
+            )
+            .await?;
         migrated += 1;
 
         if !json && migrated % 100 == 0 {
@@ -237,7 +313,10 @@ async fn migrate_relationships(
         if dry_run {
             migrated += 1;
             if !json {
-                println!("  [DRY RUN] Would migrate edge: {} -> {} ({})", edge.from_id, edge.to_id, edge.rel_type);
+                println!(
+                    "  [DRY RUN] Would migrate edge: {} -> {} ({})",
+                    edge.from_id, edge.to_id, edge.rel_type
+                );
             }
             continue;
         }
@@ -253,14 +332,20 @@ async fn migrate_relationships(
             "PART_OF" => voidm_core::models::EdgeType::PartOf,
             _ => {
                 if !json {
-                    eprintln!("  Warning: Unknown edge type '{}', skipping edge {} -> {}", edge.rel_type, edge.from_id, edge.to_id);
+                    eprintln!(
+                        "  Warning: Unknown edge type '{}', skipping edge {} -> {}",
+                        edge.rel_type, edge.from_id, edge.to_id
+                    );
                 }
                 skipped += 1;
                 continue;
             }
         };
 
-        match dest.link_memories(&edge.from_id, &rel_type, &edge.to_id, edge.note.as_deref()).await {
+        match dest
+            .link_memories(&edge.from_id, &rel_type, &edge.to_id, edge.note.as_deref())
+            .await
+        {
             Ok(resp) => {
                 if resp.created {
                     migrated += 1;
@@ -269,14 +354,20 @@ async fn migrate_relationships(
                     }
                 } else {
                     if !json {
-                        eprintln!("  ERROR: Edge NOT created (MATCH failed?) {} -> {} ({})", edge.from_id, edge.to_id, edge.rel_type);
+                        eprintln!(
+                            "  ERROR: Edge NOT created (MATCH failed?) {} -> {} ({})",
+                            edge.from_id, edge.to_id, edge.rel_type
+                        );
                     }
                     skipped += 1;
                 }
             }
             Err(e) => {
                 if !json {
-                    eprintln!("  ERROR: {} -> {} ({}): {}", edge.from_id, edge.to_id, edge.rel_type, e);
+                    eprintln!(
+                        "  ERROR: {} -> {} ({}): {}",
+                        edge.from_id, edge.to_id, edge.rel_type, e
+                    );
                 }
                 skipped += 1;
             }
@@ -313,14 +404,25 @@ async fn migrate_ontology_edges(
         if dry_run {
             migrated += 1;
             if !json {
-                println!("  [DRY RUN] Would migrate ontology edge: {} ({}) -> {} ({}) [{}]", 
-                    edge.from_id, edge.from_type, edge.to_id, edge.to_type, edge.rel_type);
+                println!(
+                    "  [DRY RUN] Would migrate ontology edge: {} ({}) -> {} ({}) [{}]",
+                    edge.from_id, edge.from_type, edge.to_id, edge.to_type, edge.rel_type
+                );
             }
             continue;
         }
 
         // Try to create the ontology edge
-        match dest.create_ontology_edge(&edge.from_id, &edge.from_type, &edge.rel_type, &edge.to_id, &edge.to_type).await {
+        match dest
+            .create_ontology_edge(
+                &edge.from_id,
+                &edge.from_type,
+                &edge.rel_type,
+                &edge.to_id,
+                &edge.to_type,
+            )
+            .await
+        {
             Ok(true) => {
                 migrated += 1;
                 if !json && migrated % 100 == 0 {
@@ -329,7 +431,10 @@ async fn migrate_ontology_edges(
             }
             Ok(false) => {
                 if !json && failed < 5 {
-                    eprintln!("  Warning: Ontology edge not created: {} -> {}", edge.from_id, edge.to_id);
+                    eprintln!(
+                        "  Warning: Ontology edge not created: {} -> {}",
+                        edge.from_id, edge.to_id
+                    );
                 }
                 failed += 1;
             }
@@ -343,9 +448,11 @@ async fn migrate_ontology_edges(
     }
 
     if !json {
-        println!("Ontology Edges: {} migrated, {} failed, {} skipped", migrated, failed, skipped);
+        println!(
+            "Ontology Edges: {} migrated, {} failed, {} skipped",
+            migrated, failed, skipped
+        );
     }
 
     Ok(())
 }
-

@@ -8,7 +8,7 @@ pub struct InitArgs {
 }
 
 pub async fn run(args: InitArgs) -> anyhow::Result<()> {
-    use voidm_core::{embeddings, Config, ner, nli, query_expansion, reranker};
+    use voidm_core::{embeddings, ner, nli, query_expansion, reranker, Config};
 
     println!("Initializing voidm models...\n");
     if args.update {
@@ -17,17 +17,14 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
 
     let config = Config::load();
     let embedding_model = &config.embeddings.model;
-    
+
     // Get default query expansion model from config
     let qe_config = &config.search.query_expansion;
     let qe_model = qe_config
         .as_ref()
         .map(|qe| qe.model.clone())
         .unwrap_or_else(|| "tinyllama".to_string());
-    let qe_enabled = qe_config
-        .as_ref()
-        .map(|qe| qe.enabled)
-        .unwrap_or(true);
+    let qe_enabled = qe_config.as_ref().map(|qe| qe.enabled).unwrap_or(true);
 
     // Get reranker model from config
     let reranker_config = &config.search.reranker;
@@ -35,16 +32,16 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
         .as_ref()
         .map(|r| r.model.clone())
         .unwrap_or_else(|| "ms-marco-TinyBERT".to_string());
-    let reranker_enabled = reranker_config
-        .as_ref()
-        .map(|r| r.enabled)
-        .unwrap_or(false);
+    let reranker_enabled = reranker_config.as_ref().map(|r| r.enabled).unwrap_or(false);
 
     let total = 5; // 1 embedding + NER + NLI + query expansion + reranker
     let mut initialized = 0;
 
     // Initialize configured embedding model
-    print!("[1/5] Initializing embedding model: {} ... ", embedding_model);
+    print!(
+        "[1/5] Initializing embedding model: {} ... ",
+        embedding_model
+    );
     std::io::Write::flush(&mut std::io::stdout())?;
     match embeddings::get_embedder(embedding_model) {
         Ok(_) => {
@@ -87,7 +84,10 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
 
     // Initialize default query expansion model (only if enabled)
     if qe_enabled {
-        print!("[4/5] Initializing query expansion model: {} ... ", qe_model);
+        print!(
+            "[4/5] Initializing query expansion model: {} ... ",
+            qe_model
+        );
         std::io::Write::flush(&mut std::io::stdout())?;
         match query_expansion::ensure_llm_model(&qe_model).await {
             Ok(_) => {
@@ -108,7 +108,7 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
     if reranker_enabled {
         print!("[5/5] Initializing reranker model: {} ... ", reranker_model);
         std::io::Write::flush(&mut std::io::stdout())?;
-        
+
         // Check if already cached (unless update flag is set)
         let is_cached = reranker::is_model_cached(&reranker_model);
         if is_cached && !args.update {

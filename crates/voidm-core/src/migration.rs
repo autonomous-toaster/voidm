@@ -1,8 +1,8 @@
-use anyhow::Result;
 use crate::db::Database;
+use crate::models::{AddMemoryRequest, MemoryType};
 use crate::Config;
+use anyhow::Result;
 use std::collections::HashSet;
-use crate::models::{MemoryType, AddMemoryRequest};
 use std::str::FromStr;
 
 /// Migrate memories from source to destination database
@@ -38,8 +38,7 @@ pub async fn migrate_memories(
             continue;
         }
 
-        let memory_type = MemoryType::from_str(&mem.memory_type)
-            .unwrap_or(MemoryType::Semantic);
+        let memory_type = MemoryType::from_str(&mem.memory_type).unwrap_or(MemoryType::Semantic);
 
         let req = AddMemoryRequest {
             id: Some(mem.id),
@@ -70,7 +69,7 @@ pub async fn migrate_memories(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{Database, sqlite::SqliteDatabase};
+    use crate::db::{sqlite::SqliteDatabase, Database};
     use std::sync::Arc;
 
     async fn create_test_db() -> Result<Arc<dyn Database>> {
@@ -99,7 +98,15 @@ mod tests {
         let mem = source.add_memory(req, &config).await?;
 
         let skip_ids = HashSet::new();
-        let (migrated, skipped) = migrate_memories(source.as_ref(), dest.as_ref(), &config, &None, &skip_ids, false).await?;
+        let (migrated, skipped) = migrate_memories(
+            source.as_ref(),
+            dest.as_ref(),
+            &config,
+            &None,
+            &skip_ids,
+            false,
+        )
+        .await?;
 
         assert_eq!(migrated, 1);
         assert_eq!(skipped, 0);
@@ -133,7 +140,15 @@ mod tests {
         assert_eq!(mem.id, specific_id);
 
         let skip_ids = HashSet::new();
-        migrate_memories(source.as_ref(), dest.as_ref(), &config, &None, &skip_ids, false).await?;
+        migrate_memories(
+            source.as_ref(),
+            dest.as_ref(),
+            &config,
+            &None,
+            &skip_ids,
+            false,
+        )
+        .await?;
 
         let dest_mems = dest.list_memories(Some(10)).await?;
         assert_eq!(dest_mems[0].id, specific_id);
@@ -148,22 +163,35 @@ mod tests {
         let config = Config::default();
 
         for id in &["keep-this", "skip-this", "keep-this-too"] {
-            source.add_memory(AddMemoryRequest {
-                id: Some(id.to_string()),
-                content: format!("Memory {}", id),
-                memory_type: MemoryType::Episodic,
-                scopes: vec![],
-                tags: vec![],
-                importance: 5,
-                metadata: serde_json::json!({}),
-                links: vec![],
-            }, &config).await?;
+            source
+                .add_memory(
+                    AddMemoryRequest {
+                        id: Some(id.to_string()),
+                        content: format!("Memory {}", id),
+                        memory_type: MemoryType::Episodic,
+                        scopes: vec![],
+                        tags: vec![],
+                        importance: 5,
+                        metadata: serde_json::json!({}),
+                        links: vec![],
+                    },
+                    &config,
+                )
+                .await?;
         }
 
         let mut skip_ids = HashSet::new();
         skip_ids.insert("skip-this".to_string());
 
-        let (migrated, skipped) = migrate_memories(source.as_ref(), dest.as_ref(), &config, &None, &skip_ids, false).await?;
+        let (migrated, skipped) = migrate_memories(
+            source.as_ref(),
+            dest.as_ref(),
+            &config,
+            &None,
+            &skip_ids,
+            false,
+        )
+        .await?;
 
         assert_eq!(migrated, 2);
         assert_eq!(skipped, 1);
@@ -180,19 +208,32 @@ mod tests {
         let dest = create_test_db().await?;
         let config = Config::default();
 
-        source.add_memory(AddMemoryRequest {
-            id: Some("test".to_string()),
-            content: "Test".to_string(),
-            memory_type: MemoryType::Episodic,
-            scopes: vec![],
-            tags: vec![],
-            importance: 5,
-            metadata: serde_json::json!({}),
-            links: vec![],
-        }, &config).await?;
+        source
+            .add_memory(
+                AddMemoryRequest {
+                    id: Some("test".to_string()),
+                    content: "Test".to_string(),
+                    memory_type: MemoryType::Episodic,
+                    scopes: vec![],
+                    tags: vec![],
+                    importance: 5,
+                    metadata: serde_json::json!({}),
+                    links: vec![],
+                },
+                &config,
+            )
+            .await?;
 
         let skip_ids = HashSet::new();
-        let (migrated, _) = migrate_memories(source.as_ref(), dest.as_ref(), &config, &None, &skip_ids, true).await?;
+        let (migrated, _) = migrate_memories(
+            source.as_ref(),
+            dest.as_ref(),
+            &config,
+            &None,
+            &skip_ids,
+            true,
+        )
+        .await?;
 
         assert_eq!(migrated, 1);
 
@@ -208,32 +249,50 @@ mod tests {
         let dest = create_test_db().await?;
         let config = Config::default();
 
-        source.add_memory(AddMemoryRequest {
-            id: None,
-            content: "Project A memory".to_string(),
-            memory_type: MemoryType::Episodic,
-            scopes: vec!["project/alpha".to_string()],
-            tags: vec![],
-            importance: 5,
-            metadata: serde_json::json!({}),
-            links: vec![],
-        }, &config).await?;
+        source
+            .add_memory(
+                AddMemoryRequest {
+                    id: None,
+                    content: "Project A memory".to_string(),
+                    memory_type: MemoryType::Episodic,
+                    scopes: vec!["project/alpha".to_string()],
+                    tags: vec![],
+                    importance: 5,
+                    metadata: serde_json::json!({}),
+                    links: vec![],
+                },
+                &config,
+            )
+            .await?;
 
-        source.add_memory(AddMemoryRequest {
-            id: None,
-            content: "Project B memory".to_string(),
-            memory_type: MemoryType::Episodic,
-            scopes: vec!["project/beta".to_string()],
-            tags: vec![],
-            importance: 5,
-            metadata: serde_json::json!({}),
-            links: vec![],
-        }, &config).await?;
+        source
+            .add_memory(
+                AddMemoryRequest {
+                    id: None,
+                    content: "Project B memory".to_string(),
+                    memory_type: MemoryType::Episodic,
+                    scopes: vec!["project/beta".to_string()],
+                    tags: vec![],
+                    importance: 5,
+                    metadata: serde_json::json!({}),
+                    links: vec![],
+                },
+                &config,
+            )
+            .await?;
 
         let skip_ids = HashSet::new();
         let scope_filter = Some("project/alpha".to_string());
 
-        let (migrated, _) = migrate_memories(source.as_ref(), dest.as_ref(), &config, &scope_filter, &skip_ids, false).await?;
+        let (migrated, _) = migrate_memories(
+            source.as_ref(),
+            dest.as_ref(),
+            &config,
+            &scope_filter,
+            &skip_ids,
+            false,
+        )
+        .await?;
 
         assert_eq!(migrated, 1);
 
@@ -252,21 +311,38 @@ mod tests {
 
         // Create diverse test data
         for i in 0..5 {
-            source.add_memory(AddMemoryRequest {
-                id: Some(format!("mem{}", i)),
-                content: format!("Memory {}", i),
-                memory_type: if i % 2 == 0 { MemoryType::Episodic } else { MemoryType::Semantic },
-                scopes: vec![format!("scope{}", i % 2)],
-                tags: vec![format!("tag{}", i)],
-                importance: ((i as i64) % 10) + 1,
-                metadata: serde_json::json!({"index": i}),
-                links: vec![],
-            }, &config).await?;
+            source
+                .add_memory(
+                    AddMemoryRequest {
+                        id: Some(format!("mem{}", i)),
+                        content: format!("Memory {}", i),
+                        memory_type: if i % 2 == 0 {
+                            MemoryType::Episodic
+                        } else {
+                            MemoryType::Semantic
+                        },
+                        scopes: vec![format!("scope{}", i % 2)],
+                        tags: vec![format!("tag{}", i)],
+                        importance: ((i as i64) % 10) + 1,
+                        metadata: serde_json::json!({"index": i}),
+                        links: vec![],
+                    },
+                    &config,
+                )
+                .await?;
         }
 
         // Migrate all
         let skip_ids = HashSet::new();
-        let (migrated, skipped) = migrate_memories(source.as_ref(), dest.as_ref(), &config, &None, &skip_ids, false).await?;
+        let (migrated, skipped) = migrate_memories(
+            source.as_ref(),
+            dest.as_ref(),
+            &config,
+            &None,
+            &skip_ids,
+            false,
+        )
+        .await?;
 
         assert_eq!(migrated, 5);
         assert_eq!(skipped, 0);
@@ -283,4 +359,3 @@ mod tests {
         Ok(())
     }
 }
-

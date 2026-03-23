@@ -31,24 +31,24 @@ pub fn strip_comments(input: &str) -> String {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Keyword(String),    // MATCH, WHERE, RETURN, etc.
-    Ident(String),      // variable names, property names
-    Label(String),      // :Memory (after colon)
-    RelType(String),    // [:SUPPORTS] content
+    Keyword(String), // MATCH, WHERE, RETURN, etc.
+    Ident(String),   // variable names, property names
+    Label(String),   // :Memory (after colon)
+    RelType(String), // [:SUPPORTS] content
     LParen,
     RParen,
     LBracket,
     RBracket,
     LBrace,
     RBrace,
-    Arrow,              // -> or <-
-    Dash,               // -
-    Dot,                // .
+    Arrow, // -> or <-
+    Dash,  // -
+    Dot,   // .
     Comma,
     Equals,
     Colon,
     Star,
-    DotDot,             // ..
+    DotDot, // ..
     Integer(i64),
     StringLit(String),
     Newline,
@@ -56,9 +56,8 @@ pub enum Token {
 }
 
 const KEYWORDS: &[&str] = &[
-    "MATCH", "WHERE", "RETURN", "ORDER", "BY", "LIMIT", "WITH",
-    "AND", "OR", "NOT", "AS", "DISTINCT", "ASC", "DESC",
-    "OPTIONAL", "CREATE", "MERGE", "SET", "DELETE", "REMOVE", "DROP",
+    "MATCH", "WHERE", "RETURN", "ORDER", "BY", "LIMIT", "WITH", "AND", "OR", "NOT", "AS",
+    "DISTINCT", "ASC", "DESC", "OPTIONAL", "CREATE", "MERGE", "SET", "DELETE", "REMOVE", "DROP",
     "IN", "STARTS", "ENDS", "CONTAINS", "IS", "NULL", "TRUE", "FALSE",
 ];
 
@@ -97,9 +96,12 @@ pub fn tokenize(input: &str) -> Vec<Token> {
         }
 
         // Numbers
-        if c.is_ascii_digit() || (c == '-' && i + 1 < chars.len() && chars[i+1].is_ascii_digit()) {
+        if c.is_ascii_digit() || (c == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
+        {
             let start = i;
-            if c == '-' { i += 1; }
+            if c == '-' {
+                i += 1;
+            }
             while i < chars.len() && chars[i].is_ascii_digit() {
                 i += 1;
             }
@@ -125,42 +127,84 @@ pub fn tokenize(input: &str) -> Vec<Token> {
         }
 
         // .. (before single dot)
-        if c == '.' && i + 1 < chars.len() && chars[i+1] == '.' {
+        if c == '.' && i + 1 < chars.len() && chars[i + 1] == '.' {
             tokens.push(Token::DotDot);
             i += 2;
             continue;
         }
 
         // -> arrow
-        if c == '-' && i + 1 < chars.len() && chars[i+1] == '>' {
+        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '>' {
             tokens.push(Token::Arrow);
             i += 2;
             continue;
         }
 
         // <- arrow (we push Arrow for left-pointing too, direction tracked in parser)
-        if c == '<' && i + 1 < chars.len() && chars[i+1] == '-' {
+        if c == '<' && i + 1 < chars.len() && chars[i + 1] == '-' {
             tokens.push(Token::Arrow);
             i += 2;
             continue;
         }
 
         match c {
-            '(' => { tokens.push(Token::LParen); i += 1; }
-            ')' => { tokens.push(Token::RParen); i += 1; }
-            '[' => { tokens.push(Token::LBracket); i += 1; }
-            ']' => { tokens.push(Token::RBracket); i += 1; }
-            '{' => { tokens.push(Token::LBrace); i += 1; }
-            '}' => { tokens.push(Token::RBrace); i += 1; }
-            '.' => { tokens.push(Token::Dot); i += 1; }
-            ',' => { tokens.push(Token::Comma); i += 1; }
-            '=' => { tokens.push(Token::Equals); i += 1; }
-            ':' => { tokens.push(Token::Colon); i += 1; }
-            '*' => { tokens.push(Token::Star); i += 1; }
-            '-' => { tokens.push(Token::Dash); i += 1; }
-            '>' => { i += 1; } // trailing > after ], skip
-            '<' => { i += 1; } // leading < before -, handled above
-            _ => { i += 1; } // skip unknown
+            '(' => {
+                tokens.push(Token::LParen);
+                i += 1;
+            }
+            ')' => {
+                tokens.push(Token::RParen);
+                i += 1;
+            }
+            '[' => {
+                tokens.push(Token::LBracket);
+                i += 1;
+            }
+            ']' => {
+                tokens.push(Token::RBracket);
+                i += 1;
+            }
+            '{' => {
+                tokens.push(Token::LBrace);
+                i += 1;
+            }
+            '}' => {
+                tokens.push(Token::RBrace);
+                i += 1;
+            }
+            '.' => {
+                tokens.push(Token::Dot);
+                i += 1;
+            }
+            ',' => {
+                tokens.push(Token::Comma);
+                i += 1;
+            }
+            '=' => {
+                tokens.push(Token::Equals);
+                i += 1;
+            }
+            ':' => {
+                tokens.push(Token::Colon);
+                i += 1;
+            }
+            '*' => {
+                tokens.push(Token::Star);
+                i += 1;
+            }
+            '-' => {
+                tokens.push(Token::Dash);
+                i += 1;
+            }
+            '>' => {
+                i += 1;
+            } // trailing > after ], skip
+            '<' => {
+                i += 1;
+            } // leading < before -, handled above
+            _ => {
+                i += 1;
+            } // skip unknown
         }
     }
 

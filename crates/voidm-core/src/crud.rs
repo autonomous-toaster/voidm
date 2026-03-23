@@ -1,14 +1,14 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::models::{
-    AddMemoryRequest, AddMemoryResponse, DuplicateWarning, EdgeType, LinkResponse,
-    ConflictWarning, Memory,
-};
-use crate::{embeddings, search, vector, quality, auto_tagger, redactor};
 use crate::config::Config;
+use crate::models::{
+    AddMemoryRequest, AddMemoryResponse, ConflictWarning, DuplicateWarning, EdgeType, LinkResponse,
+    Memory,
+};
+use crate::{auto_tagger, embeddings, quality, redactor, search, vector};
 
 /// Resolve a full or short (prefix) ID to a full memory ID.
 /// - If `id` is already a full UUID that exists → return it as-is.
@@ -40,8 +40,13 @@ pub async fn resolve_id(pool: &SqlitePool, id: &str) -> Result<String> {
         1 => Ok(matches.into_iter().next().unwrap()),
         n => bail!(
             "Ambiguous short ID '{}' matches {} memories. Use more characters:\n{}",
-            id, n,
-            matches.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
+            id,
+            n,
+            matches
+                .iter()
+                .map(|m| format!("  {}", m))
+                .collect::<Vec<_>>()
+                .join("\n")
         ),
     }
 }
@@ -52,29 +57,42 @@ pub async fn resolve_id(pool: &SqlitePool, id: &str) -> Result<String> {
 /// 3. Insert memory + scopes + FTS + vec + graph node + links
 /// 4. COMMIT
 /// Returns AddMemoryResponse with suggested_links and duplicate_warning.
-pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &Config) -> Result<AddMemoryResponse> {
+pub async fn add_memory(
+    pool: &SqlitePool,
+    mut req: AddMemoryRequest,
+    config: &Config,
+) -> Result<AddMemoryResponse> {
     // Auto-enrich tags BEFORE creating tags_json (moved to beginning)
     if let Err(e) = auto_tagger::enrich_memory_tags(&mut req, config) {
-        tracing::warn!("Failed to auto-enrich tags: {}. Using user-provided tags only.", e);
+        tracing::warn!(
+            "Failed to auto-enrich tags: {}. Using user-provided tags only.",
+            e
+        );
     }
-    
+
     // Redact secrets from memory content and metadata BEFORE insertion
     let mut redaction_warnings = Vec::new();
     if let Err(e) = redact_memory(&mut req, config, &mut redaction_warnings) {
-        tracing::warn!("Failed to redact secrets: {}. Continuing without redaction.", e);
+        tracing::warn!(
+            "Failed to redact secrets: {}. Continuing without redaction.",
+            e
+        );
     }
-    
+
     // Log any redacted secrets to inform user
     for warning in &redaction_warnings {
         tracing::warn!(
             "Redacted {} {}(s) in memory.{}: {}",
-            warning.count, warning.pattern_type, warning.field, warning.count
+            warning.count,
+            warning.pattern_type,
+            warning.field,
+            warning.count
         );
     }
-    
+
     let id = req.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
     let now = Utc::now().to_rfc3339();
-    
+
     let tags_json = serde_json::to_string(&req.tags)?;
     let metadata_json = serde_json::to_string(&req.metadata)?;
     let memory_type_str = req.memory_type.to_string();
@@ -84,7 +102,10 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         match embeddings::embed_text(&config.embeddings.model, &req.content) {
             Ok(emb) => Some(emb),
             Err(e) => {
-                tracing::warn!("Failed to compute embedding: {}. Skipping vector storage.", e);
+                tracing::warn!(
+                    "Failed to compute embedding: {}. Skipping vector storage.",
+                    e
+                );
                 None
             }
         }
@@ -167,14 +188,12 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     // Insert embedding
     if let Some(ref emb) = embedding_result {
         let bytes: Vec<u8> = emb.iter().flat_map(|f| f.to_le_bytes()).collect();
-        sqlx::query(
-            "INSERT INTO vec_memories (memory_id, embedding) VALUES (?, ?)"
-        )
-        .bind(&id)
-        .bind(&bytes)
-        .execute(&mut *tx)
-        .await
-        .context("Failed to insert into vec_memories")?;
+        sqlx::query("INSERT INTO vec_memories (memory_id, embedding) VALUES (?, ?)")
+            .bind(&id)
+            .bind(&bytes)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to insert into vec_memories")?;
     }
 
     // Graph node upsert
@@ -194,7 +213,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     // Store memory_type as a text property on the graph node
     let key_id = intern_property_key(&mut tx, "memory_type").await?;
     sqlx::query(
-        "INSERT OR REPLACE INTO graph_node_props_text (node_id, key_id, value) VALUES (?, ?, ?)"
+        "INSERT OR REPLACE INTO graph_node_props_text (node_id, key_id, value) VALUES (?, ?, ?)",
     )
     .bind(node_id)
     .bind(key_id)
@@ -204,17 +223,16 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
 
     // Create --link edges
     for link in &req.links {
-        let target_node: i64 = sqlx::query_scalar(
-            "SELECT n.id FROM graph_nodes n WHERE n.memory_id = ?"
-        )
-        .bind(&link.target_id)
-        .fetch_one(&mut *tx)
-        .await
-        .with_context(|| format!("Graph node not found for target '{}'", link.target_id))?;
+        let target_node: i64 =
+            sqlx::query_scalar("SELECT n.id FROM graph_nodes n WHERE n.memory_id = ?")
+                .bind(&link.target_id)
+                .fetch_one(&mut *tx)
+                .await
+                .with_context(|| format!("Graph node not found for target '{}'", link.target_id))?;
 
         sqlx::query(
             "INSERT OR IGNORE INTO graph_edges (source_id, target_id, rel_type, note, created_at)
-             VALUES (?, ?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(node_id)
         .bind(target_node)
@@ -230,16 +248,21 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     // Post-insert: Auto-link memories with shared tags
     if !req.tags.is_empty() {
         let tag_limit = config.insert.auto_link_limit;
-        if let Err(e) = crate::tag_linker::auto_link_by_tags(pool, &id, &req.tags, tag_limit).await {
-            tracing::warn!("Failed to auto-link by tags: {}. Continuing with memory creation.", e);
+        if let Err(e) = crate::tag_linker::auto_link_by_tags(pool, &id, &req.tags, tag_limit).await
+        {
+            tracing::warn!(
+                "Failed to auto-link by tags: {}. Continuing with memory creation.",
+                e
+            );
         }
     }
 
     // Post-insert: compute suggested_links and duplicate_warning (outside tx)
     let (suggested_links, duplicate_warning) = if let Some(ref emb) = embedding_result {
-        let dup_candidates = search::find_similar(
-            pool, emb, &id, 1, config.insert.duplicate_threshold,
-        ).await.unwrap_or_default();
+        let dup_candidates =
+            search::find_similar(pool, emb, &id, 1, config.insert.duplicate_threshold)
+                .await
+                .unwrap_or_default();
 
         let dup_warning = if let Some((dup_id, dup_score)) = dup_candidates.first() {
             if let Ok(Some(dup_mem)) = get_memory(pool, dup_id).await {
@@ -252,7 +275,8 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
                     id: dup_id.clone(),
                     score: *dup_score,
                     content: content_trunc,
-                    message: "Near-duplicate detected. Consider linking instead of inserting.".into(),
+                    message: "Near-duplicate detected. Consider linking instead of inserting."
+                        .into(),
                 })
             } else {
                 None
@@ -262,10 +286,14 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         };
 
         let link_candidates = search::find_similar(
-            pool, emb, &id,
+            pool,
+            emb,
+            &id,
             config.insert.auto_link_limit,
             config.insert.auto_link_threshold,
-        ).await.unwrap_or_default();
+        )
+        .await
+        .unwrap_or_default();
 
         let suggested = search::build_suggested_links(pool, &memory_type_str, link_candidates)
             .await
@@ -300,20 +328,34 @@ pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
     .fetch_optional(pool)
     .await?;
 
-    if let Some((id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, created_at, updated_at)) = row {
+    if let Some((
+        id,
+        memory_type,
+        content,
+        importance,
+        tags_json,
+        metadata_json,
+        quality_score_db,
+        created_at,
+        updated_at,
+    )) = row
+    {
         let scopes = get_scopes(pool, &id).await?;
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-        let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or(serde_json::Value::Object(Default::default()));
-        
+        let metadata: serde_json::Value = serde_json::from_str(&metadata_json)
+            .unwrap_or(serde_json::Value::Object(Default::default()));
+
         // Use persisted quality_score if available, otherwise compute and return
         let quality_score = if let Some(score) = quality_score_db {
             Some(score)
         } else {
-            let memory_type_enum: crate::models::MemoryType = memory_type.parse().unwrap_or(crate::models::MemoryType::Semantic);
+            let memory_type_enum: crate::models::MemoryType = memory_type
+                .parse()
+                .unwrap_or(crate::models::MemoryType::Semantic);
             let quality_score_val = quality::compute_quality_score(&content, &memory_type_enum);
             Some(quality_score_val.score)
         };
-        
+
         Ok(Some(Memory {
             id,
             memory_type,
@@ -339,7 +381,17 @@ pub async fn list_memories(
     limit: usize,
 ) -> Result<Vec<Memory>> {
     // Build query dynamically
-    let rows: Vec<(String, String, String, i64, String, String, Option<f32>, String, String)> = if let Some(scope) = scope_filter {
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        i64,
+        String,
+        String,
+        Option<f32>,
+        String,
+        String,
+    )> = if let Some(scope) = scope_filter {
         let scope_prefix = format!("{}%", scope);
         sqlx::query_as(
             "SELECT DISTINCT m.id, m.type, m.content, m.importance, m.tags, m.metadata, m.quality_score, m.created_at, m.updated_at
@@ -363,32 +415,47 @@ pub async fn list_memories(
     };
 
     let mut memories = Vec::new();
-    for (id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, created_at, updated_at) in rows {
+    for (
+        id,
+        memory_type,
+        content,
+        importance,
+        tags_json,
+        metadata_json,
+        quality_score_db,
+        created_at,
+        updated_at,
+    ) in rows
+    {
         if let Some(t) = type_filter {
-            if memory_type != t { continue; }
+            if memory_type != t {
+                continue;
+            }
         }
         let scopes = get_scopes(pool, &id).await?;
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
         let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_default();
-        
+
         // Use persisted quality_score if available, otherwise compute
         let quality_score = if let Some(score) = quality_score_db {
             Some(score)
         } else {
-            let memory_type_enum: crate::models::MemoryType = memory_type.parse().unwrap_or(crate::models::MemoryType::Semantic);
+            let memory_type_enum: crate::models::MemoryType = memory_type
+                .parse()
+                .unwrap_or(crate::models::MemoryType::Semantic);
             let quality_score_val = quality::compute_quality_score(&content, &memory_type_enum);
             Some(quality_score_val.score)
         };
-        
-        memories.push(Memory { 
-            id, 
-            memory_type, 
-            content, 
-            importance, 
-            tags, 
-            metadata, 
-            scopes, 
-            created_at, 
+
+        memories.push(Memory {
+            id,
+            memory_type,
+            content,
+            importance,
+            tags,
+            metadata,
+            scopes,
+            created_at,
             updated_at,
             quality_score,
         });
@@ -420,22 +487,20 @@ pub async fn delete_memory(pool: &SqlitePool, id: &str) -> Result<bool> {
 
 /// Get all scopes for a memory.
 async fn get_scopes(pool: &SqlitePool, memory_id: &str) -> Result<Vec<String>> {
-    let scopes: Vec<String> = sqlx::query_scalar(
-        "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
-    )
-    .bind(memory_id)
-    .fetch_all(pool)
-    .await?;
+    let scopes: Vec<String> =
+        sqlx::query_scalar("SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope")
+            .bind(memory_id)
+            .fetch_all(pool)
+            .await?;
     Ok(scopes)
 }
 
 /// List all known scope strings.
 pub async fn list_scopes(pool: &SqlitePool) -> Result<Vec<String>> {
-    let scopes: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT scope FROM memory_scopes ORDER BY scope"
-    )
-    .fetch_all(pool)
-    .await?;
+    let scopes: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT scope FROM memory_scopes ORDER BY scope")
+            .fetch_all(pool)
+            .await?;
     Ok(scopes)
 }
 
@@ -449,7 +514,9 @@ pub async fn link_memories(
 ) -> Result<LinkResponse> {
     // Validate RELATES_TO requires note
     if edge_type.requires_note() && note.is_none() {
-        anyhow::bail!("RELATES_TO requires --note explaining why no stronger relationship applies.");
+        anyhow::bail!(
+            "RELATES_TO requires --note explaining why no stronger relationship applies."
+        );
     }
 
     // Check both memories exist
@@ -471,7 +538,7 @@ pub async fn link_memories(
     let conflict_rel = edge_type.conflict();
     let conflict_warning = if let Some(opposing) = conflict_rel {
         let exists: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?"
+            "SELECT id FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?",
         )
         .bind(from_node)
         .bind(to_node)
@@ -497,7 +564,7 @@ pub async fn link_memories(
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT OR IGNORE INTO graph_edges (source_id, target_id, rel_type, note, created_at)
-         VALUES (?, ?, ?, ?, ?)"
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(from_node)
     .bind(to_node)
@@ -523,10 +590,11 @@ pub async fn unlink_memories(
     edge_type: &EdgeType,
     to_id: &str,
 ) -> Result<bool> {
-    let from_node: Option<i64> = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
-        .bind(from_id)
-        .fetch_optional(pool)
-        .await?;
+    let from_node: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+            .bind(from_id)
+            .fetch_optional(pool)
+            .await?;
     let to_node: Option<i64> = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
         .bind(to_id)
         .fetch_optional(pool)
@@ -535,7 +603,7 @@ pub async fn unlink_memories(
     match (from_node, to_node) {
         (Some(f), Some(t)) => {
             let result = sqlx::query(
-                "DELETE FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?"
+                "DELETE FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?",
             )
             .bind(f)
             .bind(t)
@@ -560,7 +628,10 @@ async fn get_or_create_node(pool: &SqlitePool, memory_id: &str) -> Result<i64> {
     Ok(node_id)
 }
 
-async fn intern_property_key(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, key: &str) -> Result<i64> {
+async fn intern_property_key(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    key: &str,
+) -> Result<i64> {
     sqlx::query("INSERT OR IGNORE INTO graph_property_keys (key) VALUES (?)")
         .bind(key)
         .execute(&mut **tx)
@@ -573,13 +644,18 @@ async fn intern_property_key(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, key: 
 }
 
 /// Check model mismatch against db_meta.
-pub async fn check_model_mismatch(pool: &SqlitePool, configured_model: &str) -> Result<Option<(String, String)>> {
-    let db_model: Option<String> = sqlx::query_scalar("SELECT value FROM db_meta WHERE key = 'embedding_model'")
-        .fetch_optional(pool)
-        .await?;
-    let db_dim: Option<String> = sqlx::query_scalar("SELECT value FROM db_meta WHERE key = 'embedding_dim'")
-        .fetch_optional(pool)
-        .await?;
+pub async fn check_model_mismatch(
+    pool: &SqlitePool,
+    configured_model: &str,
+) -> Result<Option<(String, String)>> {
+    let db_model: Option<String> =
+        sqlx::query_scalar("SELECT value FROM db_meta WHERE key = 'embedding_model'")
+            .fetch_optional(pool)
+            .await?;
+    let db_dim: Option<String> =
+        sqlx::query_scalar("SELECT value FROM db_meta WHERE key = 'embedding_dim'")
+            .fetch_optional(pool)
+            .await?;
 
     if let Some(db_m) = db_model {
         if db_m != configured_model {
@@ -599,45 +675,53 @@ pub async fn list_edges(pool: &SqlitePool) -> Result<Vec<crate::models::MemoryEd
         JOIN graph_nodes gn1 ON ge.source_id = gn1.id
         JOIN graph_nodes gn2 ON ge.target_id = gn2.id
         ORDER BY ge.created_at
-        "#
+        "#,
     )
     .fetch_all(pool)
     .await?;
 
-    let edges = edges_data.into_iter().map(|(from_id, to_id, rel_type, note)| {
-        crate::models::MemoryEdge {
-            from_id,
-            to_id,
-            rel_type,
-            note,
-        }
-    }).collect();
+    let edges = edges_data
+        .into_iter()
+        .map(
+            |(from_id, to_id, rel_type, note)| crate::models::MemoryEdge {
+                from_id,
+                to_id,
+                rel_type,
+                note,
+            },
+        )
+        .collect();
 
     Ok(edges)
 }
 
 /// List all ontology edges for migration purposes
-pub async fn list_ontology_edges(pool: &SqlitePool) -> Result<Vec<crate::models::OntologyEdgeForMigration>> {
+pub async fn list_ontology_edges(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::models::OntologyEdgeForMigration>> {
     let edges_data: Vec<(String, String, String, String, String, Option<String>)> = sqlx::query_as(
         r#"
         SELECT from_id, from_type, to_id, to_type, rel_type, note
         FROM ontology_edges
         ORDER BY from_id
-        "#
+        "#,
     )
     .fetch_all(pool)
     .await?;
 
-    let edges = edges_data.into_iter().map(|(from_id, from_type, to_id, to_type, rel_type, note)| {
-        crate::models::OntologyEdgeForMigration {
-            from_id,
-            from_type,
-            to_id,
-            to_type,
-            rel_type,
-            note,
-        }
-    }).collect();
+    let edges = edges_data
+        .into_iter()
+        .map(|(from_id, from_type, to_id, to_type, rel_type, note)| {
+            crate::models::OntologyEdgeForMigration {
+                from_id,
+                from_type,
+                to_id,
+                to_type,
+                rel_type,
+                note,
+            }
+        })
+        .collect();
 
     Ok(edges)
 }
@@ -650,7 +734,8 @@ fn redact_memory(
     warnings: &mut Vec<redactor::RedactionWarning>,
 ) -> Result<()> {
     // Redact content
-    let (redacted_content, content_warnings) = redactor::redact_text(&req.content, &config.redaction);
+    let (redacted_content, content_warnings) =
+        redactor::redact_text(&req.content, &config.redaction);
     for mut w in content_warnings {
         w.field = "content".to_string();
         warnings.push(w);
@@ -671,7 +756,8 @@ fn redact_memory(
 
     // Redact metadata
     if let Ok(metadata_str) = serde_json::to_string(&req.metadata) {
-        let (redacted_metadata_str, metadata_warnings) = redactor::redact_text(&metadata_str, &config.redaction);
+        let (redacted_metadata_str, metadata_warnings) =
+            redactor::redact_text(&metadata_str, &config.redaction);
         for mut w in metadata_warnings {
             w.field = "metadata".to_string();
             warnings.push(w);

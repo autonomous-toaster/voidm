@@ -57,13 +57,30 @@ async fn run_list(args: ConflictsListArgs, pool: &SqlitePool, json: bool) -> Res
     println!("{} conflict(s):\n", conflicts.len());
     for c in &conflicts {
         println!("  Edge #{}: CONTRADICTS", c.edge_id);
-        println!("    [{}] {} {}", &c.from_id[..8], c.from_kind, c.from_name.as_deref().unwrap_or("(memory)"));
-        if let Some(ref desc) = c.from_description { println!("        {}", desc); }
+        println!(
+            "    [{}] {} {}",
+            &c.from_id[..8],
+            c.from_kind,
+            c.from_name.as_deref().unwrap_or("(memory)")
+        );
+        if let Some(ref desc) = c.from_description {
+            println!("        {}", desc);
+        }
         println!("    ↕ CONTRADICTS");
-        println!("    [{}] {} {}", &c.to_id[..8], c.to_kind, c.to_name.as_deref().unwrap_or("(memory)"));
-        if let Some(ref desc) = c.to_description { println!("        {}", desc); }
+        println!(
+            "    [{}] {} {}",
+            &c.to_id[..8],
+            c.to_kind,
+            c.to_name.as_deref().unwrap_or("(memory)")
+        );
+        if let Some(ref desc) = c.to_description {
+            println!("        {}", desc);
+        }
         println!();
-        println!("    Resolve: voidm conflicts resolve {} --keep <id>", c.edge_id);
+        println!(
+            "    Resolve: voidm conflicts resolve {} --keep <id>",
+            c.edge_id
+        );
         println!();
     }
 
@@ -77,7 +94,8 @@ async fn run_resolve(args: ConflictsResolveArgs, pool: &SqlitePool, json: bool) 
     let conflict = ontology::get_conflict(pool, args.edge_id).await?;
 
     // Validate --keep is one of the two endpoints
-    let winner_id = ontology::resolve_concept_id(pool, &args.keep).await
+    let winner_id = ontology::resolve_concept_id(pool, &args.keep)
+        .await
         .or_else(|_| -> Result<String> { Ok(args.keep.clone()) })?;
 
     let loser_id = if winner_id == conflict.from_id || conflict.from_id.starts_with(&winner_id) {
@@ -88,23 +106,34 @@ async fn run_resolve(args: ConflictsResolveArgs, pool: &SqlitePool, json: bool) 
         bail!(
             "--keep '{}' is not one of the conflict's endpoints.\n\
              Endpoints: {} and {}",
-            args.keep, &conflict.from_id[..8], &conflict.to_id[..8]
+            args.keep,
+            &conflict.from_id[..8],
+            &conflict.to_id[..8]
         );
     };
 
     ontology::resolve_conflict(pool, args.edge_id, &winner_id, &loser_id).await?;
 
     if json {
-        println!("{}", serde_json::json!({
-            "resolved": true,
-            "edge_id": args.edge_id,
-            "winner": &winner_id[..8.min(winner_id.len())],
-            "loser": &loser_id[..8.min(loser_id.len())],
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "resolved": true,
+                "edge_id": args.edge_id,
+                "winner": &winner_id[..8.min(winner_id.len())],
+                "loser": &loser_id[..8.min(loser_id.len())],
+            })
+        );
     } else {
         println!("Conflict #{} resolved.", args.edge_id);
-        println!("  Winner (kept):      [{}]", &winner_id[..8.min(winner_id.len())]);
-        println!("  Loser (superseded): [{}]", &loser_id[..8.min(loser_id.len())]);
+        println!(
+            "  Winner (kept):      [{}]",
+            &winner_id[..8.min(winner_id.len())]
+        );
+        println!(
+            "  Loser (superseded): [{}]",
+            &loser_id[..8.min(loser_id.len())]
+        );
         println!("  CONTRADICTS edge removed. INVALIDATES edge created.");
     }
 

@@ -71,46 +71,46 @@ lazy_static! {
     // OpenAI: sk-...
     static ref OPENAI_API_KEY: Regex =
         Regex::new(r"sk-[A-Za-z0-9\-_]{20,}").unwrap();
-    
+
     // AWS Access Key ID
     static ref AWS_ACCESS_KEY: Regex =
         Regex::new(r"AKIA[0-9A-Z]{16}").unwrap();
-    
+
     // Generic API key patterns: api_key=..., API_KEY=...
     // Requires at least 24 characters (real API keys are typically longer than placeholder strings)
     static ref GENERIC_API_KEY: Regex =
         Regex::new(r#"(?i)(api_key|apikey)\s*=\s*['""]?([A-Za-z0-9\-_.]{24,})['""]?"#).unwrap();
-    
+
     // Database connection strings
     // MySQL: mysql://user:pass@host:port/db
     static ref MYSQL_CONNECTION: Regex =
         Regex::new(r"mysql://[^\s:]+:[^\s@]+@[^\s:/]+(?::\d+)?/[^\s;]+").unwrap();
-    
+
     // PostgreSQL: postgresql://... or postgres://...
     static ref POSTGRES_CONNECTION: Regex =
         Regex::new(r"(?:postgresql|postgres)://[^\s:]+:[^\s@]+@[^\s:/]+(?::\d+)?/[^\s;]+").unwrap();
-    
+
     // MongoDB: mongodb://...
     static ref MONGODB_CONNECTION: Regex =
         Regex::new(r"mongodb://[^\s:]+:[^\s@]+@[^\s:/]+(?::\d+)?/[^\s;]+").unwrap();
-    
+
     // Generic connection string pattern
     static ref GENERIC_CONNECTION_STRING: Regex =
         Regex::new(r#"(?i)connection_string\s*=\s*['""]?([^'"";\s]+://[^'"";\s]+)['""]?"#).unwrap();
-    
+
     // JWT tokens: eyJ...eyJ... (three parts separated by dots)
     static ref JWT_TOKEN: Regex =
         Regex::new(r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+").unwrap();
-    
+
     // Bearer tokens: Bearer [token] (min 20 alphanumeric chars)
     static ref BEARER_TOKEN: Regex =
         Regex::new(r"Bearer\s+([A-Za-z0-9\-_\.]{20,})").unwrap();
-    
+
     // Session tokens: session_id=..., auth_token=..., etc.
     // Requires at least 20 characters (real tokens are significantly longer than placeholders)
     static ref SESSION_TOKEN: Regex =
         Regex::new(r#"(?i)(session_id|auth_token|token|sessiontoken)\s*=\s*['""]?([A-Za-z0-9\-_.]{20,})['""]?"#).unwrap();
-    
+
     // Email addresses: loose matching word@word.word
     static ref EMAIL_ADDRESS: Regex =
         Regex::new(r"\b[A-Za-z0-9_\.\-]+@[A-Za-z0-9_\.\-]+\.[A-Za-z]{2,}\b").unwrap();
@@ -282,14 +282,12 @@ fn mask_pattern(matched: &str, config: &PatternRedactionConfig) -> String {
 fn redact_pattern(text: &str, regex: &Regex, config: &PatternRedactionConfig) -> String {
     match config.strategy.as_str() {
         "remove" => regex.replace_all(text, "").to_string(),
-        "mask" | _ => {
-            regex
-                .replace_all(text, |caps: &regex::Captures| {
-                    let matched = caps.get(0).unwrap().as_str();
-                    mask_pattern(matched, config)
-                })
-                .to_string()
-        }
+        "mask" | _ => regex
+            .replace_all(text, |caps: &regex::Captures| {
+                let matched = caps.get(0).unwrap().as_str();
+                mask_pattern(matched, config)
+            })
+            .to_string(),
     }
 }
 
@@ -298,7 +296,7 @@ fn redact_db_connection(text: &str, regex: &Regex) -> String {
     regex
         .replace_all(text, |caps: &regex::Captures| {
             let matched = caps.get(0).unwrap().as_str();
-            
+
             // Pattern: scheme://user:pass@host:port/db
             // Redact to: scheme://...@host:port/db
             if let Some(at_pos) = matched.rfind('@') {
@@ -309,7 +307,7 @@ fn redact_db_connection(text: &str, regex: &Regex) -> String {
                     return format!("{}...@{}", scheme, after_at);
                 }
             }
-            
+
             // Fallback: just mask the whole thing
             "[REDACTED_DB_CONNECTION]".to_string()
         })
@@ -325,7 +323,7 @@ mod tests {
         let text = "my api key is sk-1a2b3c4d5e6f7g8h9i0j and keep going";
         let config = RedactionConfig::default();
         let (redacted, warnings) = redact_text(text, &config);
-        
+
         assert!(!redacted.contains("sk-1a2b3c"));
         assert!(redacted.contains("sk-..."));
         assert!(!warnings.is_empty());
@@ -336,7 +334,7 @@ mod tests {
         let text = "AWS key: AKIA1234567890ABCDEF in config";
         let config = RedactionConfig::default();
         let (redacted, warnings) = redact_text(text, &config);
-        
+
         assert!(!redacted.contains("AKIA1234567890"));
         assert!(!warnings.is_empty());
     }
@@ -346,7 +344,7 @@ mod tests {
         let text = "token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
         let config = RedactionConfig::default();
         let (redacted, _) = redact_text(text, &config);
-        
+
         assert!(!redacted.contains("eyJhbGciOiJIUzI1NiI"));
         assert!(redacted.contains("eyJ..."));
     }
@@ -356,7 +354,7 @@ mod tests {
         let text = "DB: mysql://admin:password123@localhost:3306/mydb in code";
         let config = RedactionConfig::default();
         let (redacted, warnings) = redact_text(text, &config);
-        
+
         assert!(!redacted.contains("admin:password123"));
         assert!(redacted.contains("mysql://...@localhost:3306"));
         assert!(!warnings.is_empty());
@@ -367,7 +365,7 @@ mod tests {
         let text = "postgres://user:secret@db.example.com:5432/prod";
         let config = RedactionConfig::default();
         let (redacted, _) = redact_text(text, &config);
-        
+
         assert!(!redacted.contains("user:secret"));
         assert!(redacted.contains("postgres://...@"));
     }
@@ -377,7 +375,7 @@ mod tests {
         let text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9token123456";
         let config = RedactionConfig::default();
         let (redacted, warnings) = redact_text(text, &config);
-        
+
         assert!(!redacted.contains("Bearer eyJhbGciOi"));
         assert!(!warnings.is_empty());
     }
@@ -387,7 +385,7 @@ mod tests {
         let text = "Contact: user@example.com or admin@test.org";
         let config = RedactionConfig::default();
         let (redacted, warnings) = redact_text(text, &config);
-        
+
         assert!(!redacted.contains("user@example.com"));
         assert!(!redacted.contains("admin@test.org"));
         assert!(warnings.len() > 0);
@@ -398,7 +396,7 @@ mod tests {
         let text = "Use api_key=YOUR_API_KEY_HERE in config";
         let config = RedactionConfig::default();
         let (redacted, warnings) = redact_text(text, &config);
-        
+
         // Should NOT redact dummy values
         assert!(redacted.contains("YOUR_API_KEY_HERE"));
         assert!(warnings.is_empty() || !warnings.iter().any(|w| w.pattern_type.contains("API")));
@@ -408,10 +406,10 @@ mod tests {
     fn test_disabled_redaction() {
         let mut config = RedactionConfig::default();
         config.enabled = false;
-        
+
         let text = "secret: sk-1a2b3c4d5e6f";
         let (redacted, warnings) = redact_text(text, &config);
-        
+
         assert_eq!(text, redacted);
         assert!(warnings.is_empty());
     }
@@ -424,7 +422,7 @@ mod tests {
             prefix_length: 3,
             suffix_length: 2,
         };
-        
+
         let masked = mask_pattern("sk-1a2b3c4d5e6f", &config);
         assert!(masked.contains("sk-") || masked.starts_with("sk-"));
         assert!(masked.contains("..."));

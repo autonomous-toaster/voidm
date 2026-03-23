@@ -13,9 +13,9 @@
 
 #[cfg(feature = "gguf")]
 mod benchmark {
+    use dirs::home_dir;
     use std::fs;
     use std::path::PathBuf;
-    use dirs::home_dir;
 
     #[allow(dead_code)]
     const TEST_QUERIES: &[&str] = &[
@@ -79,8 +79,7 @@ mod benchmark {
 
         // Step 1: Find model
         println!("[1/5] Looking for model in cache...");
-        let model_path = find_model()
-            .ok_or_else(|| anyhow::anyhow!("Model not found in cache"))?;
+        let model_path = find_model().ok_or_else(|| anyhow::anyhow!("Model not found in cache"))?;
 
         let file_size_mb = model_path.metadata()?.len() as f64 / (1024.0 * 1024.0);
         println!("      ✅ Model found: {}", model_path.display());
@@ -164,7 +163,14 @@ mod benchmark {
         println!("   Model: qmd-query-expansion-1.7B-q4_k_m.gguf");
         println!("   Size: 1223 MB");
         println!("   Mean latency: {} ms", mean);
-        println!("   Status: {}", if mean < 300 { "✅ PASSES" } else { "⚠️ MARGINAL" });
+        println!(
+            "   Status: {}",
+            if mean < 300 {
+                "✅ PASSES"
+            } else {
+                "⚠️ MARGINAL"
+            }
+        );
 
         println!("\n🔧 Implementation Notes:");
         println!("   This benchmark uses llama-gguf (Rust port of llama.cpp)");
@@ -189,7 +195,10 @@ mod benchmark {
         println!("   4. Decide: integrate or keep ONNX only");
 
         println!("\n🎯 Success Criteria:");
-        println!("   ✅ Latency < 300ms: {}", if mean < 300 { "PASS" } else { "FAIL" });
+        println!(
+            "   ✅ Latency < 300ms: {}",
+            if mean < 300 { "PASS" } else { "FAIL" }
+        );
         println!("   ✅ Output format: lex:/vec:/hyde: (verified)");
         println!("   ✅ Hardware compatible: M3 Metal (verified)");
         println!("   ⏳ Quality assessment: Phase 3");

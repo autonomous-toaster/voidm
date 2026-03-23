@@ -47,11 +47,7 @@ pub fn extract_best_passage(
     match best_match {
         Some((idx, _score)) => {
             // Extract passage with context
-            let passage = extract_passage_with_context(
-                &sentences,
-                idx,
-                config.context_sentences,
-            );
+            let passage = extract_passage_with_context(&sentences, idx, config.context_sentences);
 
             // Ensure minimum length
             if passage.len() >= config.min_passage_length {
@@ -70,9 +66,7 @@ pub fn extract_best_passage(
             }
         }
         None => {
-            tracing::debug!(
-                "Passage extraction: No query match found, using fallback"
-            );
+            tracing::debug!("Passage extraction: No query match found, using fallback");
             truncate_content(content, config.fallback_length)
         }
     }
@@ -192,7 +186,11 @@ mod tests {
             "Machine learning python is great".to_string(),
             "Java programming language".to_string(),
         ];
-        let query_terms = vec!["machine".to_string(), "learning".to_string(), "python".to_string()];
+        let query_terms = vec![
+            "machine".to_string(),
+            "learning".to_string(),
+            "python".to_string(),
+        ];
 
         let result = find_best_match(&sentences, &query_terms);
         assert_eq!(result, Some((1, 3))); // All 3 terms in sentence 1
@@ -200,10 +198,7 @@ mod tests {
 
     #[test]
     fn test_find_best_match_no_match() {
-        let sentences = vec![
-            "Hello world".to_string(),
-            "Good morning".to_string(),
-        ];
+        let sentences = vec!["Hello world".to_string(), "Good morning".to_string()];
         let query_terms = vec!["python".to_string()];
 
         let result = find_best_match(&sentences, &query_terms);

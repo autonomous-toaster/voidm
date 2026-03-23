@@ -9,8 +9,8 @@
 
 use super::translator::QueryTranslator;
 use super::QueryParams;
-use std::collections::HashMap;
 use serde_json::Value;
+use std::collections::HashMap;
 
 pub struct SqliteTranslator;
 
@@ -19,7 +19,10 @@ impl QueryTranslator for SqliteTranslator {
         "sqlite"
     }
 
-    fn translate(&self, op: &super::cypher::CypherOperation) -> Result<(String, QueryParams), String> {
+    fn translate(
+        &self,
+        op: &super::cypher::CypherOperation,
+    ) -> Result<(String, QueryParams), String> {
         match op {
             super::cypher::CypherOperation::MemoryCreate {
                 id,
@@ -32,15 +35,29 @@ impl QueryTranslator for SqliteTranslator {
                 embedding,
                 metadata,
             } => self.translate_memory_create(
-                id, memory_type, content, *importance, tags, scopes, created_at, embedding.as_deref(), metadata.as_deref()
+                id,
+                memory_type,
+                content,
+                *importance,
+                tags,
+                scopes,
+                created_at,
+                embedding.as_deref(),
+                metadata.as_deref(),
             ),
             super::cypher::CypherOperation::MemoryGet { id } => self.translate_memory_get(id),
-            super::cypher::CypherOperation::MemoryList { limit } => self.translate_memory_list(*limit),
-            super::cypher::CypherOperation::MemoryDelete { id } => self.translate_memory_delete(id),
-            super::cypher::CypherOperation::MemoryUpdate { id, content, updated_at } => {
-                self.translate_memory_update(id, content, updated_at)
+            super::cypher::CypherOperation::MemoryList { limit } => {
+                self.translate_memory_list(*limit)
             }
-            super::cypher::CypherOperation::MemoryResolveId { prefix } => self.translate_memory_resolve_id(prefix),
+            super::cypher::CypherOperation::MemoryDelete { id } => self.translate_memory_delete(id),
+            super::cypher::CypherOperation::MemoryUpdate {
+                id,
+                content,
+                updated_at,
+            } => self.translate_memory_update(id, content, updated_at),
+            super::cypher::CypherOperation::MemoryResolveId { prefix } => {
+                self.translate_memory_resolve_id(prefix)
+            }
             super::cypher::CypherOperation::MemoryListScopes => self.translate_list_scopes(),
             super::cypher::CypherOperation::LinkMemories {
                 from_id,
@@ -48,7 +65,9 @@ impl QueryTranslator for SqliteTranslator {
                 to_id,
                 note,
                 created_at,
-            } => self.translate_link_memories(from_id, rel_type, to_id, note.as_deref(), created_at),
+            } => {
+                self.translate_link_memories(from_id, rel_type, to_id, note.as_deref(), created_at)
+            }
             super::cypher::CypherOperation::UnlinkMemories {
                 from_id,
                 rel_type,
@@ -61,19 +80,31 @@ impl QueryTranslator for SqliteTranslator {
                 description,
                 scope,
                 created_at,
-            } => self.translate_concept_create(id, name, description.as_deref(), scope.as_deref(), created_at),
+            } => self.translate_concept_create(
+                id,
+                name,
+                description.as_deref(),
+                scope.as_deref(),
+                created_at,
+            ),
             super::cypher::CypherOperation::ConceptGet { id } => self.translate_concept_get(id),
             super::cypher::CypherOperation::ConceptList { scope, limit } => {
                 self.translate_concept_list(scope.as_deref(), *limit)
             }
-            super::cypher::CypherOperation::ConceptDelete { id } => self.translate_concept_delete(id),
-            super::cypher::CypherOperation::ConceptResolveId { prefix } => self.translate_concept_resolve_id(prefix),
+            super::cypher::CypherOperation::ConceptDelete { id } => {
+                self.translate_concept_delete(id)
+            }
+            super::cypher::CypherOperation::ConceptResolveId { prefix } => {
+                self.translate_concept_resolve_id(prefix)
+            }
             super::cypher::CypherOperation::ConceptSearch {
                 query,
                 scope,
                 limit,
             } => self.translate_concept_search(query, scope.as_deref(), *limit),
-            super::cypher::CypherOperation::ConceptGetWithInstances { id } => self.translate_concept_get_with_instances(id),
+            super::cypher::CypherOperation::ConceptGetWithInstances { id } => {
+                self.translate_concept_get_with_instances(id)
+            }
             super::cypher::CypherOperation::OntologyEdgeCreate {
                 from_id,
                 from_type,
@@ -94,19 +125,41 @@ impl QueryTranslator for SqliteTranslator {
                 rel_type,
                 to_id,
             } => self.translate_ontology_edge_delete(from_id, rel_type, to_id),
-            super::cypher::CypherOperation::ListOntologyEdges => self.translate_list_ontology_edges(),
+            super::cypher::CypherOperation::ListOntologyEdges => {
+                self.translate_list_ontology_edges()
+            }
             super::cypher::CypherOperation::SearchHybrid {
                 query,
                 limit,
                 min_score,
                 scopes,
                 embedding,
-            } => self.translate_search_hybrid(query, *limit, *min_score, scopes, embedding.as_deref()),
-            super::cypher::CypherOperation::SearchHybridRRF { query, limit, min_score, scopes, embedding } => {
-                self.translate_search_hybrid_rrf(query, *limit, *min_score, scopes, embedding.as_deref())
-            },
-            super::cypher::CypherOperation::QueryCypher { query, params } => self.translate_query_cypher(query, params),
-            super::cypher::CypherOperation::GetNeighbors { id, depth } => self.translate_get_neighbors(id, *depth),
+            } => self.translate_search_hybrid(
+                query,
+                *limit,
+                *min_score,
+                scopes,
+                embedding.as_deref(),
+            ),
+            super::cypher::CypherOperation::SearchHybridRRF {
+                query,
+                limit,
+                min_score,
+                scopes,
+                embedding,
+            } => self.translate_search_hybrid_rrf(
+                query,
+                *limit,
+                *min_score,
+                scopes,
+                embedding.as_deref(),
+            ),
+            super::cypher::CypherOperation::QueryCypher { query, params } => {
+                self.translate_query_cypher(query, params)
+            }
+            super::cypher::CypherOperation::GetNeighbors { id, depth } => {
+                self.translate_get_neighbors(id, *depth)
+            }
         }
     }
 
@@ -137,7 +190,8 @@ impl QueryTranslator for SqliteTranslator {
         let sql = r#"
             INSERT INTO memories (id, type, content, importance, tags, scopes, created_at, metadata)
             VALUES ($id, $type, $content, $importance, $tags, $scopes, $created_at, $metadata)
-        "#.to_string();
+        "#
+        .to_string();
 
         Ok((sql, params))
     }
@@ -171,7 +225,8 @@ impl QueryTranslator for SqliteTranslator {
             .with_param("id", id)
             .with_param("content", content)
             .with_param("updated_at", updated_at);
-        let sql = "UPDATE memories SET content = $content, updated_at = $updated_at WHERE id = $id".to_string();
+        let sql = "UPDATE memories SET content = $content, updated_at = $updated_at WHERE id = $id"
+            .to_string();
         Ok((sql, params))
     }
 
@@ -190,7 +245,8 @@ impl QueryTranslator for SqliteTranslator {
             json_each(memories.scopes) as scopes_json
             WHERE scope IS NOT NULL
             ORDER BY scope
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -213,7 +269,8 @@ impl QueryTranslator for SqliteTranslator {
         let sql = r#"
             INSERT INTO memory_edges (from_id, to_id, rel_type, note, created_at)
             VALUES ($from_id, $to_id, $rel_type, $note, $created_at)
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -230,7 +287,8 @@ impl QueryTranslator for SqliteTranslator {
         let sql = r#"
             DELETE FROM memory_edges
             WHERE from_id = $from_id AND to_id = $to_id AND rel_type = $rel_type
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -259,7 +317,8 @@ impl QueryTranslator for SqliteTranslator {
         let sql = r#"
             INSERT INTO ontology_concepts (id, name, description, scope, created_at)
             VALUES ($id, $name, $description, $scope, $created_at)
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -281,7 +340,8 @@ impl QueryTranslator for SqliteTranslator {
             SELECT * FROM ontology_concepts
             WHERE scope IS NULL OR scope = $scope
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -312,11 +372,15 @@ impl QueryTranslator for SqliteTranslator {
             WHERE (name LIKE $query OR description LIKE $query)
               AND (scope IS NULL OR scope = $scope)
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
-    fn translate_concept_get_with_instances(&self, id: &str) -> Result<(String, QueryParams), String> {
+    fn translate_concept_get_with_instances(
+        &self,
+        id: &str,
+    ) -> Result<(String, QueryParams), String> {
         let params = QueryParams::new().with_param("id", id);
         // This is a complex operation requiring JOINs
         let sql = r#"
@@ -351,7 +415,8 @@ impl QueryTranslator for SqliteTranslator {
         let sql = r#"
             INSERT INTO ontology_edges (from_id, from_type, rel_type, to_id, to_type, note)
             VALUES ($from_id, $from_type, $rel_type, $to_id, $to_type, $note)
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -368,13 +433,15 @@ impl QueryTranslator for SqliteTranslator {
         let sql = r#"
             DELETE FROM ontology_edges
             WHERE from_id = $from_id AND rel_type = $rel_type AND to_id = $to_id
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
     fn translate_list_ontology_edges(&self) -> Result<(String, QueryParams), String> {
         let params = QueryParams::new();
-        let sql = "SELECT from_id, from_type, to_id, to_type, rel_type, note FROM ontology_edges".to_string();
+        let sql = "SELECT from_id, from_type, to_id, to_type, rel_type, note FROM ontology_edges"
+            .to_string();
         Ok((sql, params))
     }
 
@@ -402,7 +469,8 @@ impl QueryTranslator for SqliteTranslator {
             SELECT m.* FROM memories m
             WHERE m.content MATCH $query
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -426,7 +494,8 @@ impl QueryTranslator for SqliteTranslator {
             SELECT m.* FROM memories m
             WHERE m.content MATCH $query
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 
@@ -440,11 +509,15 @@ impl QueryTranslator for SqliteTranslator {
         Err("Cypher queries not supported on SQLite backend".to_string())
     }
 
-    fn translate_get_neighbors(&self, id: &str, depth: usize) -> Result<(String, QueryParams), String> {
+    fn translate_get_neighbors(
+        &self,
+        id: &str,
+        depth: usize,
+    ) -> Result<(String, QueryParams), String> {
         let params = QueryParams::new()
             .with_param("id", id)
             .with_param("depth", depth as i32);
-        
+
         // SQLite doesn't have native recursive WITH support for graphs
         // This is a simplified version; full implementation would need CTE
         let sql = r#"
@@ -455,7 +528,8 @@ impl QueryTranslator for SqliteTranslator {
               WHERE from_id = neighbors.node_id AND current_depth < $depth
             )
             SELECT DISTINCT node_id FROM neighbors
-        "#.to_string();
+        "#
+        .to_string();
         Ok((sql, params))
     }
 }
@@ -476,13 +550,9 @@ mod tests {
     #[test]
     fn test_sqlite_translator_concept_create() {
         let translator = SqliteTranslator;
-        let (query, params) = translator.translate_concept_create(
-            "id1",
-            "test",
-            Some("desc"),
-            None,
-            "2026-03-15"
-        ).unwrap();
+        let (query, params) = translator
+            .translate_concept_create("id1", "test", Some("desc"), None, "2026-03-15")
+            .unwrap();
         assert!(query.contains("INSERT"));
         assert!(query.contains("ontology_concepts"));
         assert!(params.get("name").is_some());

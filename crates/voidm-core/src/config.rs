@@ -23,20 +23,20 @@ pub struct DatabaseConfig {
     /// Database backend: "sqlite" or "neo4j" (default: "sqlite")
     #[serde(default = "default_backend")]
     pub backend: String,
-    
+
     /// SQLite configuration (used when backend = "sqlite")
     #[serde(default)]
     pub sqlite: Option<SqliteConfig>,
-    
+
     /// Path to SQLite database file - DEPRECATED, use [database.sqlite].path instead
     /// This is kept for backward compatibility
     #[serde(default = "default_sqlite_path")]
     pub sqlite_path: String,
-    
+
     /// Neo4j connection parameters (used when backend = "neo4j")
     #[serde(default)]
     pub neo4j: Option<Neo4jConfig>,
-    
+
     /// Legacy field for backward compatibility
     pub path: Option<String>,
 }
@@ -55,10 +55,74 @@ fn default_backend() -> String {
 }
 
 fn default_sqlite_path() -> String {
-    let mut path = dirs::data_local_dir().expect("Cannot find data directory");
-    path.push("voidm");
-    path.push("memories.db");
-    path.to_string_lossy().to_string()
+    platform_default_db_path().to_string_lossy().to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DbPathSource {
+    CliDbFlag,
+    EnvDb,
+    CliSqlitePath,
+    EnvSqlitePath,
+    ConfigFile,
+    ConfigObject,
+    CodexSandboxDefault,
+    PlatformDefault,
+}
+
+impl DbPathSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::CliDbFlag => "--db flag",
+            Self::EnvDb => "$VOIDM_DB",
+            Self::CliSqlitePath => "--database-sqlite-path",
+            Self::EnvSqlitePath => "$VOIDM_DATABASE_SQLITE_PATH",
+            Self::ConfigFile => "config file",
+            Self::ConfigObject => "resolved config override",
+            Self::CodexSandboxDefault => "default (Codex sandbox writable path)",
+            Self::PlatformDefault => "default (platform data dir)",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbPathResolution {
+    pub path: PathBuf,
+    pub source: DbPathSource,
+}
+
+pub fn platform_default_db_path() -> PathBuf {
+    if let Some(mut path) = dirs::data_local_dir() {
+        path.push("voidm");
+        path.push("memories.db");
+        return path;
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        return home.join(".local/share/voidm/memories.db");
+    }
+
+    PathBuf::from(".voidm/memories.db")
+}
+
+pub fn is_codex_sandbox_active() -> bool {
+    std::env::var("CODEX_SANDBOX")
+        .map(|value| !value.is_empty())
+        .unwrap_or(false)
+}
+
+pub fn codex_sandbox_db_path() -> PathBuf {
+    if let Some(home) = dirs::home_dir() {
+        return home.join(".codex/memories/voidm/memories.db");
+    }
+
+    if let Ok(tmpdir) = std::env::var("TMPDIR") {
+        if !tmpdir.is_empty() {
+            return PathBuf::from(tmpdir).join("voidm/memories.db");
+        }
+    }
+
+    PathBuf::from("/tmp/voidm/memories.db")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,11 +130,11 @@ pub struct Neo4jConfig {
     /// Neo4j Bolt URI (default: bolt://localhost:7687)
     #[serde(default = "default_neo4j_uri")]
     pub uri: String,
-    
+
     /// Neo4j username (default: "neo4j")
     #[serde(default = "default_neo4j_user")]
     pub username: String,
-    
+
     /// Neo4j password (default: "password")
     #[serde(default = "default_neo4j_password")]
     pub password: String,
@@ -370,47 +434,72 @@ impl Config {
         Config::default()
     }
 
-    /// Resolve the DB path: --db flag > $VOIDM_DB > config > XDG > ~/.local/share > ~/.voidm
+    /// Resolve the DB path with source tracking.
+    /// Precedence: --db > $VOIDM_DB > explicit sqlite-path override > $VOIDM_DATABASE_SQLITE_PATH
+    /// > explicit config file path > explicit in-memory config path > sandbox default > platform default
+    pub fn resolve_db_path(
+        &self,
+        override_path: Option<&str>,
+        sqlite_path_override: Option<&str>,
+    ) -> DbPathResolution {
+        if let Some(path) = non_empty_arg(override_path) {
+            return DbPathResolution {
+                path: PathBuf::from(path),
+                source: DbPathSource::CliDbFlag,
+            };
+        }
+
+        if let Some(path) = non_empty_env("VOIDM_DB") {
+            return DbPathResolution {
+                path: PathBuf::from(path),
+                source: DbPathSource::EnvDb,
+            };
+        }
+
+        if let Some(path) = non_empty_arg(sqlite_path_override) {
+            return DbPathResolution {
+                path: PathBuf::from(shellexpand(path)),
+                source: DbPathSource::CliSqlitePath,
+            };
+        }
+
+        if let Some(path) = non_empty_env("VOIDM_DATABASE_SQLITE_PATH") {
+            return DbPathResolution {
+                path: PathBuf::from(shellexpand(&path)),
+                source: DbPathSource::EnvSqlitePath,
+            };
+        }
+
+        if let Some(path) = explicit_config_db_path_from_file() {
+            return DbPathResolution {
+                path,
+                source: DbPathSource::ConfigFile,
+            };
+        }
+
+        if let Some(path) = explicit_config_db_path_from_object(self) {
+            return DbPathResolution {
+                path,
+                source: DbPathSource::ConfigObject,
+            };
+        }
+
+        if is_codex_sandbox_active() {
+            return DbPathResolution {
+                path: codex_sandbox_db_path(),
+                source: DbPathSource::CodexSandboxDefault,
+            };
+        }
+
+        DbPathResolution {
+            path: platform_default_db_path(),
+            source: DbPathSource::PlatformDefault,
+        }
+    }
+
+    /// Resolve the DB path: --db flag > $VOIDM_DB > config > defaults
     pub fn db_path(&self, override_path: Option<&str>) -> PathBuf {
-        if let Some(p) = override_path {
-            return PathBuf::from(p);
-        }
-        if let Ok(p) = std::env::var("VOIDM_DB") {
-            if !p.is_empty() {
-                return PathBuf::from(p);
-            }
-        }
-        // Check new [database.sqlite].path field first
-        if let Some(sqlite_config) = &self.database.sqlite {
-            if let Some(p) = &sqlite_config.path {
-                if !p.is_empty() {
-                    return PathBuf::from(shellexpand(p));
-                }
-            }
-        }
-        // Legacy sqlite_path field for backward compatibility
-        if !self.database.sqlite_path.is_empty() {
-            return PathBuf::from(shellexpand(&self.database.sqlite_path));
-        }
-        // Legacy path field for backward compatibility
-        if let Some(p) = &self.database.path {
-            if !p.is_empty() {
-                return PathBuf::from(shellexpand(p));
-            }
-        }
-        // XDG_DATA_HOME
-        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-            if !xdg.is_empty() {
-                return PathBuf::from(xdg).join("voidm/memories.db");
-            }
-        }
-        // ~/.local/share/voidm/memories.db
-        if let Some(home) = dirs::home_dir() {
-            let p = home.join(".local/share/voidm/memories.db");
-            return p;
-        }
-        // Fallback
-        PathBuf::from(".voidm/memories.db")
+        self.resolve_db_path(override_path, None).path
     }
 }
 
@@ -448,6 +537,81 @@ pub fn save_config(config: &Config) -> Result<()> {
     let s = toml::to_string_pretty(config)?;
     std::fs::write(&path, s)?;
     Ok(())
+}
+
+fn non_empty_arg(value: Option<&str>) -> Option<&str> {
+    value.and_then(|item| if item.is_empty() { None } else { Some(item) })
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn explicit_config_db_path_from_file() -> Option<PathBuf> {
+    let path = config_path()?;
+    let contents = std::fs::read_to_string(path).ok()?;
+    let value: toml::Value = toml::from_str(&contents).ok()?;
+    let database = value.get("database")?;
+
+    if let Some(path) = database
+        .get("sqlite")
+        .and_then(|sqlite| sqlite.get("path"))
+        .and_then(non_empty_toml_str)
+    {
+        return Some(PathBuf::from(shellexpand(path)));
+    }
+
+    if let Some(path) = database.get("sqlite_path").and_then(non_empty_toml_str) {
+        return Some(PathBuf::from(shellexpand(path)));
+    }
+
+    if let Some(path) = database.get("path").and_then(non_empty_toml_str) {
+        return Some(PathBuf::from(shellexpand(path)));
+    }
+
+    None
+}
+
+fn explicit_config_db_path_from_object(config: &Config) -> Option<PathBuf> {
+    let platform_default = platform_default_db_path();
+
+    if let Some(path) = config
+        .database
+        .sqlite
+        .as_ref()
+        .and_then(|sqlite| sqlite.path.as_deref())
+        .filter(|path| !path.is_empty())
+    {
+        let expanded = PathBuf::from(shellexpand(path));
+        if expanded != platform_default {
+            return Some(expanded);
+        }
+    }
+
+    if !config.database.sqlite_path.is_empty() {
+        let expanded = PathBuf::from(shellexpand(&config.database.sqlite_path));
+        if expanded != platform_default {
+            return Some(expanded);
+        }
+    }
+
+    if let Some(path) = config
+        .database
+        .path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+    {
+        return Some(PathBuf::from(shellexpand(path)));
+    }
+
+    None
+}
+
+fn non_empty_toml_str(value: &toml::Value) -> Option<&str> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 // ─── Configuration Merging from Environment Variables ───
@@ -603,6 +767,59 @@ impl crate::config_loader::MergeFromEnv for Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved: Vec<(String, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn set(pairs: &[(&str, Option<&str>)]) -> Self {
+            let lock = env_lock().lock().expect("env lock");
+            let mut saved = Vec::with_capacity(pairs.len());
+
+            for (key, value) in pairs {
+                saved.push(((*key).to_string(), std::env::var(key).ok()));
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+
+            Self { _lock: lock, saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
+
+    fn unique_test_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("voidm-{label}-{}-{nanos}", std::process::id()))
+    }
 
     #[test]
     fn test_parse_neo4j_config() {
@@ -612,9 +829,12 @@ uri = "bolt://localhost:7687"
 username = "neo4j"
 password = "neo4jneo4j"
 "#;
-        
+
         let config: Config = toml::from_str(toml_str).expect("Failed to parse");
-        assert!(config.database.neo4j.is_some(), "neo4j config should be parsed");
+        assert!(
+            config.database.neo4j.is_some(),
+            "neo4j config should be parsed"
+        );
         if let Some(nc) = &config.database.neo4j {
             assert_eq!(nc.uri, "bolt://localhost:7687");
             assert_eq!(nc.username, "neo4j");
@@ -636,18 +856,21 @@ uri = "bolt://localhost:7687"
 username = "neo4j"
 password = "neo4jneo4j"
 "#;
-        
+
         let config: Config = toml::from_str(toml_str).expect("Failed to parse");
-        
+
         // Verify backend selection
         assert_eq!(config.database.backend, "sqlite");
-        
+
         // Verify SQLite config is present
         assert!(config.database.sqlite.is_some());
         if let Some(sqlite) = &config.database.sqlite {
-            assert_eq!(sqlite.path, Some("~/.local/share/voidm/memories.db".to_string()));
+            assert_eq!(
+                sqlite.path,
+                Some("~/.local/share/voidm/memories.db".to_string())
+            );
         }
-        
+
         // Verify Neo4j config is present
         assert!(config.database.neo4j.is_some());
         if let Some(neo4j) = &config.database.neo4j {
@@ -670,12 +893,12 @@ uri = "bolt://localhost:7687"
 username = "neo4j"
 password = "neo4jneo4j"
 "#;
-        
+
         let config: Config = toml::from_str(toml_str).expect("Failed to parse");
-        
+
         // Verify backend is switched to neo4j
         assert_eq!(config.database.backend, "neo4j");
-        
+
         // Both are still configured
         assert!(config.database.sqlite.is_some());
         assert!(config.database.neo4j.is_some());
@@ -694,7 +917,10 @@ default_neighbor_depth = 1
 default_edge_types = ["PART_OF", "SUPPORTS"]
 "#;
         let config: Config = toml::from_str(toml_str).expect("Failed to parse");
-        assert!(config.search.reranker.is_none(), "reranker should be absent by default");
+        assert!(
+            config.search.reranker.is_none(),
+            "reranker should be absent by default"
+        );
     }
 
     #[test]
@@ -715,7 +941,10 @@ model = "bge-reranker-base"
 apply_to_top_k = 15
 "#;
         let config: Config = toml::from_str(toml_str).expect("Failed to parse");
-        assert!(config.search.reranker.is_some(), "reranker config should be parsed");
+        assert!(
+            config.search.reranker.is_some(),
+            "reranker config should be parsed"
+        );
         if let Some(r) = &config.search.reranker {
             assert_eq!(r.enabled, true);
             assert_eq!(r.model, "bge-reranker-base");
@@ -741,7 +970,10 @@ enabled = true
         let config: Config = toml::from_str(toml_str).expect("Failed to parse");
         if let Some(r) = &config.search.reranker {
             assert_eq!(r.enabled, true);
-            assert_eq!(r.model, "ms-marco-MiniLM-L-6-v2", "should use default model");
+            assert_eq!(
+                r.model, "ms-marco-MiniLM-L-6-v2",
+                "should use default model"
+            );
             assert_eq!(r.apply_to_top_k, 15, "should use default top_k");
         }
     }
@@ -754,5 +986,89 @@ enabled = true
         let config = Config::default();
         let _merged = config.merge_from_env();
         // If this compiles, the trait is properly implemented
+    }
+
+    #[test]
+    fn test_resolve_db_path_uses_codex_sandbox_default_for_implicit_path() {
+        let temp_config_home = unique_test_dir("sandbox-default");
+        std::fs::create_dir_all(&temp_config_home).expect("create temp config dir");
+
+        let _env = EnvGuard::set(&[
+            ("CODEX_SANDBOX", Some("seatbelt")),
+            ("VOIDM_DB", None),
+            ("VOIDM_DATABASE_SQLITE_PATH", None),
+            (
+                "XDG_CONFIG_HOME",
+                Some(temp_config_home.to_string_lossy().as_ref()),
+            ),
+        ]);
+
+        let resolution = Config::default().resolve_db_path(None, None);
+
+        assert_eq!(resolution.source, DbPathSource::CodexSandboxDefault);
+        assert!(resolution
+            .path
+            .ends_with(Path::new(".codex/memories/voidm/memories.db")));
+
+        let _ = std::fs::remove_dir_all(&temp_config_home);
+    }
+
+    #[test]
+    fn test_resolve_db_path_honors_env_sqlite_path_before_sandbox_default() {
+        let temp_config_home = unique_test_dir("sandbox-env");
+        std::fs::create_dir_all(&temp_config_home).expect("create temp config dir");
+
+        let _env = EnvGuard::set(&[
+            ("CODEX_SANDBOX", Some("seatbelt")),
+            ("VOIDM_DB", None),
+            (
+                "VOIDM_DATABASE_SQLITE_PATH",
+                Some("/tmp/voidm-env-override.db"),
+            ),
+            (
+                "XDG_CONFIG_HOME",
+                Some(temp_config_home.to_string_lossy().as_ref()),
+            ),
+        ]);
+
+        let resolution = Config::default().resolve_db_path(None, None);
+
+        assert_eq!(resolution.source, DbPathSource::EnvSqlitePath);
+        assert_eq!(resolution.path, PathBuf::from("/tmp/voidm-env-override.db"));
+
+        let _ = std::fs::remove_dir_all(&temp_config_home);
+    }
+
+    #[test]
+    fn test_resolve_db_path_honors_explicit_config_file_even_if_it_matches_platform_default() {
+        let temp_config_home = unique_test_dir("sandbox-config");
+        let voidm_config_dir = temp_config_home.join("voidm");
+        std::fs::create_dir_all(&voidm_config_dir).expect("create config dir");
+
+        let platform_default = platform_default_db_path();
+        let config_contents = format!(
+            "[database.sqlite]\npath = {:?}\n",
+            platform_default.to_string_lossy()
+        );
+        std::fs::write(voidm_config_dir.join("config.toml"), config_contents)
+            .expect("write config");
+
+        let _env = EnvGuard::set(&[
+            ("CODEX_SANDBOX", Some("seatbelt")),
+            ("VOIDM_DB", None),
+            ("VOIDM_DATABASE_SQLITE_PATH", None),
+            (
+                "XDG_CONFIG_HOME",
+                Some(temp_config_home.to_string_lossy().as_ref()),
+            ),
+        ]);
+
+        let config = Config::load();
+        let resolution = config.resolve_db_path(None, None);
+
+        assert_eq!(resolution.source, DbPathSource::ConfigFile);
+        assert_eq!(resolution.path, platform_default);
+
+        let _ = std::fs::remove_dir_all(&temp_config_home);
     }
 }

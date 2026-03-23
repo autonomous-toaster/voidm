@@ -18,7 +18,11 @@ fn init_embedder(model_name: &str) -> Result<fastembed::TextEmbedding> {
     let model = model_from_name(model_name)?;
     let cache_dir = embedding_cache_dir();
 
-    tracing::info!("Loading embedding model {} from {}", model_name, cache_dir.display());
+    tracing::info!(
+        "Loading embedding model {} from {}",
+        model_name,
+        cache_dir.display()
+    );
 
     let opts = InitOptions::new(model)
         .with_cache_dir(cache_dir)
@@ -71,19 +75,49 @@ pub fn embed_text(model_name: &str, text: &str) -> Result<Vec<f32>> {
 pub fn embed_batch(model_name: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
     let embedder_lock = get_embedder(model_name)?;
     let mut embedder = embedder_lock.lock().unwrap();
-    embedder.embed(texts.to_vec(), None).context("Batch embedding failed")
+    embedder
+        .embed(texts.to_vec(), None)
+        .context("Batch embedding failed")
 }
 
 /// List available models.
 pub fn list_models() -> Vec<ModelInfo> {
     vec![
-        ModelInfo { name: "Xenova/all-MiniLM-L6-v2".into(), dims: 384, description: "Fast, compact. Default.".into() },
-        ModelInfo { name: "BAAI/bge-small-en-v1.5".into(), dims: 384, description: "BGE small, English.".into() },
-        ModelInfo { name: "BAAI/bge-base-en-v1.5".into(), dims: 768, description: "BGE base, English.".into() },
-        ModelInfo { name: "BAAI/bge-large-en-v1.5".into(), dims: 1024, description: "BGE large, English.".into() },
-        ModelInfo { name: "nomic-embed-text-v1.5".into(), dims: 768, description: "Nomic, long context.".into() },
-        ModelInfo { name: "mxbai-embed-large-v1".into(), dims: 1024, description: "MxBAI large, best quality.".into() },
-        ModelInfo { name: "multilingual-e5-base".into(), dims: 768, description: "Multilingual.".into() },
+        ModelInfo {
+            name: "Xenova/all-MiniLM-L6-v2".into(),
+            dims: 384,
+            description: "Fast, compact. Default.".into(),
+        },
+        ModelInfo {
+            name: "BAAI/bge-small-en-v1.5".into(),
+            dims: 384,
+            description: "BGE small, English.".into(),
+        },
+        ModelInfo {
+            name: "BAAI/bge-base-en-v1.5".into(),
+            dims: 768,
+            description: "BGE base, English.".into(),
+        },
+        ModelInfo {
+            name: "BAAI/bge-large-en-v1.5".into(),
+            dims: 1024,
+            description: "BGE large, English.".into(),
+        },
+        ModelInfo {
+            name: "nomic-embed-text-v1.5".into(),
+            dims: 768,
+            description: "Nomic, long context.".into(),
+        },
+        ModelInfo {
+            name: "mxbai-embed-large-v1".into(),
+            dims: 1024,
+            description: "MxBAI large, best quality.".into(),
+        },
+        ModelInfo {
+            name: "multilingual-e5-base".into(),
+            dims: 768,
+            description: "Multilingual.".into(),
+        },
     ]
 }
 

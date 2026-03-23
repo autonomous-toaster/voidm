@@ -14,7 +14,7 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
 async fn upgrade_add_quality_score(pool: &SqlitePool) -> Result<()> {
     // Check if quality_score column already exists
     let column_exists: (bool,) = sqlx::query_as(
-        "SELECT COUNT(*) > 0 FROM pragma_table_info('memories') WHERE name = 'quality_score'"
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('memories') WHERE name = 'quality_score'",
     )
     .fetch_one(pool)
     .await?;
@@ -23,9 +23,11 @@ async fn upgrade_add_quality_score(pool: &SqlitePool) -> Result<()> {
         sqlx::query("ALTER TABLE memories ADD COLUMN quality_score REAL")
             .execute(pool)
             .await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_quality_score ON memories(quality_score DESC)")
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_memories_quality_score ON memories(quality_score DESC)",
+        )
+        .execute(pool)
+        .await?;
     }
 
     Ok(())
@@ -49,6 +51,14 @@ CREATE INDEX IF NOT EXISTS idx_memories_type          ON memories(type);
 CREATE INDEX IF NOT EXISTS idx_memories_created_at    ON memories(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_importance    ON memories(importance DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_quality_score ON memories(quality_score DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_learning_tip_version
+    ON memories(json_extract(metadata, '$.learning_tip.version'));
+CREATE INDEX IF NOT EXISTS idx_memories_learning_tip_category
+    ON memories(json_extract(metadata, '$.learning_tip.category'));
+CREATE INDEX IF NOT EXISTS idx_memories_learning_tip_task_category
+    ON memories(json_extract(metadata, '$.learning_tip.task_category'));
+CREATE INDEX IF NOT EXISTS idx_memories_learning_tip_source_outcome
+    ON memories(json_extract(metadata, '$.learning_tip.source_outcome'));
 
 -- Full-text search virtual table for BM25
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(

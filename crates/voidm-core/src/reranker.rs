@@ -37,12 +37,17 @@ impl CrossEncoderReranker {
         let (onnx_path, tokenizer_path) = ensure_model_files(model_name).await?;
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
-        
+
         let session = Session::builder()
             .context("Failed to create ort session builder")?
             .commit_from_file(&onnx_path)
-            .with_context(|| format!("Failed to load reranker ONNX model from {}", onnx_path.display()))?;
-        
+            .with_context(|| {
+                format!(
+                    "Failed to load reranker ONNX model from {}",
+                    onnx_path.display()
+                )
+            })?;
+
         Ok(Self {
             model_name: model_name.to_string(),
             session: Mutex::new(session),
@@ -52,7 +57,8 @@ impl CrossEncoderReranker {
 
     /// Score a single (query, document) pair. Returns [0,1] relevance score.
     pub fn score(&self, query: &str, document: &str) -> Result<f32> {
-        let encoding = self.tokenizer
+        let encoding = self
+            .tokenizer
             .encode((query, document), true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
@@ -69,7 +75,7 @@ impl CrossEncoderReranker {
             .iter()
             .map(|&x| x as i64)
             .collect();
-        
+
         // Get token_type_ids if available, else construct manually
         let token_type_ids: Option<Vec<i64>> = {
             let ttids = encoding.get_type_ids();
@@ -78,69 +84,81 @@ impl CrossEncoderReranker {
             } else {
                 // Default: query part (including [SEP]) = 0, document part = 1
                 // Find [SEP] token (id=102 in BERT-like models)
-                let sep_idx = input_ids.iter().position(|&id| id == 102).unwrap_or(input_ids.len() / 2);
-                Some((0..input_ids.len())
-                    .map(|i| if i <= sep_idx { 0i64 } else { 1i64 })
-                    .collect())
+                let sep_idx = input_ids
+                    .iter()
+                    .position(|&id| id == 102)
+                    .unwrap_or(input_ids.len() / 2);
+                Some(
+                    (0..input_ids.len())
+                        .map(|i| if i <= sep_idx { 0i64 } else { 1i64 })
+                        .collect(),
+                )
             }
         };
-        
+
         let seq_len = input_ids.len();
 
         let logit = {
             let mut session_lock = self.session.lock().unwrap();
-            
+
             // Check which inputs the model expects
             let input_names: Vec<&str> = session_lock.inputs().iter().map(|i| i.name()).collect();
             let has_token_type_ids = input_names.iter().any(|&name| name == "token_type_ids");
 
             let outputs = if has_token_type_ids && token_type_ids.is_some() {
                 // Try with token_type_ids (ms-marco models)
-                let ids_tensor = Tensor::<i64>::from_array(
-                    ([1usize, seq_len], input_ids.into_boxed_slice())
-                ).context("Failed to create input_ids tensor")?;
+                let ids_tensor =
+                    Tensor::<i64>::from_array(([1usize, seq_len], input_ids.into_boxed_slice()))
+                        .context("Failed to create input_ids tensor")?;
 
-                let mask_tensor = Tensor::<i64>::from_array(
-                    ([1usize, seq_len], attention_mask.into_boxed_slice())
-                ).context("Failed to create attention_mask tensor")?;
+                let mask_tensor = Tensor::<i64>::from_array((
+                    [1usize, seq_len],
+                    attention_mask.into_boxed_slice(),
+                ))
+                .context("Failed to create attention_mask tensor")?;
 
-                let ttid_tensor = Tensor::<i64>::from_array(
-                    ([1usize, seq_len], token_type_ids.unwrap().into_boxed_slice())
-                ).context("Failed to create token_type_ids tensor")?;
-                
-                session_lock.run(
-                    ort::inputs![
+                let ttid_tensor = Tensor::<i64>::from_array((
+                    [1usize, seq_len],
+                    token_type_ids.unwrap().into_boxed_slice(),
+                ))
+                .context("Failed to create token_type_ids tensor")?;
+
+                session_lock
+                    .run(ort::inputs![
                         "input_ids"      => ids_tensor,
                         "attention_mask" => mask_tensor,
                         "token_type_ids" => ttid_tensor
-                    ]
-                ).context("Reranker inference failed with token_type_ids")?
+                    ])
+                    .context("Reranker inference failed with token_type_ids")?
             } else {
                 // Fall back to inference without token_type_ids (bge models)
-                let ids_tensor = Tensor::<i64>::from_array(
-                    ([1usize, seq_len], input_ids.into_boxed_slice())
-                ).context("Failed to create input_ids tensor")?;
+                let ids_tensor =
+                    Tensor::<i64>::from_array(([1usize, seq_len], input_ids.into_boxed_slice()))
+                        .context("Failed to create input_ids tensor")?;
 
-                let mask_tensor = Tensor::<i64>::from_array(
-                    ([1usize, seq_len], attention_mask.into_boxed_slice())
-                ).context("Failed to create attention_mask tensor")?;
+                let mask_tensor = Tensor::<i64>::from_array((
+                    [1usize, seq_len],
+                    attention_mask.into_boxed_slice(),
+                ))
+                .context("Failed to create attention_mask tensor")?;
 
-                session_lock.run(
-                    ort::inputs![
+                session_lock
+                    .run(ort::inputs![
                         "input_ids"      => ids_tensor,
                         "attention_mask" => mask_tensor
-                    ]
-                ).context("Reranker inference failed without token_type_ids")?
+                    ])
+                    .context("Reranker inference failed without token_type_ids")?
             };
 
             // Extract logit value [1,1] and sigmoid it
-            let logits_value = outputs.get("logits")
+            let logits_value = outputs
+                .get("logits")
                 .context("No 'logits' output from reranker model")?;
             let logits_tensor = logits_value
                 .try_extract_tensor::<f32>()
                 .context("Failed to extract logits as f32 tensor")?;
             let (_shape, logits_raw) = logits_tensor;
-            
+
             if logits_raw.is_empty() {
                 anyhow::bail!("No logits returned from reranker");
             }
@@ -162,18 +180,17 @@ impl CrossEncoderReranker {
 
         // Batch tokenization: encode all (query, document) pairs at once
         let batch_size = documents.len();
-        let query_doc_pairs: Vec<(&str, &str)> = documents
-            .iter()
-            .map(|doc| (query, *doc))
-            .collect();
+        let query_doc_pairs: Vec<(&str, &str)> =
+            documents.iter().map(|doc| (query, *doc)).collect();
 
-        let encodings = self.tokenizer
+        let encodings = self
+            .tokenizer
             .encode_batch(query_doc_pairs, true)
             .map_err(|e| anyhow::anyhow!("Batch tokenization failed: {}", e))?;
 
         // Prepare batch tensors with consistent sequence length
         const MAX_SEQ_LEN: usize = 512;
-        
+
         let mut all_input_ids: Vec<i64> = Vec::new();
         let mut all_attention_masks: Vec<i64> = Vec::new();
         let mut all_token_type_ids: Vec<i64> = Vec::new();
@@ -188,31 +205,23 @@ impl CrossEncoderReranker {
         // Second pass: pad and collect batch data
         for encoding in &encodings {
             let actual_len = encoding.len().min(MAX_SEQ_LEN);
-            
+
             // Collect input_ids and pad to seq_len_max
-            all_input_ids.extend(
-                encoding.get_ids()[..actual_len]
-                    .iter()
-                    .map(|&x| x as i64)
-            );
+            all_input_ids.extend(encoding.get_ids()[..actual_len].iter().map(|&x| x as i64));
             all_input_ids.extend(std::iter::repeat(0i64).take(seq_len_max - actual_len));
 
             // Collect attention_mask and pad to seq_len_max
             all_attention_masks.extend(
                 encoding.get_attention_mask()[..actual_len]
                     .iter()
-                    .map(|&x| x as i64)
+                    .map(|&x| x as i64),
             );
             all_attention_masks.extend(std::iter::repeat(0i64).take(seq_len_max - actual_len));
 
             // Collect token_type_ids (with fallback construction)
             let ttids = encoding.get_type_ids();
             if !ttids.is_empty() && ttids.len() >= actual_len {
-                all_token_type_ids.extend(
-                    ttids[..actual_len]
-                        .iter()
-                        .map(|&x| x as i64)
-                );
+                all_token_type_ids.extend(ttids[..actual_len].iter().map(|&x| x as i64));
             } else {
                 // Construct token_type_ids: query part = 0, document part = 1
                 // Find [SEP] token (id=102 in BERT-like models)
@@ -221,11 +230,14 @@ impl CrossEncoderReranker {
                     .iter()
                     .position(|&id| id == 102)
                     .unwrap_or(actual_len / 2);
-                
-                all_token_type_ids.extend(
-                    (0..actual_len)
-                        .map(|i| if i <= sep_idx { 0i64 } else { 1i64 })
-                );
+
+                all_token_type_ids.extend((0..actual_len).map(|i| {
+                    if i <= sep_idx {
+                        0i64
+                    } else {
+                        1i64
+                    }
+                }));
             }
             all_token_type_ids.extend(std::iter::repeat(0i64).take(seq_len_max - actual_len));
         }
@@ -233,60 +245,75 @@ impl CrossEncoderReranker {
         // Run batch inference
         let logits = {
             let mut session_lock = self.session.lock().unwrap();
-            
+
             // Check which inputs the model expects
             let input_names: Vec<&str> = session_lock.inputs().iter().map(|i| i.name()).collect();
             let has_token_type_ids = input_names.iter().any(|&name| name == "token_type_ids");
 
             let outputs = if has_token_type_ids {
                 // Inference with token_type_ids (ms-marco models)
-                let ids_tensor = Tensor::<i64>::from_array(
-                    ([batch_size, seq_len_max], all_input_ids.into_boxed_slice())
-                ).context("Failed to create batch input_ids tensor")?;
+                let ids_tensor = Tensor::<i64>::from_array((
+                    [batch_size, seq_len_max],
+                    all_input_ids.into_boxed_slice(),
+                ))
+                .context("Failed to create batch input_ids tensor")?;
 
-                let mask_tensor = Tensor::<i64>::from_array(
-                    ([batch_size, seq_len_max], all_attention_masks.into_boxed_slice())
-                ).context("Failed to create batch attention_mask tensor")?;
+                let mask_tensor = Tensor::<i64>::from_array((
+                    [batch_size, seq_len_max],
+                    all_attention_masks.into_boxed_slice(),
+                ))
+                .context("Failed to create batch attention_mask tensor")?;
 
-                let ttid_tensor = Tensor::<i64>::from_array(
-                    ([batch_size, seq_len_max], all_token_type_ids.into_boxed_slice())
-                ).context("Failed to create batch token_type_ids tensor")?;
-                
-                session_lock.run(
-                    ort::inputs![
+                let ttid_tensor = Tensor::<i64>::from_array((
+                    [batch_size, seq_len_max],
+                    all_token_type_ids.into_boxed_slice(),
+                ))
+                .context("Failed to create batch token_type_ids tensor")?;
+
+                session_lock
+                    .run(ort::inputs![
                         "input_ids"      => ids_tensor,
                         "attention_mask" => mask_tensor,
                         "token_type_ids" => ttid_tensor
-                    ]
-                ).context("Batch reranker inference failed with token_type_ids")?
+                    ])
+                    .context("Batch reranker inference failed with token_type_ids")?
             } else {
                 // Inference without token_type_ids (bge models)
-                let ids_tensor = Tensor::<i64>::from_array(
-                    ([batch_size, seq_len_max], all_input_ids.into_boxed_slice())
-                ).context("Failed to create batch input_ids tensor")?;
+                let ids_tensor = Tensor::<i64>::from_array((
+                    [batch_size, seq_len_max],
+                    all_input_ids.into_boxed_slice(),
+                ))
+                .context("Failed to create batch input_ids tensor")?;
 
-                let mask_tensor = Tensor::<i64>::from_array(
-                    ([batch_size, seq_len_max], all_attention_masks.into_boxed_slice())
-                ).context("Failed to create batch attention_mask tensor")?;
+                let mask_tensor = Tensor::<i64>::from_array((
+                    [batch_size, seq_len_max],
+                    all_attention_masks.into_boxed_slice(),
+                ))
+                .context("Failed to create batch attention_mask tensor")?;
 
-                session_lock.run(
-                    ort::inputs![
+                session_lock
+                    .run(ort::inputs![
                         "input_ids"      => ids_tensor,
                         "attention_mask" => mask_tensor
-                    ]
-                ).context("Batch reranker inference failed without token_type_ids")?
+                    ])
+                    .context("Batch reranker inference failed without token_type_ids")?
             };
 
             // Extract logits [batch_size, 1] and apply sigmoid
-            let logits_value = outputs.get("logits")
+            let logits_value = outputs
+                .get("logits")
                 .context("No 'logits' output from reranker model")?;
             let logits_tensor = logits_value
                 .try_extract_tensor::<f32>()
                 .context("Failed to extract logits as f32 tensor")?;
             let (_shape, logits_raw) = logits_tensor;
-            
+
             if logits_raw.len() < batch_size {
-                anyhow::bail!("Expected at least {} logits, got {}", batch_size, logits_raw.len());
+                anyhow::bail!(
+                    "Expected at least {} logits, got {}",
+                    batch_size,
+                    logits_raw.len()
+                );
             }
 
             logits_raw
@@ -306,8 +333,9 @@ impl CrossEncoderReranker {
 
         // Sort by score descending
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        
-        Ok(scores.into_iter()
+
+        Ok(scores
+            .into_iter()
             .map(|(idx, score)| RerankerScore { index: idx, score })
             .collect())
     }
@@ -345,25 +373,23 @@ fn get_model_metadata(name: &str) -> Result<(&'static str, &'static str, &'stati
             "onnx/model.onnx",
             "tokenizer.json",
         )),
-        other => {
-            Err(anyhow::anyhow!(
-                "Unknown reranker model '{}'. Supported models:\n  \
+        other => Err(anyhow::anyhow!(
+            "Unknown reranker model '{}'. Supported models:\n  \
                  - ms-marco-TinyBERT-L-2 (11MB, fastest, <0.6s)\n  \
                  - ms-marco-MiniLM-L-6-v2 (100MB, recommended, ~1s)\n  \
                  - mmarco-mMiniLMv2-L12-H384-v1 (110MB, ~10s)\n  \
                  - qnli-distilroberta-base (250MB, best quality, ~30s)\n\n\
                  To use a different model, update [search.reranker] in your config:\n  \
                  model = \"ms-marco-MiniLM-L-6-v2\"",
-                other
-            ))
-        }
+            other
+        )),
     }
 }
 
 async fn ensure_model_files(model_name: &str) -> Result<(PathBuf, PathBuf)> {
     let (hf_model_id, onnx_file, tokenizer_file) = get_model_metadata(model_name)?;
     let cache_dir = reranker_cache_dir(model_name);
-    
+
     std::fs::create_dir_all(&cache_dir)
         .with_context(|| format!("Cannot create reranker cache dir: {}", cache_dir.display()))?;
 
@@ -372,7 +398,11 @@ async fn ensure_model_files(model_name: &str) -> Result<(PathBuf, PathBuf)> {
 
     // Check if both files exist
     if onnx_path.exists() && tokenizer_path.exists() {
-        tracing::debug!("Reranker model '{}' found in cache: {}", model_name, cache_dir.display());
+        tracing::debug!(
+            "Reranker model '{}' found in cache: {}",
+            model_name,
+            cache_dir.display()
+        );
         return Ok((onnx_path, tokenizer_path));
     }
 
@@ -387,7 +417,12 @@ async fn ensure_model_files(model_name: &str) -> Result<(PathBuf, PathBuf)> {
             "bge-reranker-base" => "~278MB",
             _ => "~150MB",
         };
-        tracing::info!("Downloading reranker model '{}' ({}) to {}", hf_model_id, size_hint, cache_dir.display());
+        tracing::info!(
+            "Downloading reranker model '{}' ({}) to {}",
+            hf_model_id,
+            size_hint,
+            cache_dir.display()
+        );
         eprintln!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         eprintln!("📦 Downloading reranker model: {}", model_name);
         eprintln!("   HuggingFace: {}", hf_model_id);
@@ -395,7 +430,7 @@ async fn ensure_model_files(model_name: &str) -> Result<(PathBuf, PathBuf)> {
         eprintln!("   Cache: {}", cache_dir.display());
         eprintln!("   (First time only, then cached locally)");
         eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-        
+
         download_model_files(hf_model_id, onnx_file, tokenizer_file, &cache_dir).await?;
         tracing::info!("Reranker model downloaded to {}", cache_dir.display());
         eprintln!("✅ Model ready at: {}\n", cache_dir.display());
@@ -410,12 +445,16 @@ async fn download_model_files(
     tokenizer_file: &str,
     cache_dir: &PathBuf,
 ) -> Result<()> {
-    let hf_cache = cache_dir.parent()
+    let hf_cache = cache_dir
+        .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| cache_dir.clone());
 
-    tracing::debug!("Attempting to download from HuggingFace with cache: {}", hf_cache.display());
-    
+    tracing::debug!(
+        "Attempting to download from HuggingFace with cache: {}",
+        hf_cache.display()
+    );
+
     let api = hf_hub::api::tokio::ApiBuilder::new()
         .with_cache_dir(hf_cache)
         .build()
@@ -424,29 +463,40 @@ async fn download_model_files(
     let repo = api.model(hf_model_id.to_string());
 
     tracing::debug!("Downloading ONNX file: {} from {}", onnx_file, hf_model_id);
-    let onnx_src = repo.get(onnx_file).await
-        .with_context(|| {
-            format!(
-                "Failed to download ONNX model from HuggingFace repository '{}'.\n\
+    let onnx_src = repo.get(onnx_file).await.with_context(|| {
+        format!(
+            "Failed to download ONNX model from HuggingFace repository '{}'.\n\
                  This may happen if:\n\
                  - The model doesn't have ONNX exports (e.g., BAAI models)\n\
                  - Network connectivity issues\n\
                  - HuggingFace API is unavailable\n\n\
                  Please check your internet connection and verify the model supports ONNX format.\n\
                  For BAAI models, use an alternative like: ms-marco-MiniLM-L-6-v2",
-                hf_model_id
-            )
-        })?;
-    
-    tracing::debug!("Copying ONNX file to cache: {}", cache_dir.join("model.onnx").display());
+            hf_model_id
+        )
+    })?;
+
+    tracing::debug!(
+        "Copying ONNX file to cache: {}",
+        cache_dir.join("model.onnx").display()
+    );
     std::fs::copy(&onnx_src, cache_dir.join("model.onnx"))
         .context("Failed to copy ONNX model to cache")?;
 
-    tracing::debug!("Downloading tokenizer file: {} from {}", tokenizer_file, hf_model_id);
-    let tok_src = repo.get(tokenizer_file).await
+    tracing::debug!(
+        "Downloading tokenizer file: {} from {}",
+        tokenizer_file,
+        hf_model_id
+    );
+    let tok_src = repo
+        .get(tokenizer_file)
+        .await
         .with_context(|| format!("Failed to download {} from {}", tokenizer_file, hf_model_id))?;
-    
-    tracing::debug!("Copying tokenizer file to cache: {}", cache_dir.join("tokenizer.json").display());
+
+    tracing::debug!(
+        "Copying tokenizer file to cache: {}",
+        cache_dir.join("tokenizer.json").display()
+    );
     std::fs::copy(&tok_src, cache_dir.join("tokenizer.json"))
         .context("Failed to copy tokenizer to cache")?;
 
@@ -454,9 +504,12 @@ async fn download_model_files(
 }
 
 fn reranker_cache_dir(model_name: &str) -> PathBuf {
-    let base = dirs::cache_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".cache"));
-    
+    let base = dirs::cache_dir().unwrap_or_else(|| {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".cache")
+    });
+
     base.join("voidm/rerankers").join(model_name)
 }
 
@@ -473,13 +526,19 @@ pub fn is_model_cached(model_name: &str) -> bool {
 
 /// Load reranker with cache awareness. Used by `voidm init`.
 /// If update=true, forces re-download even if cached.
-pub async fn load_reranker_cached(model_name: &str, force_update: bool) -> Result<CrossEncoderReranker> {
+pub async fn load_reranker_cached(
+    model_name: &str,
+    force_update: bool,
+) -> Result<CrossEncoderReranker> {
     let is_cached = is_model_cached(model_name);
-    
+
     if is_cached && !force_update {
         tracing::debug!("Reranker '{}' is cached, using cached version", model_name);
     } else if force_update && is_cached {
-        tracing::info!("Force update requested, re-downloading reranker: {}", model_name);
+        tracing::info!(
+            "Force update requested, re-downloading reranker: {}",
+            model_name
+        );
         let cache_dir = reranker_cache_dir(model_name);
         if cache_dir.exists() {
             std::fs::remove_dir_all(&cache_dir)
@@ -487,7 +546,7 @@ pub async fn load_reranker_cached(model_name: &str, force_update: bool) -> Resul
             tracing::debug!("Removed old cache directory: {}", cache_dir.display());
         }
     }
-    
+
     CrossEncoderReranker::load(model_name).await
 }
 
@@ -511,7 +570,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_score_single_pair() {
-        let reranker = CrossEncoderReranker::load("ms-marco-TinyBERT").await.unwrap();
+        let reranker = CrossEncoderReranker::load("ms-marco-TinyBERT")
+            .await
+            .unwrap();
         let score = reranker.score(
             "What is machine learning?",
             "Machine learning is a subset of artificial intelligence that enables systems to learn from data."
@@ -522,7 +583,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_rerank_multiple() {
-        let reranker = CrossEncoderReranker::load("ms-marco-TinyBERT").await.unwrap();
+        let reranker = CrossEncoderReranker::load("ms-marco-TinyBERT")
+            .await
+            .unwrap();
         let query = "What is machine learning?";
         let docs = vec![
             "Python is a programming language.",
@@ -530,7 +593,7 @@ mod tests {
             "Cats are cute animals.",
         ];
         let results = reranker.rerank(query, &docs).unwrap();
-        
+
         assert_eq!(results.len(), 3);
         // Second doc should be ranked first (most relevant)
         assert_eq!(results[0].index, 1);
@@ -638,7 +701,10 @@ mod tests {
         let mut result_count = 0;
 
         println!("\n=== ms-marco-TinyBERT Benchmark ===\n");
-        println!("{:<50} | {:<10} | {:<10} | {:<10}", "Query", "Rel Score", "Irrel Score", "Delta");
+        println!(
+            "{:<50} | {:<10} | {:<10} | {:<10}",
+            "Query", "Rel Score", "Irrel Score", "Delta"
+        );
         println!("{}", "-".repeat(90));
 
         for case in cases {
@@ -662,8 +728,10 @@ mod tests {
                 result_count += 1;
             }
 
-            let avg_relevant = scores[..case.relevant.len()].iter().sum::<f32>() / case.relevant.len() as f32;
-            let avg_irrelevant = scores[case.relevant.len()..].iter().sum::<f32>() / case.irrelevant.len() as f32;
+            let avg_relevant =
+                scores[..case.relevant.len()].iter().sum::<f32>() / case.relevant.len() as f32;
+            let avg_irrelevant =
+                scores[case.relevant.len()..].iter().sum::<f32>() / case.irrelevant.len() as f32;
             let delta = avg_relevant - avg_irrelevant;
             total_scores += delta;
 
@@ -687,7 +755,10 @@ mod tests {
         println!("  Total documents scored: {}", result_count);
         println!("  Total time: {:.1} ms", total_time);
         println!("  Average latency per document: {:.2} ms", avg_latency);
-        println!("  Average relevance delta (relevant - irrelevant): {:.4}", avg_score_delta);
+        println!(
+            "  Average relevance delta (relevant - irrelevant): {:.4}",
+            avg_score_delta
+        );
         println!("  Model: ms-marco-TinyBERT (~11MB)");
     }
 
@@ -705,7 +776,10 @@ mod tests {
         let mut result_count = 0;
 
         println!("\n=== bge-reranker-base Benchmark ===\n");
-        println!("{:<50} | {:<10} | {:<10} | {:<10}", "Query", "Rel Score", "Irrel Score", "Delta");
+        println!(
+            "{:<50} | {:<10} | {:<10} | {:<10}",
+            "Query", "Rel Score", "Irrel Score", "Delta"
+        );
         println!("{}", "-".repeat(90));
 
         for case in cases {
@@ -729,8 +803,10 @@ mod tests {
                 result_count += 1;
             }
 
-            let avg_relevant = scores[..case.relevant.len()].iter().sum::<f32>() / case.relevant.len() as f32;
-            let avg_irrelevant = scores[case.relevant.len()..].iter().sum::<f32>() / case.irrelevant.len() as f32;
+            let avg_relevant =
+                scores[..case.relevant.len()].iter().sum::<f32>() / case.relevant.len() as f32;
+            let avg_irrelevant =
+                scores[case.relevant.len()..].iter().sum::<f32>() / case.irrelevant.len() as f32;
             let delta = avg_relevant - avg_irrelevant;
             total_scores += delta;
 
@@ -754,7 +830,10 @@ mod tests {
         println!("  Total documents scored: {}", result_count);
         println!("  Total time: {:.1} ms", total_time);
         println!("  Average latency per document: {:.2} ms", avg_latency);
-        println!("  Average relevance delta (relevant - irrelevant): {:.4}", avg_score_delta);
+        println!(
+            "  Average relevance delta (relevant - irrelevant): {:.4}",
+            avg_score_delta
+        );
         println!("  Model: bge-reranker-base (~278MB)");
     }
 
@@ -783,11 +862,16 @@ mod tests {
 
         println!("\n=== Ranking Quality Comparison ===\n");
 
-        let ms_results = ms_marco.rerank(query, &documents).expect("ms-marco rerank failed");
+        let ms_results = ms_marco
+            .rerank(query, &documents)
+            .expect("ms-marco rerank failed");
         let bge_results = bge.rerank(query, &documents).expect("bge rerank failed");
 
         println!("Query: {}\n", query);
-        println!("{:<5} | {:<10} | {:<10} | {:<20}", "Rank", "ms-marco", "bge-base", "Document");
+        println!(
+            "{:<5} | {:<10} | {:<10} | {:<20}",
+            "Rank", "ms-marco", "bge-base", "Document"
+        );
         println!("{}", "-".repeat(70));
 
         for rank in 0..documents.len() {
@@ -800,7 +884,10 @@ mod tests {
             };
             println!(
                 "{:<5} | {:<10.4} | {:<10.4} | {:<20}",
-                rank + 1, ms_res.score, bge_res.score, doc_short
+                rank + 1,
+                ms_res.score,
+                bge_res.score,
+                doc_short
             );
         }
 

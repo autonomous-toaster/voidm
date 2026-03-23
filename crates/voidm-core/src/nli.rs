@@ -81,7 +81,10 @@ async fn load_or_download() -> Result<NliModel> {
     // Download if missing
     if !onnx_path.exists() || !tokenizer_path.exists() {
         tracing::info!("Downloading NLI model '{}' (first use) …", NLI_MODEL_ID);
-        eprintln!("Downloading NLI model '{}' (~180MB, first use only) …", NLI_MODEL_ID);
+        eprintln!(
+            "Downloading NLI model '{}' (~180MB, first use only) …",
+            NLI_MODEL_ID
+        );
         download_model_files(&cache_dir).await?;
         tracing::info!("NLI model downloaded to {}", cache_dir.display());
         eprintln!("NLI model ready at {}", cache_dir.display());
@@ -99,11 +102,15 @@ fn build_session(onnx_path: &PathBuf, tokenizer_path: &PathBuf) -> Result<NliMod
         .commit_from_file(onnx_path)
         .context("Failed to load NLI ONNX model")?;
 
-    Ok(NliModel { session: Mutex::new(session), tokenizer })
+    Ok(NliModel {
+        session: Mutex::new(session),
+        tokenizer,
+    })
 }
 
 async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
-    let hf_cache = cache_dir.parent()
+    let hf_cache = cache_dir
+        .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| cache_dir.clone());
 
@@ -114,13 +121,19 @@ async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
 
     let repo = api.model(NLI_MODEL_ID.to_string());
 
-    let onnx_src = repo.get(NLI_ONNX_FILE).await
+    let onnx_src = repo
+        .get(NLI_ONNX_FILE)
+        .await
         .with_context(|| format!("Failed to download {} from {}", NLI_ONNX_FILE, NLI_MODEL_ID))?;
     std::fs::copy(&onnx_src, cache_dir.join("model.onnx"))
         .context("Failed to copy ONNX model to cache")?;
 
-    let tok_src = repo.get(NLI_TOKENIZER_FILE).await
-        .with_context(|| format!("Failed to download {} from {}", NLI_TOKENIZER_FILE, NLI_MODEL_ID))?;
+    let tok_src = repo.get(NLI_TOKENIZER_FILE).await.with_context(|| {
+        format!(
+            "Failed to download {} from {}",
+            NLI_TOKENIZER_FILE, NLI_MODEL_ID
+        )
+    })?;
     std::fs::copy(&tok_src, cache_dir.join("tokenizer.json"))
         .context("Failed to copy tokenizer to cache")?;
 
@@ -133,39 +146,45 @@ async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
 /// Returns softmaxed entailment/neutral/contradiction scores.
 /// The model must be loaded first via `ensure_nli_model()`.
 pub fn classify(premise: &str, hypothesis: &str) -> Result<NliScores> {
-    let wrapper = NLI_MODEL.get()
+    let wrapper = NLI_MODEL
+        .get()
         .context("NLI model not loaded. Call ensure_nli_model() first.")?;
     let model = &wrapper.0;
 
     // Tokenize as sentence pair
-    let encoding = model.tokenizer
+    let encoding = model
+        .tokenizer
         .encode((premise, hypothesis), true)
         .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
     let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
-    let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&x| x as i64).collect();
+    let attention_mask: Vec<i64> = encoding
+        .get_attention_mask()
+        .iter()
+        .map(|&x| x as i64)
+        .collect();
     let seq_len = input_ids.len();
 
-    let ids_tensor = Tensor::<i64>::from_array(
-        ([1usize, seq_len], input_ids.into_boxed_slice())
-    ).context("Failed to create input_ids tensor")?;
+    let ids_tensor = Tensor::<i64>::from_array(([1usize, seq_len], input_ids.into_boxed_slice()))
+        .context("Failed to create input_ids tensor")?;
 
-    let mask_tensor = Tensor::<i64>::from_array(
-        ([1usize, seq_len], attention_mask.into_boxed_slice())
-    ).context("Failed to create attention_mask tensor")?;
+    let mask_tensor =
+        Tensor::<i64>::from_array(([1usize, seq_len], attention_mask.into_boxed_slice()))
+            .context("Failed to create attention_mask tensor")?;
 
     // Run inference and extract logits within the lock scope
     let logits_flat = {
         let mut session_lock = model.session.lock().unwrap();
-        let outputs = session_lock.run(
-            ort::inputs![
+        let outputs = session_lock
+            .run(ort::inputs![
                 "input_ids"      => ids_tensor,
                 "attention_mask" => mask_tensor
-            ]
-        ).context("NLI inference failed")?;
+            ])
+            .context("NLI inference failed")?;
 
         // Extract logits [1, 3]: contradiction=0, neutral=1, entailment=2 (DeBERTa-NLI convention)
-        let logits_value = outputs.get("logits")
+        let logits_value = outputs
+            .get("logits")
             .context("No 'logits' output from NLI model")?;
         let logits_tensor = logits_value
             .try_extract_tensor::<f32>()
@@ -175,14 +194,17 @@ pub fn classify(premise: &str, hypothesis: &str) -> Result<NliScores> {
     };
 
     if logits_flat.len() < 3 {
-        anyhow::bail!("Unexpected logits shape: {} elements (expected 3)", logits_flat.len());
+        anyhow::bail!(
+            "Unexpected logits shape: {} elements (expected 3)",
+            logits_flat.len()
+        );
     }
 
     let scores = softmax(&logits_flat[..3]);
     Ok(NliScores {
         contradiction: scores[0],
-        neutral:       scores[1],
-        entailment:    scores[2],
+        neutral: scores[1],
+        entailment: scores[2],
     })
 }
 
@@ -210,7 +232,10 @@ pub fn scores_to_rel(scores: &NliScores, similarity: f32) -> Option<(String, f32
         return Some(("SUPPORTS".into(), scores.entailment * 0.9));
     }
     if (scores.neutral > 0.60 || scores.entailment > 0.30) && similarity > 0.70 {
-        return Some(("EXEMPLIFIES".into(), (scores.entailment + scores.neutral * 0.5) * similarity));
+        return Some((
+            "EXEMPLIFIES".into(),
+            (scores.entailment + scores.neutral * 0.5) * similarity,
+        ));
     }
     if scores.neutral > 0.70 && similarity > 0.45 && similarity < 0.75 {
         return Some(("RELATES_TO".into(), scores.neutral * similarity));
@@ -246,8 +271,11 @@ pub fn suggest_relations(
             }
         }
     }
-    suggestions.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence)
-        .unwrap_or(std::cmp::Ordering::Equal));
+    suggestions.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     suggestions
 }
 
@@ -311,7 +339,6 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
     exps.iter().map(|&x| x / sum).collect()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,9 +350,13 @@ mod tests {
         let s = classify(
             "A microservice is a small, independently deployable service.",
             "A service mesh manages inter-service communication.",
-        ).unwrap();
+        )
+        .unwrap();
         // Model sees these as unrelated (contradiction in NLI terms for this model)
-        assert!(s.contradiction > 0.5 || s.neutral > 0.5, "should not strongly entail");
+        assert!(
+            s.contradiction > 0.5 || s.neutral > 0.5,
+            "should not strongly entail"
+        );
     }
 
     #[tokio::test]
@@ -336,8 +367,14 @@ mod tests {
         let session = model.session.lock().unwrap();
         let input_names: Vec<&str> = session.inputs().iter().map(|i| i.name()).collect();
         assert!(input_names.contains(&"input_ids"), "must have input_ids");
-        assert!(input_names.contains(&"attention_mask"), "must have attention_mask");
-        assert!(!input_names.contains(&"token_type_ids"), "DeBERTa has no token_type_ids");
+        assert!(
+            input_names.contains(&"attention_mask"),
+            "must have attention_mask"
+        );
+        assert!(
+            !input_names.contains(&"token_type_ids"),
+            "DeBERTa has no token_type_ids"
+        );
     }
 
     #[tokio::test]
@@ -346,7 +383,8 @@ mod tests {
         let s = classify(
             "The server is always online and never goes down.",
             "The server experiences frequent outages and downtime.",
-        ).unwrap();
+        )
+        .unwrap();
         let rel = scores_to_rel(&s, 0.85);
         assert_eq!(rel.map(|(r, _)| r), Some("CONTRADICTS".to_string()));
     }

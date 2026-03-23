@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
-use std::pin::Pin;
-use std::future::Future;
 use neo4rs::Graph;
+use std::future::Future;
+use std::pin::Pin;
 
-use crate::models::{
-    AddMemoryRequest, AddMemoryResponse, Memory, EdgeType, LinkResponse,
+use crate::models::{AddMemoryRequest, AddMemoryResponse, EdgeType, LinkResponse, Memory};
+use crate::ontology::{
+    Concept, ConceptSearchResult, ConceptWithInstances, ConceptWithSimilarityWarning, OntologyEdge,
 };
-use crate::ontology::{Concept, ConceptWithInstances, OntologyEdge, ConceptWithSimilarityWarning, ConceptSearchResult};
 use crate::search::{SearchOptions, SearchResponse};
 
 /// Neo4j implementation of the Database trait.
@@ -34,17 +34,17 @@ impl Neo4jDatabase {
     async fn init_schema(&self) -> Result<()> {
         // Create constraints for Memory nodes
         self.graph
-            .run(
-                neo4rs::query("CREATE CONSTRAINT memory_id IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE")
-            )
+            .run(neo4rs::query(
+                "CREATE CONSTRAINT memory_id IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE",
+            ))
             .await
-            .ok();  // Ignore errors if constraint already exists
+            .ok(); // Ignore errors if constraint already exists
 
         // Create constraint for Concept nodes
         self.graph
-            .run(
-                neo4rs::query("CREATE CONSTRAINT concept_id IF NOT EXISTS FOR (c:Concept) REQUIRE c.id IS UNIQUE")
-            )
+            .run(neo4rs::query(
+                "CREATE CONSTRAINT concept_id IF NOT EXISTS FOR (c:Concept) REQUIRE c.id IS UNIQUE",
+            ))
             .await
             .ok();
 
@@ -73,9 +73,7 @@ impl crate::db::Database for Neo4jDatabase {
 
     fn ensure_schema(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         let db = self.clone();
-        Box::pin(async move {
-            db.init_schema().await
-        })
+        Box::pin(async move { db.init_schema().await })
     }
 
     fn add_memory(
@@ -103,7 +101,7 @@ impl crate::db::Database for Neo4jDatabase {
                     created_at: $created_at,
                     updated_at: $created_at,
                     embedding_model: $model
-                }) RETURN m"
+                }) RETURN m",
             )
             .param("id", id.clone())
             .param("type", memory_type.clone())
@@ -135,22 +133,22 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
-    fn get_memory(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Option<Memory>>> + Send + '_>> {
+    fn get_memory(
+        &self,
+        id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Memory>>> + Send + '_>> {
         let graph = self.graph.clone();
         let id = id.to_string();
 
         Box::pin(async move {
             let mut result = graph
-                .execute(
-                    neo4rs::query("MATCH (m:Memory {id: $id}) RETURN m")
-                        .param("id", id),
-                )
+                .execute(neo4rs::query("MATCH (m:Memory {id: $id}) RETURN m").param("id", id))
                 .await
                 .context("Failed to get memory from Neo4j")?;
 
             if let Ok(Some(row)) = result.next().await {
                 let node: neo4rs::Node = row.get("m").context("Failed to extract memory node")?;
-                
+
                 let memory = Memory {
                     id: node.get("id").context("Missing id")?,
                     content: node.get("content").context("Missing content")?,
@@ -163,7 +161,7 @@ impl crate::db::Database for Neo4jDatabase {
                     updated_at: node.get("updated_at").context("Missing updated_at")?,
                     quality_score: None,
                 };
-                
+
                 Ok(Some(memory))
             } else {
                 Ok(None)
@@ -171,15 +169,20 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
-    fn list_memories(&self, limit: Option<usize>) -> Pin<Box<dyn Future<Output = Result<Vec<Memory>>> + Send + '_>> {
+    fn list_memories(
+        &self,
+        limit: Option<usize>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Memory>>> + Send + '_>> {
         let graph = self.graph.clone();
         let limit = limit.unwrap_or(100);
 
         Box::pin(async move {
             let mut result = graph
                 .execute(
-                    neo4rs::query("MATCH (m:Memory) RETURN m ORDER BY m.created_at DESC LIMIT $limit")
-                        .param("limit", limit as i64),
+                    neo4rs::query(
+                        "MATCH (m:Memory) RETURN m ORDER BY m.created_at DESC LIMIT $limit",
+                    )
+                    .param("limit", limit as i64),
                 )
                 .await
                 .context("Failed to list memories from Neo4j")?;
@@ -187,7 +190,7 @@ impl crate::db::Database for Neo4jDatabase {
             let mut memories = Vec::new();
             while let Ok(Some(row)) = result.next().await {
                 let node: neo4rs::Node = row.get("m").context("Failed to extract memory node")?;
-                
+
                 let memory = Memory {
                     id: node.get("id").context("Missing id")?,
                     content: node.get("content").context("Missing content")?,
@@ -200,7 +203,7 @@ impl crate::db::Database for Neo4jDatabase {
                     updated_at: node.get("updated_at").unwrap_or_default(),
                     quality_score: None,
                 };
-                
+
                 memories.push(memory);
             }
 
@@ -250,12 +253,15 @@ impl crate::db::Database for Neo4jDatabase {
                 )
                 .await
                 .context("Failed to update memory in Neo4j")?;
-            
+
             Ok(())
         })
     }
 
-    fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn resolve_memory_id(
+        &self,
+        id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         let id = id.to_string();
         Box::pin(async move { Ok(id) })
     }
@@ -298,7 +304,7 @@ impl crate::db::Database for Neo4jDatabase {
                 neo4rs::query(
                     "MATCH (from:Memory {id: $from_id}), (to:Memory {id: $to_id})
                      CREATE (from)-[:RELATES {type: $rel_type, note: $note}]->(to)
-                     RETURN true as created"
+                     RETURN true as created",
                 )
                 .param("from_id", from_id.clone())
                 .param("to_id", to_id.clone())
@@ -308,7 +314,7 @@ impl crate::db::Database for Neo4jDatabase {
                 neo4rs::query(
                     "MATCH (from:Memory {id: $from_id}), (to:Memory {id: $to_id})
                      CREATE (from)-[:RELATES {type: $rel_type}]->(to)
-                     RETURN true as created"
+                     RETURN true as created",
                 )
                 .param("from_id", from_id.clone())
                 .param("to_id", to_id.clone())
@@ -370,7 +376,9 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
-    fn list_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>> {
+    fn list_edges(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>> {
         let graph = self.graph.clone();
 
         Box::pin(async move {
@@ -396,9 +404,13 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
-    fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>> {
+    fn list_ontology_edges(
+        &self,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>,
+    > {
         let graph = self.graph.clone();
-        
+
         Box::pin(async move {
             // Query all relationships with their properties
             let cypher = r#"
@@ -408,12 +420,12 @@ impl crate::db::Database for Neo4jDatabase {
                        r.to_id AS to_id, r.to_type AS to_type, 
                        r.rel_type AS rel_type, r.note AS note
             "#;
-            
+
             let mut result = graph
                 .execute(neo4rs::query(cypher))
                 .await
                 .context("Failed to list ontology edges from Neo4j")?;
-            
+
             let mut edges = Vec::new();
             while let Ok(Some(row)) = result.next().await {
                 if let (Ok(from_id), Ok(from_type), Ok(to_id), Ok(to_type), Ok(rel_type)) = (
@@ -434,7 +446,7 @@ impl crate::db::Database for Neo4jDatabase {
                     });
                 }
             }
-            
+
             Ok(edges)
         })
     }
@@ -451,8 +463,16 @@ impl crate::db::Database for Neo4jDatabase {
         let graph = self.graph.clone();
         let from_id = from_id.to_string();
         let to_id = to_id.to_string();
-        let from_label = if from_type == "memory" { "Memory" } else { "Concept" };
-        let to_label = if to_type == "memory" { "Memory" } else { "Concept" };
+        let from_label = if from_type == "memory" {
+            "Memory"
+        } else {
+            "Concept"
+        };
+        let to_label = if to_type == "memory" {
+            "Memory"
+        } else {
+            "Concept"
+        };
         let rel_type_str = rel_type.to_string();
         let from_type_str = from_type.to_string();
         let to_type_str = to_type.to_string();
@@ -467,12 +487,14 @@ impl crate::db::Database for Neo4jDatabase {
             );
 
             let mut result = graph
-                .execute(neo4rs::query(&query_str)
-                    .param("from_id", from_id.clone())
-                    .param("from_type", from_type_str)
-                    .param("to_id", to_id.clone())
-                    .param("to_type", to_type_str)
-                    .param("rel_type", rel_type_str))
+                .execute(
+                    neo4rs::query(&query_str)
+                        .param("from_id", from_id.clone())
+                        .param("from_type", from_type_str)
+                        .param("to_id", to_id.clone())
+                        .param("to_type", to_type_str)
+                        .param("rel_type", rel_type_str),
+                )
                 .await
                 .with_context(|| format!("Failed to link {} -> {} in Neo4j", from_id, to_id))?;
 
@@ -495,19 +517,22 @@ impl crate::db::Database for Neo4jDatabase {
         let graph = self.graph.clone();
         let opts_owned = opts.clone();
         let model_name_owned = model_name.to_string();
-        
+
         Box::pin(async move {
             use std::collections::HashMap;
-            
+
             let query_text = &opts_owned.query;
             let limit = opts_owned.limit;
             let fetch_limit = limit * 3; // over-fetch for merging
             let mut scores: HashMap<String, f32> = HashMap::new();
-            
+
             // --- Vector search via embeddings ---
             let use_vector = embeddings_enabled
-                && matches!(opts_owned.mode, crate::search::SearchMode::Hybrid | crate::search::SearchMode::Semantic);
-            
+                && matches!(
+                    opts_owned.mode,
+                    crate::search::SearchMode::Hybrid | crate::search::SearchMode::Semantic
+                );
+
             if use_vector {
                 match crate::embeddings::embed_text(&model_name_owned, query_text) {
                     Ok(query_embedding) => {
@@ -531,12 +556,12 @@ impl crate::db::Database for Neo4jDatabase {
                             ORDER BY similarity DESC
                             LIMIT $limit
                         "#;
-                        
+
                         match graph
                             .execute(
                                 neo4rs::query(cypher_query)
                                     .param("query_emb", query_embedding.clone())
-                                    .param("limit", fetch_limit as i64)
+                                    .param("limit", fetch_limit as i64),
                             )
                             .await
                         {
@@ -557,13 +582,15 @@ impl crate::db::Database for Neo4jDatabase {
                     Err(e) => tracing::warn!("Embedding failed: {}", e),
                 }
             }
-            
+
             // --- Full-text search via content matching ---
             let use_fts = matches!(
                 opts_owned.mode,
-                crate::search::SearchMode::Hybrid | crate::search::SearchMode::Bm25 | crate::search::SearchMode::Keyword
+                crate::search::SearchMode::Hybrid
+                    | crate::search::SearchMode::Bm25
+                    | crate::search::SearchMode::Keyword
             );
-            
+
             if use_fts {
                 // Simple substring/content search in Neo4j
                 let fts_cypher = r#"
@@ -576,12 +603,12 @@ impl crate::db::Database for Neo4jDatabase {
                     ORDER BY relevance DESC
                     LIMIT $limit
                 "#;
-                
+
                 match graph
                     .execute(
                         neo4rs::query(fts_cypher)
                             .param("query", query_text.clone())
-                            .param("limit", fetch_limit as i64)
+                            .param("limit", fetch_limit as i64),
                     )
                     .await
                 {
@@ -599,10 +626,10 @@ impl crate::db::Database for Neo4jDatabase {
                     Err(e) => tracing::warn!("Neo4j FTS search failed: {}", e),
                 }
             }
-            
+
             // --- Fuzzy search via Levenshtein distance (if available) ---
             let use_fuzzy = matches!(opts_owned.mode, crate::search::SearchMode::Hybrid);
-            
+
             if use_fuzzy {
                 // Fuzzy search using apoc.text.levenshteinDistance if available
                 let fuzzy_cypher = r#"
@@ -621,12 +648,12 @@ impl crate::db::Database for Neo4jDatabase {
                     ORDER BY similarity DESC
                     LIMIT $limit
                 "#;
-                
+
                 match graph
                     .execute(
                         neo4rs::query(fuzzy_cypher)
                             .param("query", query_text.clone())
-                            .param("limit", fetch_limit as i64)
+                            .param("limit", fetch_limit as i64),
                     )
                     .await
                 {
@@ -646,25 +673,29 @@ impl crate::db::Database for Neo4jDatabase {
                     }
                 }
             }
-            
+
             // --- Merge and rank results ---
             let mut results: Vec<(String, f32)> = scores.into_iter().collect();
             results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            
+
             // Filter by min_score
             let min_score = config_min_score.max(0.0);
             results.retain(|(_id, score)| *score >= min_score);
-            let threshold_applied = if min_score > 0.0 { Some(min_score) } else { None };
-            
+            let threshold_applied = if min_score > 0.0 {
+                Some(min_score)
+            } else {
+                None
+            };
+
             // Fetch full memory objects and convert to SearchResult
             let mut response_results = Vec::new();
             let mut best_score: Option<f32> = None;
-            
+
             for (id, combined_score) in results.iter().take(limit) {
                 match self.get_memory(id).await {
                     Ok(Some(memory)) => {
                         best_score = Some(combined_score.max(best_score.unwrap_or(0.0)));
-                        
+
                         response_results.push(crate::search::SearchResult {
                             id: memory.id,
                             score: *combined_score,
@@ -690,7 +721,7 @@ impl crate::db::Database for Neo4jDatabase {
                     }
                 }
             }
-            
+
             Ok(crate::search::SearchResponse {
                 results: response_results,
                 threshold_applied,
@@ -723,7 +754,7 @@ impl crate::db::Database for Neo4jDatabase {
                     description: $description,
                     scope: $scope,
                     created_at: $created_at
-                }) RETURN c"
+                }) RETURN c",
             )
             .param("id", id.clone())
             .param("name", name.clone())
@@ -754,15 +785,14 @@ impl crate::db::Database for Neo4jDatabase {
         Box::pin(async move {
             let mut result = graph
                 .execute(
-                    neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c")
-                        .param("id", id.clone()),
+                    neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c").param("id", id.clone()),
                 )
                 .await
                 .context("Failed to get concept from Neo4j")?;
 
             if let Ok(Some(row)) = result.next().await {
                 let node: neo4rs::Node = row.get("c").context("Failed to extract concept node")?;
-                
+
                 let concept = Concept {
                     id: node.get("id").context("Missing id")?,
                     name: node.get("name").context("Missing name")?,
@@ -770,7 +800,7 @@ impl crate::db::Database for Neo4jDatabase {
                     scope: node.get("scope").ok(),
                     created_at: node.get("created_at").context("Missing created_at")?,
                 };
-                
+
                 Ok(concept)
             } else {
                 anyhow::bail!("Concept not found: {}", id)
@@ -788,15 +818,14 @@ impl crate::db::Database for Neo4jDatabase {
         Box::pin(async move {
             let mut result = graph
                 .execute(
-                    neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c")
-                        .param("id", id.clone()),
+                    neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c").param("id", id.clone()),
                 )
                 .await
                 .context("Failed to get concept from Neo4j")?;
 
             if let Ok(Some(row)) = result.next().await {
                 let node: neo4rs::Node = row.get("c").context("Failed to extract concept node")?;
-                
+
                 let concept = ConceptWithInstances {
                     id: node.get("id").context("Missing id")?,
                     name: node.get("name").context("Missing name")?,
@@ -807,7 +836,7 @@ impl crate::db::Database for Neo4jDatabase {
                     subclasses: vec![],
                     superclasses: vec![],
                 };
-                
+
                 Ok(concept)
             } else {
                 anyhow::bail!("Concept not found: {}", id)
@@ -825,16 +854,12 @@ impl crate::db::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let query = if let Some(scope_filter) = scope {
-                neo4rs::query(
-                    "MATCH (c:Concept {scope: $scope}) RETURN c LIMIT $limit"
-                )
-                .param("scope", scope_filter)
-                .param("limit", limit as i64)
+                neo4rs::query("MATCH (c:Concept {scope: $scope}) RETURN c LIMIT $limit")
+                    .param("scope", scope_filter)
+                    .param("limit", limit as i64)
             } else {
-                neo4rs::query(
-                    "MATCH (c:Concept) RETURN c LIMIT $limit"
-                )
-                .param("limit", limit as i64)
+                neo4rs::query("MATCH (c:Concept) RETURN c LIMIT $limit")
+                    .param("limit", limit as i64)
             };
 
             let mut result = graph
@@ -845,7 +870,7 @@ impl crate::db::Database for Neo4jDatabase {
             let mut concepts = Vec::new();
             while let Ok(Some(row)) = result.next().await {
                 let node: neo4rs::Node = row.get("c").context("Failed to extract concept node")?;
-                
+
                 let concept = Concept {
                     id: node.get("id").context("Missing id")?,
                     name: node.get("name").context("Missing name")?,
@@ -853,7 +878,7 @@ impl crate::db::Database for Neo4jDatabase {
                     scope: node.get("scope").ok(),
                     created_at: node.get("created_at").context("Missing created_at")?,
                 };
-                
+
                 concepts.push(concept);
             }
 
@@ -868,8 +893,10 @@ impl crate::db::Database for Neo4jDatabase {
         Box::pin(async move {
             let mut result = graph
                 .execute(
-                    neo4rs::query("MATCH (c:Concept {id: $id}) DELETE c RETURN count(c) as deleted")
-                        .param("id", id),
+                    neo4rs::query(
+                        "MATCH (c:Concept {id: $id}) DELETE c RETURN count(c) as deleted",
+                    )
+                    .param("id", id),
                 )
                 .await
                 .context("Failed to delete concept from Neo4j")?;
@@ -883,7 +910,10 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
-    fn resolve_concept_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn resolve_concept_id(
+        &self,
+        id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         let id = id.to_string();
         Box::pin(async move { Ok(id) })
     }
@@ -922,7 +952,7 @@ impl crate::db::Database for Neo4jDatabase {
             let mut results = Vec::new();
             while let Ok(Some(row)) = result.next().await {
                 let node: neo4rs::Node = row.get("c").context("Failed to extract concept node")?;
-                
+
                 let search_result = ConceptSearchResult {
                     id: node.get("id").context("Missing id")?,
                     name: node.get("name").context("Missing name")?,
@@ -930,7 +960,7 @@ impl crate::db::Database for Neo4jDatabase {
                     scope: node.get("scope").ok(),
                     score: 0.5,
                 };
-                
+
                 results.push(search_result);
             }
 
@@ -1002,14 +1032,17 @@ impl crate::db::Database for Neo4jDatabase {
         })
     }
 
-    fn delete_ontology_edge(&self, edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+    fn delete_ontology_edge(
+        &self,
+        edge_id: i64,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
         let graph = self.graph.clone();
-        
+
         Box::pin(async move {
             // Neo4j internal relationship IDs are not directly accessible in parameterized queries
             // For now, we'll query to find the Nth relationship (by ordinal position)
             // and delete it. This is not ideal but works for the current interface.
-            
+
             let cypher = r#"
                 MATCH (from)-[r]->(to)
                 WHERE r.from_id IS NOT NULL AND r.rel_type IS NOT NULL
@@ -1018,12 +1051,12 @@ impl crate::db::Database for Neo4jDatabase {
                 DELETE r
                 RETURN true as deleted
             "#;
-            
+
             let mut result = graph
                 .execute(neo4rs::query(cypher).param("edge_id", edge_id))
                 .await
                 .context("Failed to delete ontology edge from Neo4j")?;
-            
+
             if let Ok(Some(_row)) = result.next().await {
                 Ok(true)
             } else {
@@ -1043,7 +1076,7 @@ impl crate::db::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut q = neo4rs::query(&query);
-            
+
             if let Some(obj) = params.as_object() {
                 for (key, value) in obj {
                     match value {
@@ -1144,7 +1177,7 @@ mod neo4j_integration_tests {
     /// Requires: docker run --publish=7474:7474 --publish=7687:7687 neo4j
     /// Run with: cargo test -- --ignored --test-threads=1
     #[tokio::test]
-    #[ignore]  // Run manually with local Neo4j instance
+    #[ignore] // Run manually with local Neo4j instance
     async fn test_neo4j_health_check() {
         let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j")
             .await
@@ -1175,13 +1208,15 @@ mod neo4j_integration_tests {
             links: vec![],
         };
 
-        let response = db.add_memory(req, &config)
+        let response = db
+            .add_memory(req, &config)
             .await
             .expect("Failed to add memory");
         println!("✓ Created memory: {}", response.id);
 
         // Get memory
-        let mem = db.get_memory(&response.id)
+        let mem = db
+            .get_memory(&response.id)
             .await
             .expect("Failed to get memory");
         assert!(mem.is_some(), "Memory should exist");
@@ -1197,7 +1232,8 @@ mod neo4j_integration_tests {
         println!("✓ Updated memory");
 
         // Delete memory
-        let deleted = db.delete_memory(&response.id)
+        let deleted = db
+            .delete_memory(&response.id)
             .await
             .expect("Failed to delete memory");
         assert!(deleted, "Memory should be deleted");
@@ -1225,7 +1261,8 @@ mod neo4j_integration_tests {
             links: vec![],
         };
 
-        let id1 = db.add_memory(req1, &config)
+        let id1 = db
+            .add_memory(req1, &config)
             .await
             .expect("Failed to create memory 1")
             .id;
@@ -1241,20 +1278,28 @@ mod neo4j_integration_tests {
             links: vec![],
         };
 
-        let id2 = db.add_memory(req2, &config)
+        let id2 = db
+            .add_memory(req2, &config)
             .await
             .expect("Failed to create memory 2")
             .id;
 
         // Link them
-        let link = db.link_memories(&id1, &crate::models::EdgeType::RelatesTo, &id2, Some("test link"))
+        let link = db
+            .link_memories(
+                &id1,
+                &crate::models::EdgeType::RelatesTo,
+                &id2,
+                Some("test link"),
+            )
             .await
             .expect("Failed to link memories");
         assert!(link.created, "Link should be created");
         println!("✓ Created relationship: {} -> {} ({})", id1, id2, link.rel);
 
         // Unlink them
-        let unlinked = db.unlink_memories(&id1, &crate::models::EdgeType::RelatesTo, &id2)
+        let unlinked = db
+            .unlink_memories(&id1, &crate::models::EdgeType::RelatesTo, &id2)
             .await
             .expect("Failed to unlink");
         assert!(unlinked, "Relationship should be deleted");
@@ -1273,34 +1318,39 @@ mod neo4j_integration_tests {
             .expect("Failed to connect to Neo4j");
 
         // Create concept
-        let concept_resp = db.add_concept("TestConcept", Some("A test concept"), Some("testing"), None)
+        let concept_resp = db
+            .add_concept("TestConcept", Some("A test concept"), Some("testing"), None)
             .await
             .expect("Failed to add concept");
         println!("✓ Created concept: {}", concept_resp.id);
 
         // Get concept
-        let concept = db.get_concept(&concept_resp.id)
+        let concept = db
+            .get_concept(&concept_resp.id)
             .await
             .expect("Failed to get concept");
         assert_eq!(concept.name, "TestConcept");
         println!("✓ Retrieved concept: {}", concept.name);
 
         // List concepts
-        let concepts = db.list_concepts(Some("testing"), 10)
+        let concepts = db
+            .list_concepts(Some("testing"), 10)
             .await
             .expect("Failed to list concepts");
         assert!(!concepts.is_empty(), "Should have at least one concept");
         println!("✓ Listed {} concepts", concepts.len());
 
         // Search concepts
-        let search_results = db.search_concepts("Test", None, 10)
+        let search_results = db
+            .search_concepts("Test", None, 10)
             .await
             .expect("Failed to search concepts");
         assert!(!search_results.is_empty(), "Should find test concept");
         println!("✓ Found {} concepts in search", search_results.len());
 
         // Delete concept
-        let deleted = db.delete_concept(&concept_resp.id)
+        let deleted = db
+            .delete_concept(&concept_resp.id)
             .await
             .expect("Failed to delete concept");
         assert!(deleted, "Concept should be deleted");
@@ -1316,13 +1366,19 @@ mod neo4j_integration_tests {
             .await
             .expect("Failed to connect to Neo4j");
 
-        let memories = db.list_memories(None).await.expect("Failed to list memories");
-        
+        let memories = db
+            .list_memories(None)
+            .await
+            .expect("Failed to list memories");
+
         println!("Found {} memories in Neo4j:", memories.len());
         for mem in &memories {
             println!("  - {} ({}): {}", mem.id, mem.memory_type, mem.content);
         }
-        
-        assert!(memories.len() >= 2, "Should have at least 2 memories from migration");
+
+        assert!(
+            memories.len() >= 2,
+            "Should have at least 2 memories from migration"
+        );
     }
 }

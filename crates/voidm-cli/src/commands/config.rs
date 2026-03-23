@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
-use voidm_core::{Config, config::save_config};
+use voidm_core::{config::save_config, Config};
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {

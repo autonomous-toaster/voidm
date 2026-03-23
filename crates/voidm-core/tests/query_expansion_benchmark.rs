@@ -5,15 +5,18 @@
 
 #[cfg(test)]
 mod query_expansion_benchmark {
+    use voidm_core::config::{IntentConfig, QueryExpansionConfig};
     use voidm_core::query_expansion::QueryExpander;
-    use voidm_core::config::{QueryExpansionConfig, IntentConfig};
 
     /// Test dataset: representative voidm queries.
     fn get_test_queries() -> Vec<(&'static str, &'static str)> {
         vec![
             // Core concepts
             ("API", "REST API, web service, HTTP endpoints, API design"),
-            ("Docker", "containerization, container images, Docker Compose"),
+            (
+                "Docker",
+                "containerization, container images, Docker Compose",
+            ),
             ("Python", "programming language, PyPI, Python ML"),
             ("Database", "SQL, NoSQL, schema, persistence"),
             ("Testing", "unit testing, test cases, TDD"),
@@ -52,7 +55,11 @@ mod query_expansion_benchmark {
         for (query, _expected) in get_test_queries().iter().take(5) {
             let result = expander.expand(query).await;
             // With disabled expansion, should return error
-            assert!(result.is_err(), "Should fail when disabled for query: {}", query);
+            assert!(
+                result.is_err(),
+                "Should fail when disabled for query: {}",
+                query
+            );
         }
     }
 
@@ -76,7 +83,11 @@ mod query_expansion_benchmark {
             let result = expander.expand("test").await;
             match result {
                 Ok(expanded) => {
-                    assert!(!expanded.is_empty(), "Expanded query should not be empty for model: {}", model_name);
+                    assert!(
+                        !expanded.is_empty(),
+                        "Expanded query should not be empty for model: {}",
+                        model_name
+                    );
                 }
                 Err(e) => {
                     // Model not available - expected in test environment
@@ -98,7 +109,7 @@ mod query_expansion_benchmark {
         let expander = QueryExpander::new(config);
 
         let result = expander.expand("Docker").await;
-        
+
         // Either expansion succeeds with ONNX model, or fails with no fallback
         // No middle ground - either real expansion or error
         match result {

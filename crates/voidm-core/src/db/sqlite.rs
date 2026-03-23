@@ -1,14 +1,14 @@
 use anyhow::{Context, Result};
-use std::pin::Pin;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::str::FromStr;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
-use crate::models::{
-    AddMemoryRequest, AddMemoryResponse, Memory, EdgeType, LinkResponse,
+use crate::models::{AddMemoryRequest, AddMemoryResponse, EdgeType, LinkResponse, Memory};
+use crate::ontology::{
+    Concept, ConceptSearchResult, ConceptWithInstances, ConceptWithSimilarityWarning, OntologyEdge,
 };
-use crate::ontology::{Concept, ConceptWithInstances, OntologyEdge, ConceptWithSimilarityWarning, ConceptSearchResult};
 use crate::search::{SearchOptions, SearchResponse};
 
 /// Load sqlite-vec at process level via sqlite3_auto_extension.
@@ -77,9 +77,7 @@ impl crate::db::Database for SqliteDatabase {
 
     fn ensure_schema(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         let pool = self.pool.clone();
-        Box::pin(async move {
-            crate::migrate::run(&pool).await
-        })
+        Box::pin(async move { crate::migrate::run(&pool).await })
     }
 
     fn add_memory(
@@ -89,20 +87,22 @@ impl crate::db::Database for SqliteDatabase {
     ) -> Pin<Box<dyn Future<Output = Result<AddMemoryResponse>> + Send + '_>> {
         let pool = self.pool.clone();
         let config = config.clone();
-        Box::pin(async move {
-            crate::crud::add_memory(&pool, req, &config).await
-        })
+        Box::pin(async move { crate::crud::add_memory(&pool, req, &config).await })
     }
 
-    fn get_memory(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Option<Memory>>> + Send + '_>> {
+    fn get_memory(
+        &self,
+        id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Memory>>> + Send + '_>> {
         let pool = self.pool.clone();
         let id = id.to_string();
-        Box::pin(async move {
-            crate::crud::get_memory(&pool, &id).await
-        })
+        Box::pin(async move { crate::crud::get_memory(&pool, &id).await })
     }
 
-    fn list_memories(&self, limit: Option<usize>) -> Pin<Box<dyn Future<Output = Result<Vec<Memory>>> + Send + '_>> {
+    fn list_memories(
+        &self,
+        limit: Option<usize>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Memory>>> + Send + '_>> {
         let pool = self.pool.clone();
         Box::pin(async move {
             crate::crud::list_memories(&pool, None, None, limit.unwrap_or(100)).await
@@ -112,9 +112,7 @@ impl crate::db::Database for SqliteDatabase {
     fn delete_memory(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
         let pool = self.pool.clone();
         let id = id.to_string();
-        Box::pin(async move {
-            crate::crud::delete_memory(&pool, &id).await
-        })
+        Box::pin(async move { crate::crud::delete_memory(&pool, &id).await })
     }
 
     fn update_memory(
@@ -136,19 +134,18 @@ impl crate::db::Database for SqliteDatabase {
         })
     }
 
-    fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn resolve_memory_id(
+        &self,
+        id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         let pool = self.pool.clone();
         let id = id.to_string();
-        Box::pin(async move {
-            crate::crud::resolve_id(&pool, &id).await
-        })
+        Box::pin(async move { crate::crud::resolve_id(&pool, &id).await })
     }
 
     fn list_scopes(&self) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + '_>> {
         let pool = self.pool.clone();
-        Box::pin(async move {
-            crate::crud::list_scopes(&pool).await
-        })
+        Box::pin(async move { crate::crud::list_scopes(&pool).await })
     }
 
     fn link_memories(
@@ -178,23 +175,23 @@ impl crate::db::Database for SqliteDatabase {
         let from_id = from_id.to_string();
         let to_id = to_id.to_string();
         let rel = rel.clone();
-        Box::pin(async move {
-            crate::crud::unlink_memories(&pool, &from_id, &rel, &to_id).await
-        })
+        Box::pin(async move { crate::crud::unlink_memories(&pool, &from_id, &rel, &to_id).await })
     }
 
-    fn list_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>> {
+    fn list_edges(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>> {
         let pool = self.pool.clone();
-        Box::pin(async move {
-            crate::crud::list_edges(&pool).await
-        })
+        Box::pin(async move { crate::crud::list_edges(&pool).await })
     }
 
-    fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>> {
+    fn list_ontology_edges(
+        &self,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>,
+    > {
         let pool = self.pool.clone();
-        Box::pin(async move {
-            crate::crud::list_ontology_edges(&pool).await
-        })
+        Box::pin(async move { crate::crud::list_ontology_edges(&pool).await })
     }
 
     fn create_ontology_edge(
@@ -222,7 +219,7 @@ impl crate::db::Database for SqliteDatabase {
         let opts_owned: SearchOptions = opts.clone();
         let model_name_owned: String = model_name.to_string();
         let search_config_owned: crate::config::SearchConfig = config_search.clone();
-        
+
         let future = async move {
             crate::search::search(
                 &pool,
@@ -234,7 +231,7 @@ impl crate::db::Database for SqliteDatabase {
             )
             .await
         };
-        
+
         Box::pin(future)
     }
 
@@ -250,16 +247,15 @@ impl crate::db::Database for SqliteDatabase {
         let description = description.map(|s| s.to_string());
         let scope = scope.map(|s| s.to_string());
         Box::pin(async move {
-            crate::ontology::add_concept(&pool, &name, description.as_deref(), scope.as_deref()).await
+            crate::ontology::add_concept(&pool, &name, description.as_deref(), scope.as_deref())
+                .await
         })
     }
 
     fn get_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Concept>> + Send + '_>> {
         let pool = self.pool.clone();
         let id = id.to_string();
-        Box::pin(async move {
-            crate::ontology::get_concept(&pool, &id).await
-        })
+        Box::pin(async move { crate::ontology::get_concept(&pool, &id).await })
     }
 
     fn get_concept_with_instances(
@@ -268,9 +264,7 @@ impl crate::db::Database for SqliteDatabase {
     ) -> Pin<Box<dyn Future<Output = Result<ConceptWithInstances>> + Send + '_>> {
         let pool = self.pool.clone();
         let id = id.to_string();
-        Box::pin(async move {
-            crate::ontology::get_concept_with_instances(&pool, &id).await
-        })
+        Box::pin(async move { crate::ontology::get_concept_with_instances(&pool, &id).await })
     }
 
     fn list_concepts(
@@ -280,25 +274,24 @@ impl crate::db::Database for SqliteDatabase {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<Concept>>> + Send + '_>> {
         let pool = self.pool.clone();
         let scope = scope.map(|s| s.to_string());
-        Box::pin(async move {
-            crate::ontology::list_concepts(&pool, scope.as_deref(), limit).await
-        })
+        Box::pin(
+            async move { crate::ontology::list_concepts(&pool, scope.as_deref(), limit).await },
+        )
     }
 
     fn delete_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
         let pool = self.pool.clone();
         let id = id.to_string();
-        Box::pin(async move {
-            crate::ontology::delete_concept(&pool, &id).await
-        })
+        Box::pin(async move { crate::ontology::delete_concept(&pool, &id).await })
     }
 
-    fn resolve_concept_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn resolve_concept_id(
+        &self,
+        id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         let pool = self.pool.clone();
         let id = id.to_string();
-        Box::pin(async move {
-            crate::ontology::resolve_concept_id(&pool, &id).await
-        })
+        Box::pin(async move { crate::ontology::resolve_concept_id(&pool, &id).await })
     }
 
     fn search_concepts(
@@ -343,11 +336,12 @@ impl crate::db::Database for SqliteDatabase {
         })
     }
 
-    fn delete_ontology_edge(&self, edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+    fn delete_ontology_edge(
+        &self,
+        edge_id: i64,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
         let pool = self.pool.clone();
-        Box::pin(async move {
-            crate::ontology::delete_ontology_edge(&pool, edge_id).await
-        })
+        Box::pin(async move { crate::ontology::delete_ontology_edge(&pool, edge_id).await })
     }
 
     fn query_cypher(
@@ -378,8 +372,6 @@ impl crate::db::Database for SqliteDatabase {
     ) -> Pin<Box<dyn Future<Output = Result<Option<(String, String)>>> + Send + '_>> {
         let pool = self.pool.clone();
         let configured_model = configured_model.to_string();
-        Box::pin(async move {
-            crate::crud::check_model_mismatch(&pool, &configured_model).await
-        })
+        Box::pin(async move { crate::crud::check_model_mismatch(&pool, &configured_model).await })
     }
 }

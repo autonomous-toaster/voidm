@@ -82,8 +82,8 @@ mod tests {
     #[test]
     fn test_bool_parsing() {
         assert_eq!(EnvHelper::get_bool("TRUE_TEST"), None); // Not set
-        // In real tests with env::set_var:
-        // env::set_var("VOIDM_TEST_BOOL", "true");
-        // assert_eq!(EnvHelper::get_bool("TEST_BOOL"), Some(true));
+                                                            // In real tests with env::set_var:
+                                                            // env::set_var("VOIDM_TEST_BOOL", "true");
+                                                            // assert_eq!(EnvHelper::get_bool("TEST_BOOL"), Some(true));
     }
 }

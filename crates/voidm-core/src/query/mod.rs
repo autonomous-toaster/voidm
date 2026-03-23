@@ -9,18 +9,18 @@
 // - SQLite: Translates Cypher to SQL
 // - PostgreSQL: Translates Cypher to SQL with pgvector/FTS support
 
-use std::collections::HashMap;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 pub mod cypher;
-pub mod translator;
-pub mod sqlite;
 pub mod postgres;
+pub mod sqlite;
+pub mod translator;
 
 pub use cypher::CypherOperation;
-pub use translator::{QueryTranslator, Neo4jTranslator};
-pub use sqlite::SqliteTranslator;
 pub use postgres::PostgresTranslator;
+pub use sqlite::SqliteTranslator;
+pub use translator::{Neo4jTranslator, QueryTranslator};
 
 /// Parameters for query execution
 #[derive(Debug, Clone)]
@@ -74,7 +74,10 @@ mod tests {
             .with_param("id", "test-id")
             .with_param("count", 42);
 
-        assert_eq!(params.get("id").map(|v| v.as_str()).flatten(), Some("test-id"));
+        assert_eq!(
+            params.get("id").map(|v| v.as_str()).flatten(),
+            Some("test-id")
+        );
         assert_eq!(params.get("count").map(|v| v.as_i64()).flatten(), Some(42));
     }
 }

@@ -19,7 +19,7 @@ pub struct LinkArgs {
 pub async fn run(args: LinkArgs, pool: &SqlitePool, json: bool) -> Result<()> {
     let edge_type: EdgeType = args.rel.parse()?;
     let from = resolve_id(pool, &args.from).await?;
-    let to   = resolve_id(pool, &args.to).await?;
+    let to = resolve_id(pool, &args.to).await?;
     let resp = crud::link_memories(pool, &from, &edge_type, &to, args.note.as_deref()).await?;
 
     if json {

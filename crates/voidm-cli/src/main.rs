@@ -2,12 +2,16 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use voidm_cli::{commands, output, instructions, cli_config};
-use voidm_core::{Config, open_pool};
 use cli_config::CliConfigOverrides;
+use voidm_cli::{cli_config, commands};
+use voidm_core::{open_pool, Config};
 
 #[derive(Parser)]
-#[command(name = "voidm", about = "Local-first memory tool for LLM agents", version)]
+#[command(
+    name = "voidm",
+    about = "Local-first memory tool for LLM agents",
+    version
+)]
 pub struct Cli {
     /// Override database path [env: VOIDM_DB]
     #[arg(long, global = true, env = "VOIDM_DB")]
@@ -22,7 +26,6 @@ pub struct Cli {
     pub quiet: bool,
 
     // ─── Global Config Overrides ───
-
     /// Database backend: sqlite, neo4j [env: VOIDM_DATABASE_BACKEND]
     #[arg(long, global = true, env = "VOIDM_DATABASE_BACKEND")]
     pub database_backend: Option<String>,
@@ -123,6 +126,9 @@ pub enum Commands {
     Get(commands::get::GetArgs),
     /// Hybrid search
     Search(commands::search::SearchArgs),
+    /// Trajectory-informed learning tips
+    #[command(subcommand)]
+    Learn(commands::learn::LearnCommands),
     /// List memories (newest first)
     List(commands::list::ListArgs),
     /// Delete a memory (cascades graph edges)
@@ -159,8 +165,6 @@ pub enum Commands {
     Info(commands::info::InfoArgs),
     /// Show memory and graph statistics
     Stats(commands::stats::StatsArgs),
-    /// Run an assistant-friendly MCP server
-    Mcp(commands::mcp::McpArgs),
     /// Migrate data between backends (sqlite ↔ neo4j)
     Migrate(commands::migrate::MigrateArgs),
     /// Check for new releases on GitHub
@@ -209,6 +213,7 @@ async fn main() {
 
 /// Emit an error. In JSON mode: `{"error": "..."}` on stdout. Otherwise: `Error: ...` on stderr.
 pub fn emit_error(msg: &str, json: bool) {
+    let msg = augment_error_message(msg);
     if json {
         println!("{}", serde_json::json!({ "error": msg }));
     } else {
@@ -216,7 +221,21 @@ pub fn emit_error(msg: &str, json: bool) {
     }
 }
 
+fn augment_error_message(msg: &str) -> String {
+    let lowercase = msg.to_ascii_lowercase();
+    if voidm_core::is_codex_sandbox_active() && lowercase.contains("readonly database") {
+        return format!(
+            "{msg}\nHint: sandboxed runs need a writable DB path. Use VOIDM_DB={} or set database.sqlite_path to the same location.",
+            voidm_core::codex_sandbox_db_path().display()
+        );
+    }
+
+    msg.to_string()
+}
+
 async fn run(cli: Cli) -> Result<()> {
+    let cli_sqlite_path_override = cli.database_sqlite_path.clone();
+
     // Commands that don't need DB
     match &cli.command {
         Commands::Instructions(args) => {
@@ -230,7 +249,13 @@ async fn run(cli: Cli) -> Result<()> {
             // Apply CLI overrides (file → env → CLI hierarchy)
             config = config.merge_from_env();
             config = cli.cli_config_overrides().apply_to_config(config);
-            return commands::info::run(args.clone(), &config, cli.db.as_deref(), cli.json);
+            return commands::info::run(
+                args.clone(),
+                &config,
+                cli.db.as_deref(),
+                cli.database_sqlite_path.as_deref(),
+                cli.json,
+            );
         }
         Commands::Init(args) => {
             return commands::init::run(args.clone()).await;
@@ -240,7 +265,14 @@ async fn run(cli: Cli) -> Result<()> {
             // Apply CLI overrides (file → env → CLI hierarchy)
             config = config.merge_from_env();
             config = cli.cli_config_overrides().apply_to_config(config);
-            return commands::migrate::run(args.clone(), &config, cli.db.as_deref(), cli.json).await;
+            return commands::migrate::run(
+                args.clone(),
+                &config,
+                cli.db.as_deref(),
+                cli.database_sqlite_path.as_deref(),
+                cli.json,
+            )
+            .await;
         }
         Commands::CheckUpdate(args) => {
             return commands::update::check_update(args.clone()).await;
@@ -259,8 +291,10 @@ async fn run(cli: Cli) -> Result<()> {
     use voidm_core::config_loader::MergeFromEnv;
     config = config.merge_from_env();
     config = cli.cli_config_overrides().apply_to_config(config);
-    
-    let db_path = config.db_path(cli.db.as_deref());
+
+    let db_path = config
+        .resolve_db_path(cli.db.as_deref(), cli_sqlite_path_override.as_deref())
+        .path;
     let pool = open_pool(&db_path).await?;
 
     // Run migrations
@@ -286,6 +320,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Add(args) => commands::add::run(args, &pool, &config, cli.json).await,
         Commands::Get(args) => commands::get::run(args, &pool, cli.json).await,
         Commands::Search(args) => commands::search::run(args, &pool, &config, cli.json).await,
+        Commands::Learn(cmd) => commands::learn::run(cmd, &pool, &config, cli.json).await,
         Commands::List(args) => commands::list::run(args, &pool, &config, cli.json).await,
         Commands::Delete(args) => commands::delete::run(args, &pool, cli.json).await,
         Commands::Link(args) => commands::link::run(args, &pool, cli.json).await,
@@ -303,6 +338,5 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Migrate(_) => unreachable!(),
         Commands::CheckUpdate(_) => unreachable!(),
         Commands::Stats(args) => commands::stats::run(args, &pool, &config, cli.json).await,
-        Commands::Mcp(args) => commands::mcp::run(args, pool, config).await,
     }
 }

@@ -3,8 +3,8 @@
 
 #[cfg(test)]
 mod reranker_batch_tests {
-    use voidm_core::reranker::CrossEncoderReranker;
     use std::time::Instant;
+    use voidm_core::reranker::CrossEncoderReranker;
 
     #[tokio::test]
     #[ignore] // Run with: cargo test --test reranker_batch_benchmark -- --ignored
@@ -15,7 +15,7 @@ mod reranker_batch_tests {
             .expect("Should load reranker model");
 
         let query = "What is machine learning?";
-        
+
         // Sample documents
         let documents = vec![
             "Machine learning is a subset of artificial intelligence that enables systems to learn from data.",
@@ -63,16 +63,9 @@ mod reranker_batch_tests {
             );
         }
 
-        println!(
-            "\n📊 Batch Reranking Performance Test");
-        println!(
-            "   Documents: {}",
-            doc_refs.len()
-        );
-        println!(
-            "   Model: {}",
-            reranker.model_name()
-        );
+        println!("\n📊 Batch Reranking Performance Test");
+        println!("   Documents: {}", doc_refs.len());
+        println!("   Model: {}", reranker.model_name());
         println!(
             "   Batch duration: {:.2}ms",
             batch_duration.as_secs_f64() * 1000.0
@@ -81,7 +74,7 @@ mod reranker_batch_tests {
             "   Per-document average: {:.2}ms",
             (batch_duration.as_secs_f64() * 1000.0) / doc_refs.len() as f64
         );
-        
+
         println!("\n   Top 3 Results:");
         for (rank, result) in reranked_results.iter().take(3).enumerate() {
             let doc = doc_refs[result.index];
@@ -131,7 +124,8 @@ mod reranker_batch_tests {
                 .expect("Individual scoring should succeed");
             individual_results.push((idx, score));
         }
-        individual_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        individual_results
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Compare results
         println!("\n✅ Batch vs Sequential Consistency Test");
@@ -142,7 +136,7 @@ mod reranker_batch_tests {
                 "   Batch [idx={}, score={:.4}] vs Sequential [idx={}, score={:.4}]",
                 batch_result.index, batch_result.score, seq_idx, seq_score
             );
-            
+
             // Scores should match closely (allowing small floating point differences)
             assert!(
                 (batch_result.score - seq_score).abs() < 0.0001,

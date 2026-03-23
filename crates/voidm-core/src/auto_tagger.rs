@@ -16,47 +16,154 @@ use std::collections::{HashMap, HashSet};
 
 const STOPWORDS: &[&str] = &[
     // articles
-    "the", "a", "an",
+    "the",
+    "a",
+    "an",
     // conjunctions
-    "and", "or", "but",
+    "and",
+    "or",
+    "but",
     // prepositions
-    "in", "on", "at", "to", "for", "of", "is", "are", "was", "were",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "is",
+    "are",
+    "was",
+    "were",
     // auxiliary verbs
-    "be", "been", "being", "have", "has", "had", "do", "does", "did",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
     // modals
-    "will", "would", "could", "should", "may", "might", "must", "can",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "must",
+    "can",
     // pronouns
-    "this", "that", "these", "those", "i", "you", "he", "she", "it", "we", "they",
+    "this",
+    "that",
+    "these",
+    "those",
+    "i",
+    "you",
+    "he",
+    "she",
+    "it",
+    "we",
+    "they",
     // interrogatives
-    "what", "which", "who", "when", "where", "why", "how",
+    "what",
+    "which",
+    "who",
+    "when",
+    "where",
+    "why",
+    "how",
     // negation
-    "not", "no", "yes",
+    "not",
+    "no",
+    "yes",
     // other
-    "as", "by", "with", "from",
+    "as",
+    "by",
+    "with",
+    "from",
     // domain-specific
-    "memory", "note", "tag", "voidm", "system", "data", "information",
+    "memory",
+    "note",
+    "tag",
+    "voidm",
+    "system",
+    "data",
+    "information",
 ];
 
 // ─── Type-specific keywords and patterns ────────────────────────────────────
 
 const ACTION_VERBS: &[&str] = &[
-    "attended", "visited", "deployed", "implemented", "learned", "participated",
-    "created", "built", "designed", "configured", "installed", "managed", "led",
-    "discussed", "presented", "wrote", "published", "reviewed",
+    "attended",
+    "visited",
+    "deployed",
+    "implemented",
+    "learned",
+    "participated",
+    "created",
+    "built",
+    "designed",
+    "configured",
+    "installed",
+    "managed",
+    "led",
+    "discussed",
+    "presented",
+    "wrote",
+    "published",
+    "reviewed",
 ];
 
 const TECH_KEYWORDS: &[&str] = &[
-    "docker", "kubernetes", "terraform", "ansible", "jenkins", "gitlab",
-    "github", "aws", "gcp", "azure", "docker-compose",
-    "python", "rust", "go", "javascript", "java", "typescript",
-    "react", "vue", "angular", "flask", "fastapi", "spring", "rails",
-    "postgresql", "mysql", "mongodb", "redis", "elasticsearch",
-    "nginx", "apache", "linux", "windows", "macos",
+    "docker",
+    "kubernetes",
+    "terraform",
+    "ansible",
+    "jenkins",
+    "gitlab",
+    "github",
+    "aws",
+    "gcp",
+    "azure",
+    "docker-compose",
+    "python",
+    "rust",
+    "go",
+    "javascript",
+    "java",
+    "typescript",
+    "react",
+    "vue",
+    "angular",
+    "flask",
+    "fastapi",
+    "spring",
+    "rails",
+    "postgresql",
+    "mysql",
+    "mongodb",
+    "redis",
+    "elasticsearch",
+    "nginx",
+    "apache",
+    "linux",
+    "windows",
+    "macos",
 ];
 
 const RESOURCE_TYPES: &[&str] = &[
-    "server", "cluster", "container", "service", "pipeline", "infrastructure",
-    "database", "cache", "api", "endpoint", "queue",
+    "server",
+    "cluster",
+    "container",
+    "service",
+    "pipeline",
+    "infrastructure",
+    "database",
+    "cache",
+    "api",
+    "endpoint",
+    "queue",
 ];
 
 // ─── Main public function ──────────────────────────────────────────────────────
@@ -70,8 +177,7 @@ pub fn enrich_memory_tags(req: &mut AddMemoryRequest, config: &Config) -> Result
     }
 
     // Extract tags using three strategies
-    let entity_tags = extract_entity_tags(&req.content, config)
-        .unwrap_or_default();
+    let entity_tags = extract_entity_tags(&req.content, config).unwrap_or_default();
     let keyword_tags = extract_keyword_tags(&req.content, config);
     let type_specific_tags = extract_type_specific_tags(&req.content, &req.memory_type, config);
 
@@ -79,7 +185,7 @@ pub fn enrich_memory_tags(req: &mut AddMemoryRequest, config: &Config) -> Result
     let mut all_auto_tags = entity_tags;
     all_auto_tags.extend(keyword_tags);
     all_auto_tags.extend(type_specific_tags);
-    
+
     // Deduplicate auto-generated tags for storage
     let auto_tags_dedup: Vec<String> = all_auto_tags
         .iter()
@@ -152,11 +258,11 @@ fn extract_entity_tags(content: &str, config: &Config) -> Result<Vec<String>> {
 
 fn extract_keyword_tags(content: &str, config: &Config) -> Vec<String> {
     let use_stopwords = should_use_stopwords(config);
-    
+
     // Tokenize and count frequencies
     let tokens = tokenize(content);
     let mut freqs: HashMap<String, usize> = HashMap::new();
-    
+
     for token in tokens {
         if use_stopwords && is_stopword(&token) {
             continue;
@@ -166,11 +272,11 @@ fn extract_keyword_tags(content: &str, config: &Config) -> Vec<String> {
         }
         *freqs.entry(token).or_insert(0) += 1;
     }
-    
+
     // Keep top 8 keywords by frequency
     let mut keywords: Vec<_> = freqs.into_iter().collect();
     keywords.sort_by(|a, b| b.1.cmp(&a.1));
-    
+
     keywords
         .iter()
         .take(8)
@@ -209,14 +315,14 @@ fn extract_type_specific_tags(
 fn extract_episodic_tags(content: &str) -> Vec<String> {
     let mut tags = Vec::new();
     let content_lower = content.to_lowercase();
-    
+
     // Extract action verbs
     for verb in ACTION_VERBS {
         if content_lower.contains(verb) {
             tags.push(verb.to_string());
         }
     }
-    
+
     // Extract year patterns (simple: any 4-digit number starting with 19 or 20)
     let words: Vec<&str> = content_lower.split_whitespace().collect();
     for word in words {
@@ -226,14 +332,14 @@ fn extract_episodic_tags(content: &str) -> Vec<String> {
             }
         }
     }
-    
+
     tags
 }
 
 fn extract_semantic_tags(content: &str) -> Vec<String> {
     let mut tags = Vec::new();
     let content_lower = content.to_lowercase();
-    
+
     // Look for definition patterns: "is", "means", "refers to", "defined as"
     let definition_phrases = ["is a", "means", "refers to", "defined as", "can be"];
     for phrase in &definition_phrases {
@@ -242,42 +348,42 @@ fn extract_semantic_tags(content: &str) -> Vec<String> {
             break;
         }
     }
-    
+
     tags
 }
 
 fn extract_procedural_tags(content: &str) -> Vec<String> {
     let mut tags = Vec::new();
     let content_lower = content.to_lowercase();
-    
+
     // Extract technology keywords
     for tech in TECH_KEYWORDS {
         if content_lower.contains(tech) {
             tags.push(tech.to_string());
         }
     }
-    
+
     // Extract action verbs
     for verb in ACTION_VERBS {
         if content_lower.contains(verb) {
             tags.push(verb.to_string());
         }
     }
-    
+
     // Extract resource types
     for resource in RESOURCE_TYPES {
         if content_lower.contains(resource) {
             tags.push(resource.to_string());
         }
     }
-    
+
     tags
 }
 
 fn extract_conceptual_tags(content: &str) -> Vec<String> {
     let mut tags = Vec::new();
     let content_lower = content.to_lowercase();
-    
+
     // Look for definition patterns
     let definition_phrases = ["is", "means", "concept of", "idea of"];
     for phrase in &definition_phrases {
@@ -286,7 +392,7 @@ fn extract_conceptual_tags(content: &str) -> Vec<String> {
             break;
         }
     }
-    
+
     tags
 }
 
@@ -306,7 +412,7 @@ fn normalize_tag(tag: &str) -> String {
 }
 
 /// Merge auto-generated tags with user-provided tags.
-/// 
+///
 /// Logic:
 /// 1. Start with user tags (these take precedence)
 /// 2. Add auto-generated tags
@@ -315,16 +421,16 @@ fn normalize_tag(tag: &str) -> String {
 /// 5. Limit to max_tags
 fn merge_tags(auto_tags: &[String], user_tags: &[String], config: &Config) -> Vec<String> {
     let max_tags = get_max_tags(config);
-    
+
     // Start with user tags
     let mut all_tags = user_tags.to_vec();
-    
+
     // Add auto tags, deduplicating during addition
     let mut seen = HashSet::new();
     for tag in user_tags {
         seen.insert(tag.to_lowercase());
     }
-    
+
     for tag in auto_tags {
         let normalized = tag.to_lowercase();
         if !seen.contains(&normalized) {
@@ -332,7 +438,7 @@ fn merge_tags(auto_tags: &[String], user_tags: &[String], config: &Config) -> Ve
             all_tags.push(tag.clone());
         }
     }
-    
+
     // Remove substrings (keep longer tags)
     let mut filtered = Vec::new();
     for tag in &all_tags {
@@ -347,7 +453,7 @@ fn merge_tags(auto_tags: &[String], user_tags: &[String], config: &Config) -> Ve
             filtered.push(tag.clone());
         }
     }
-    
+
     // Limit to max_tags
     filtered.truncate(max_tags);
     filtered

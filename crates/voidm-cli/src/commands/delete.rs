@@ -17,7 +17,10 @@ pub async fn run(args: DeleteArgs, pool: &SqlitePool, json: bool) -> Result<()> 
         Ok(id) => id,
         Err(e) => {
             if json {
-                println!("{}", serde_json::json!({ "error": e.to_string(), "id": args.id }));
+                println!(
+                    "{}",
+                    serde_json::json!({ "error": e.to_string(), "id": args.id })
+                );
             } else {
                 eprintln!("Error: {}", e);
             }
@@ -44,7 +47,10 @@ pub async fn run(args: DeleteArgs, pool: &SqlitePool, json: bool) -> Result<()> 
         }
     } else {
         if json {
-            println!("{}", serde_json::json!({ "error": format!("Memory '{}' not found", id), "id": id }));
+            println!(
+                "{}",
+                serde_json::json!({ "error": format!("Memory '{}' not found", id), "id": id })
+            );
         } else {
             eprintln!("Error: Memory '{}' not found", id);
         }

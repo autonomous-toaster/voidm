@@ -1,6 +1,6 @@
+use crate::models::{edge_hint, Memory, SuggestedLink};
 use anyhow::Result;
 use sqlx::SqlitePool;
-use crate::models::{Memory, SuggestedLink, edge_hint};
 
 const NEIGHBOR_MAX_DEPTH: u8 = 3;
 const NEVER_TRAVERSE: &[&str] = &["CONTRADICTS", "INVALIDATES"];
@@ -110,16 +110,32 @@ pub async fn search(
 ) -> Result<SearchResponse> {
     // Dispatch to RRF-enhanced search if mode is HybridRRF
     if opts.mode == SearchMode::HybridRRF {
-        return search_with_rrf(pool, opts, model_name, embeddings_enabled, config_min_score, config_search).await;
+        return search_with_rrf(
+            pool,
+            opts,
+            model_name,
+            embeddings_enabled,
+            config_min_score,
+            config_search,
+        )
+        .await;
     }
 
     use std::collections::HashMap;
 
     tracing::info!("Search: Starting search request");
-    tracing::debug!("Search: query='{}', mode={:?}, limit={}, min_quality={:?}", 
-                    opts.query, opts.mode, opts.limit, opts.min_quality);
-    tracing::debug!("Search: embeddings_enabled={}, config_min_score={}", 
-                    embeddings_enabled, config_min_score);
+    tracing::debug!(
+        "Search: query='{}', mode={:?}, limit={}, min_quality={:?}",
+        opts.query,
+        opts.mode,
+        opts.limit,
+        opts.min_quality
+    );
+    tracing::debug!(
+        "Search: embeddings_enabled={}, config_min_score={}",
+        embeddings_enabled,
+        config_min_score
+    );
 
     let fetch_limit = opts.limit * 3; // over-fetch for merging
     let mut scores: HashMap<String, f32> = HashMap::new();
@@ -149,7 +165,10 @@ pub async fn search(
     }
 
     // --- BM25 via FTS5 ---
-    let use_bm25 = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Bm25 | SearchMode::Keyword);
+    let use_bm25 = matches!(
+        opts.mode,
+        SearchMode::Hybrid | SearchMode::Bm25 | SearchMode::Keyword
+    );
     if use_bm25 {
         let fts_query = sanitize_fts_query(&opts.query);
         let rows: Vec<(String, f32)> = sqlx::query_as(
@@ -176,12 +195,11 @@ pub async fn search(
     // --- Fuzzy (Jaro-Winkler) ---
     let use_fuzzy = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Fuzzy);
     if use_fuzzy {
-        let all: Vec<(String, String)> = sqlx::query_as(
-            "SELECT id, content FROM memories ORDER BY created_at DESC LIMIT 500"
-        )
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+        let all: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, content FROM memories ORDER BY created_at DESC LIMIT 500")
+                .fetch_all(pool)
+                .await
+                .unwrap_or_default();
 
         let query_lower = opts.query.to_lowercase();
         for (id, content) in all {
@@ -224,10 +242,10 @@ pub async fn search(
             }
             // Boost by importance
             let importance_boost = (m.importance as f32 - 5.0) * 0.02;
-            
+
             // Use persisted quality_score from DB (already fetched via get_memory)
             let quality_score = m.quality_score;
-            
+
             results.push(SearchResult {
                 id,
                 score: score + importance_boost,
@@ -246,13 +264,20 @@ pub async fn search(
             });
         }
     }
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Apply reranker if enabled (before quality/threshold filters)
     if let Some(reranker_config) = &config_search.reranker {
         if reranker_config.enabled {
             if !results.is_empty() {
-                tracing::info!("Search: Reranker enabled, applying to {} results", results.len());
+                tracing::info!(
+                    "Search: Reranker enabled, applying to {} results",
+                    results.len()
+                );
                 if let Err(e) = apply_reranker(reranker_config, &opts.query, &mut results).await {
                     tracing::warn!("Search: Reranking failed, using original scores: {}", e);
                 }
@@ -270,8 +295,14 @@ pub async fn search(
     if let Some(graph_config) = &config_search.graph_retrieval {
         if graph_config.enabled {
             if !results.is_empty() {
-                tracing::info!("Search: Graph-aware retrieval enabled, applying to {} results", results.len());
-                if let Err(e) = crate::graph_retrieval::expand_graph_results(pool, &mut results, graph_config).await {
+                tracing::info!(
+                    "Search: Graph-aware retrieval enabled, applying to {} results",
+                    results.len()
+                );
+                if let Err(e) =
+                    crate::graph_retrieval::expand_graph_results(pool, &mut results, graph_config)
+                        .await
+                {
                     tracing::warn!("Search: Graph-aware retrieval failed, continuing with original results: {}", e);
                 }
             } else {
@@ -306,14 +337,22 @@ pub async fn search(
             expand_neighbors(pool, &mut results, opts, config_search).await?;
         }
 
-        return Ok(SearchResponse { results, threshold_applied, best_score });
+        return Ok(SearchResponse {
+            results,
+            threshold_applied,
+            best_score,
+        });
     }
 
     if opts.include_neighbors {
         expand_neighbors(pool, &mut results, opts, config_search).await?;
     }
 
-    Ok(SearchResponse { results, threshold_applied: None, best_score: None })
+    Ok(SearchResponse {
+        results,
+        threshold_applied: None,
+        best_score: None,
+    })
 }
 
 /// Expand search results with graph neighbors in-place.
@@ -325,25 +364,31 @@ async fn expand_neighbors(
 ) -> Result<()> {
     use voidm_graph::traverse::neighbors as graph_neighbors;
 
-    let depth = opts.neighbor_depth
+    let depth = opts
+        .neighbor_depth
         .unwrap_or(config.default_neighbor_depth)
         .min(NEIGHBOR_MAX_DEPTH);
     let decay = opts.neighbor_decay.unwrap_or(config.neighbor_decay);
     let min_score = opts.neighbor_min_score.unwrap_or(config.neighbor_min_score);
     let limit = opts.neighbor_limit.unwrap_or(opts.limit);
-    let allowed_types: Vec<&str> = opts.edge_types
+    let allowed_types: Vec<&str> = opts
+        .edge_types
         .as_deref()
         .map(|v| v.iter().map(|s| s.as_str()).collect())
-        .unwrap_or_else(|| config.default_edge_types.iter().map(|s| s.as_str()).collect());
+        .unwrap_or_else(|| {
+            config
+                .default_edge_types
+                .iter()
+                .map(|s| s.as_str())
+                .collect()
+        });
 
     // Build set of IDs already in results
     let mut seen: std::collections::HashSet<String> =
         results.iter().map(|r| r.id.clone()).collect();
 
-    let direct_results: Vec<(String, f32)> = results
-        .iter()
-        .map(|r| (r.id.clone(), r.score))
-        .collect();
+    let direct_results: Vec<(String, f32)> =
+        results.iter().map(|r| (r.id.clone(), r.score)).collect();
 
     let mut neighbors_to_add: Vec<SearchResult> = Vec::new();
 
@@ -366,10 +411,10 @@ async fn expand_neighbors(
             }
             if let Some(m) = fetch_memory_by_id(pool, &hop.memory_id).await? {
                 seen.insert(hop.memory_id.clone());
-                
+
                 // Use persisted quality_score from DB (already fetched via get_memory)
                 let quality_score = m.quality_score;
-                
+
                 neighbors_to_add.push(SearchResult {
                     id: hop.memory_id,
                     score: nscore,
@@ -394,28 +439,45 @@ async fn expand_neighbors(
     }
 
     // Sort neighbors by score desc, then append
-    neighbors_to_add.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    neighbors_to_add.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.extend(neighbors_to_add);
     Ok(())
 }
 
-async fn fetch_memories_newest(pool: &SqlitePool, opts: &SearchOptions) -> Result<Vec<SearchResult>> {    let memories = crate::crud::list_memories(pool, opts.scope_filter.as_deref(), opts.type_filter.as_deref(), opts.limit).await?;
-    Ok(memories.into_iter().map(|m| SearchResult {
-        id: m.id,
-        score: 0.0,
-        memory_type: m.memory_type,
-        content: m.content,
-        scopes: m.scopes,
-        tags: m.tags,
-        importance: m.importance,
-        created_at: m.created_at,
-        source: "search".into(),
-        rel_type: None,
-        direction: None,
-        hop_depth: None,
-        parent_id: None,
-        quality_score: m.quality_score,
-    }).collect())
+async fn fetch_memories_newest(
+    pool: &SqlitePool,
+    opts: &SearchOptions,
+) -> Result<Vec<SearchResult>> {
+    let memories = crate::crud::list_memories(
+        pool,
+        opts.scope_filter.as_deref(),
+        opts.type_filter.as_deref(),
+        opts.limit,
+    )
+    .await?;
+    Ok(memories
+        .into_iter()
+        .map(|m| SearchResult {
+            id: m.id,
+            score: 0.0,
+            memory_type: m.memory_type,
+            content: m.content,
+            scopes: m.scopes,
+            tags: m.tags,
+            importance: m.importance,
+            created_at: m.created_at,
+            source: "search".into(),
+            rel_type: None,
+            direction: None,
+            hop_depth: None,
+            parent_id: None,
+            quality_score: m.quality_score,
+        })
+        .collect())
 }
 
 async fn fetch_memory_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
@@ -424,9 +486,7 @@ async fn fetch_memory_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Memory
 
 fn sanitize_fts_query(q: &str) -> String {
     // FTS5 requires quoting special chars; simple approach: wrap in quotes
-    let cleaned: String = q.chars()
-        .map(|c| if c == '"' { ' ' } else { c })
-        .collect();
+    let cleaned: String = q.chars().map(|c| if c == '"' { ' ' } else { c }).collect();
     format!("\"{}\"", cleaned)
 }
 
@@ -442,7 +502,8 @@ pub async fn find_similar(
         return Ok(vec![]);
     }
     let all = crate::vector::ann_search(pool, embedding, limit + 1).await?;
-    let results = all.into_iter()
+    let results = all
+        .into_iter()
         .filter(|(id, _)| id != exclude_id)
         .map(|(id, dist)| {
             let sim = 1.0 - (dist / 2.0).clamp(0.0, 1.0);
@@ -511,33 +572,41 @@ async fn apply_reranker(
         return Ok(());
     }
 
-    tracing::info!("Reranker: Initializing reranking with model: {}", config.model);
+    tracing::info!(
+        "Reranker: Initializing reranking with model: {}",
+        config.model
+    );
     tracing::debug!("Reranker config: apply_to_top_k={}", config.apply_to_top_k);
-    
+
     let reranker = crate::reranker::CrossEncoderReranker::load(&config.model).await?;
     tracing::info!("Reranker: Model '{}' loaded successfully", config.model);
-    
+
     // Extract passages using intelligent passage extraction
     let docs_to_rerank: Vec<String> = results[..apply_to_k]
         .iter()
-        .map(|r| crate::passage::extract_best_passage(
-            &r.content,
-            query,
-            &config.passage_extraction,
-        ))
+        .map(|r| {
+            crate::passage::extract_best_passage(&r.content, query, &config.passage_extraction)
+        })
         .collect();
-    
+
     let docs_to_rerank_refs: Vec<&str> = docs_to_rerank.iter().map(|s| s.as_str()).collect();
 
-    tracing::debug!("Reranker: Starting reranking of top-{} results (from {} total)", apply_to_k, results.len());
-    
+    tracing::debug!(
+        "Reranker: Starting reranking of top-{} results (from {} total)",
+        apply_to_k,
+        results.len()
+    );
+
     let reranked = reranker.rerank(query, &docs_to_rerank_refs)?;
-    tracing::info!("Reranker: Successfully reranked {} documents", reranked.len());
+    tracing::info!(
+        "Reranker: Successfully reranked {} documents",
+        reranked.len()
+    );
 
     // Create a mapping of original_index -> reranker_score
     let mut rerank_scores: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
     let mut score_changes = Vec::new();
-    
+
     for rerank_result in reranked {
         rerank_scores.insert(rerank_result.index, rerank_result.score);
     }
@@ -547,29 +616,43 @@ async fn apply_reranker(
         if let Some(rerank_score) = rerank_scores.get(&idx) {
             let original_score = result.score;
             let score_delta = rerank_score - original_score;
-            result.score = *rerank_score;  // Use pure reranker score
-            
+            result.score = *rerank_score; // Use pure reranker score
+
             tracing::debug!(
-                "Reranked [{}]: {:.4} → {:.4} (Δ {:.4}, {:.1}%) | {}", 
-                idx, 
-                original_score, 
+                "Reranked [{}]: {:.4} → {:.4} (Δ {:.4}, {:.1}%) | {}",
+                idx,
+                original_score,
                 rerank_score,
                 score_delta,
-                if original_score > 0.0 { (score_delta / original_score * 100.0) } else { 0.0 },
+                if original_score > 0.0 {
+                    (score_delta / original_score * 100.0)
+                } else {
+                    0.0
+                },
                 &result.id[..std::cmp::min(12, result.id.len())]
             );
-            
+
             score_changes.push((original_score, *rerank_score));
         }
     }
 
     // Calculate statistics
     if !score_changes.is_empty() {
-        let original_mean = score_changes.iter().map(|(o, _)| o).sum::<f32>() / score_changes.len() as f32;
-        let reranked_mean = score_changes.iter().map(|(_, r)| r).sum::<f32>() / score_changes.len() as f32;
-        let min_original = score_changes.iter().map(|(o, _)| o).copied().fold(f32::INFINITY, f32::min);
-        let max_reranked = score_changes.iter().map(|(_, r)| r).copied().fold(f32::NEG_INFINITY, f32::max);
-        
+        let original_mean =
+            score_changes.iter().map(|(o, _)| o).sum::<f32>() / score_changes.len() as f32;
+        let reranked_mean =
+            score_changes.iter().map(|(_, r)| r).sum::<f32>() / score_changes.len() as f32;
+        let min_original = score_changes
+            .iter()
+            .map(|(o, _)| o)
+            .copied()
+            .fold(f32::INFINITY, f32::min);
+        let max_reranked = score_changes
+            .iter()
+            .map(|(_, r)| r)
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+
         tracing::info!(
             "Reranker: Score statistics - Original (mean={:.4}, min={:.4}) → Reranked (mean={:.4}, max={:.4})",
             original_mean, min_original, reranked_mean, max_reranked
@@ -577,7 +660,11 @@ async fn apply_reranker(
     }
 
     // Re-sort by reranker scores
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     tracing::info!("Reranker: Results re-sorted by reranker scores");
 
     Ok(())
@@ -601,13 +688,17 @@ pub async fn search_with_rrf(
     config_search: &crate::config::SearchConfig,
 ) -> Result<SearchResponse> {
     use std::collections::HashMap;
-    
+
     tracing::info!("Search (RRF): Starting RRF-enhanced search request");
-    tracing::debug!("Search (RRF): query='{}', mode={:?}, limit={}", 
-                    opts.query, opts.mode, opts.limit);
+    tracing::debug!(
+        "Search (RRF): query='{}', mode={:?}, limit={}",
+        opts.query,
+        opts.mode,
+        opts.limit
+    );
 
     let fetch_limit = opts.limit * 3; // over-fetch for merging
-    
+
     // Collect signal results separately for RRF
     let mut vector_results: Vec<(String, f32)> = Vec::new();
     let mut bm25_results: Vec<(String, f32)> = Vec::new();
@@ -627,15 +718,17 @@ pub async fn search_with_rrf(
                     vector_results.push((id, sim));
                 }
                 // Sort by score descending for RRF
-                vector_results.sort_by(|a, b| {
-                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                vector_results
+                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             }
         }
     }
 
     // --- BM25 Signal ---
-    let use_bm25 = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Bm25 | SearchMode::Keyword);
+    let use_bm25 = matches!(
+        opts.mode,
+        SearchMode::Hybrid | SearchMode::Bm25 | SearchMode::Keyword
+    );
     if use_bm25 {
         tracing::debug!("Search (RRF): BM25 signal");
         let fts_query = sanitize_fts_query(&opts.query);
@@ -665,10 +758,11 @@ pub async fn search_with_rrf(
     if use_fuzzy {
         tracing::debug!("Search (RRF): Fuzzy signal");
         if let Ok(all) = sqlx::query_as::<_, (String, String)>(
-            "SELECT id, content FROM memories ORDER BY created_at DESC LIMIT 500"
+            "SELECT id, content FROM memories ORDER BY created_at DESC LIMIT 500",
         )
         .fetch_all(pool)
-        .await {
+        .await
+        {
             let query_lower = opts.query.to_lowercase();
             for (id, content) in all {
                 let sim = strsim::jaro_winkler(&query_lower, &content.to_lowercase()) as f32;
@@ -676,9 +770,8 @@ pub async fn search_with_rrf(
                     fuzzy_results.push((id, sim));
                 }
             }
-            fuzzy_results.sort_by(|a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            fuzzy_results
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         }
     }
 
@@ -729,7 +822,7 @@ pub async fn search_with_rrf(
 
             let importance_boost = (m.importance as f32 - 5.0) * 0.02;
             let final_score = rrf_result.rrf_score + importance_boost;
-            
+
             best_score = Some(best_score.unwrap_or(final_score).max(final_score));
 
             results.push(SearchResult {

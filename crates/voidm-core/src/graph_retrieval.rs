@@ -7,14 +7,14 @@
 //! Allows search to include memories that are conceptually related
 //! to directly matched results, improving recall while maintaining precision.
 
-use anyhow::Result;
-use sqlx::SqlitePool;
 use crate::models::Memory;
 use crate::search::SearchResult;
-use std::collections::HashSet;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, span, Level};
+use sqlx::SqlitePool;
+use std::collections::HashSet;
 use std::time::Instant;
+use tracing::{debug, info, span, Level};
 
 /// Configuration for tag-based retrieval.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,11 +36,21 @@ pub struct TagRetrievalConfig {
     pub limit: usize,
 }
 
-fn default_tag_enabled() -> bool { true }
-fn default_tag_min_overlap() -> usize { 3 }
-fn default_tag_min_percentage() -> f32 { 50.0 }
-fn default_tag_decay() -> f32 { 0.7 }
-fn default_tag_limit() -> usize { 5 }
+fn default_tag_enabled() -> bool {
+    true
+}
+fn default_tag_min_overlap() -> usize {
+    3
+}
+fn default_tag_min_percentage() -> f32 {
+    50.0
+}
+fn default_tag_decay() -> f32 {
+    0.7
+}
+fn default_tag_limit() -> usize {
+    5
+}
 
 impl Default for TagRetrievalConfig {
     fn default() -> Self {
@@ -71,9 +81,15 @@ pub struct ConceptRetrievalConfig {
     pub limit: usize,
 }
 
-fn default_concept_enabled() -> bool { true }
-fn default_concept_decay() -> f32 { 0.7 }
-fn default_concept_limit() -> usize { 3 }
+fn default_concept_enabled() -> bool {
+    true
+}
+fn default_concept_decay() -> f32 {
+    0.7
+}
+fn default_concept_limit() -> usize {
+    3
+}
 
 impl Default for ConceptRetrievalConfig {
     fn default() -> Self {
@@ -102,8 +118,12 @@ pub struct GraphRetrievalConfig {
     pub concepts: ConceptRetrievalConfig,
 }
 
-fn default_graph_enabled() -> bool { true }
-fn default_max_concept_hops() -> u8 { 2 }
+fn default_graph_enabled() -> bool {
+    true
+}
+fn default_max_concept_hops() -> u8 {
+    2
+}
 
 impl Default for GraphRetrievalConfig {
     fn default() -> Self {
@@ -132,10 +152,13 @@ pub async fn find_related_by_tags(
         return Ok(Vec::new());
     }
 
-    let span = span!(Level::DEBUG, "find_related_by_tags", 
-                     direct_results_count = direct_results.len(),
-                     min_overlap = config.min_overlap,
-                     min_percentage = config.min_percentage);
+    let span = span!(
+        Level::DEBUG,
+        "find_related_by_tags",
+        direct_results_count = direct_results.len(),
+        min_overlap = config.min_overlap,
+        min_percentage = config.min_percentage
+    );
     let _enter = span.enter();
 
     let start = Instant::now();
@@ -143,29 +166,31 @@ pub async fn find_related_by_tags(
     let seen_ids: HashSet<String> = direct_results.iter().map(|r| r.id.clone()).collect();
 
     for direct_result in direct_results {
-        debug!(memory_id = &direct_result.id, "finding tag-overlapping memories");
-        
+        debug!(
+            memory_id = &direct_result.id,
+            "finding tag-overlapping memories"
+        );
+
         // Use tags from direct result
-        let query_tags_strs: HashSet<String> = direct_result.tags
+        let query_tags_strs: HashSet<String> = direct_result
+            .tags
             .iter()
             .map(|t| t.to_lowercase().trim().to_string())
             .collect();
 
         if query_tags_strs.is_empty() {
-            debug!(memory_id = &direct_result.id, "no tags in direct result, skipping");
+            debug!(
+                memory_id = &direct_result.id,
+                "no tags in direct result, skipping"
+            );
             continue;
         }
 
         let query_tags_refs: HashSet<&String> = query_tags_strs.iter().collect();
 
         let overlap_start = Instant::now();
-        let tag_overlaps = find_memories_by_tag_overlap(
-            pool,
-            &direct_result.id,
-            &query_tags_refs,
-            config,
-        )
-        .await?;
+        let tag_overlaps =
+            find_memories_by_tag_overlap(pool, &direct_result.id, &query_tags_refs, config).await?;
         debug!(
             elapsed_ms = overlap_start.elapsed().as_millis() as u64,
             overlap_count = tag_overlaps.len(),
@@ -175,7 +200,9 @@ pub async fn find_related_by_tags(
         for (memory, overlap_count) in tag_overlaps {
             if !seen_ids.contains(&memory.id) {
                 // Calculate overlap percentage for scoring
-                let overlap_pct = (overlap_count as f32 / query_tags_strs.len().max(memory.tags.len()) as f32) * 100.0;
+                let overlap_pct = (overlap_count as f32
+                    / query_tags_strs.len().max(memory.tags.len()) as f32)
+                    * 100.0;
                 let score = (overlap_pct / 100.0) * config.decay_factor;
 
                 related.push(SearchResult {
@@ -216,13 +243,16 @@ async fn find_memories_by_tag_overlap(
     query_tags: &HashSet<&String>,
     config: &TagRetrievalConfig,
 ) -> Result<Vec<(Memory, usize)>> {
-    let span = span!(Level::DEBUG, "find_memories_by_tag_overlap",
-                     query_tags_count = query_tags.len(),
-                     exclude_id = exclude_id);
+    let span = span!(
+        Level::DEBUG,
+        "find_memories_by_tag_overlap",
+        query_tags_count = query_tags.len(),
+        exclude_id = exclude_id
+    );
     let _enter = span.enter();
 
     let query_start = Instant::now();
-    
+
     // Query all memories except the excluded one
     let rows: Vec<(String, String, String, i64, String, String, Option<f32>, String, String)> = sqlx::query_as(
         "SELECT id, type, content, importance, tags, metadata, quality_score, created_at, updated_at
@@ -243,7 +273,18 @@ async fn find_memories_by_tag_overlap(
     let parse_start = Instant::now();
     let mut results = Vec::new();
 
-    for (id, memory_type, content, importance, tags_json, _metadata_json, _quality_score_db, created_at, updated_at) in rows {
+    for (
+        id,
+        memory_type,
+        content,
+        importance,
+        tags_json,
+        _metadata_json,
+        _quality_score_db,
+        created_at,
+        updated_at,
+    ) in rows
+    {
         // Parse tags
         let tags_strs: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
         let memory_tags_set: HashSet<String> = tags_strs
@@ -267,17 +308,19 @@ async fn find_memories_by_tag_overlap(
             continue;
         }
 
-        let overlap_percentage = (overlap_count as f32 / query_tags.len().max(memory_tags_set.len()) as f32) * 100.0;
+        let overlap_percentage =
+            (overlap_count as f32 / query_tags.len().max(memory_tags_set.len()) as f32) * 100.0;
         if overlap_percentage < config.min_percentage {
             continue;
         }
 
         // Get scopes for this memory
-        let scopes: Vec<String> = sqlx::query_scalar("SELECT scope FROM memory_scopes WHERE memory_id = ?")
-            .bind(&id)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+        let scopes: Vec<String> =
+            sqlx::query_scalar("SELECT scope FROM memory_scopes WHERE memory_id = ?")
+                .bind(&id)
+                .fetch_all(pool)
+                .await
+                .unwrap_or_default();
 
         let memory = Memory {
             id,
@@ -325,10 +368,13 @@ pub async fn find_related_by_concepts(
     }
 
     let effective_max_hops = config.max_hops.unwrap_or(max_concept_hops);
-    
-    let span = span!(Level::DEBUG, "find_related_by_concepts",
-                     direct_results_count = direct_results.len(),
-                     max_hops = effective_max_hops);
+
+    let span = span!(
+        Level::DEBUG,
+        "find_related_by_concepts",
+        direct_results_count = direct_results.len(),
+        max_hops = effective_max_hops
+    );
     let _enter = span.enter();
 
     let start = Instant::now();
@@ -336,7 +382,10 @@ pub async fn find_related_by_concepts(
     let mut seen_ids: HashSet<String> = direct_results.iter().map(|r| r.id.clone()).collect();
 
     for direct_result in direct_results {
-        debug!(memory_id = &direct_result.id, "finding concept-related memories");
+        debug!(
+            memory_id = &direct_result.id,
+            "finding concept-related memories"
+        );
 
         let concepts_start = Instant::now();
         let concepts = find_concepts_for_memory(pool, &direct_result.id).await?;
@@ -348,7 +397,8 @@ pub async fn find_related_by_concepts(
 
         for concept_id in concepts {
             let traverse_start = Instant::now();
-            let related_concepts = traverse_concept_graph(pool, &concept_id, effective_max_hops).await?;
+            let related_concepts =
+                traverse_concept_graph(pool, &concept_id, effective_max_hops).await?;
             debug!(
                 elapsed_ms = traverse_start.elapsed().as_millis() as u64,
                 related_count = related_concepts.len(),
@@ -411,13 +461,25 @@ pub async fn find_related_by_concepts(
         .fetch_optional(pool)
         .await?;
 
-        if let Some((id, memory_type, content, importance, tags_json, _metadata_json, _quality_score, created_at, _updated_at)) = row {
+        if let Some((
+            id,
+            memory_type,
+            content,
+            importance,
+            tags_json,
+            _metadata_json,
+            _quality_score,
+            created_at,
+            _updated_at,
+        )) = row
+        {
             let tags_strs: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-            let scopes: Vec<String> = sqlx::query_scalar("SELECT scope FROM memory_scopes WHERE memory_id = ?")
-                .bind(&id)
-                .fetch_all(pool)
-                .await
-                .unwrap_or_default();
+            let scopes: Vec<String> =
+                sqlx::query_scalar("SELECT scope FROM memory_scopes WHERE memory_id = ?")
+                    .bind(&id)
+                    .fetch_all(pool)
+                    .await
+                    .unwrap_or_default();
 
             result.memory_type = memory_type;
             result.content = content;
@@ -432,7 +494,11 @@ pub async fn find_related_by_concepts(
     }
 
     // Sort by score descending and apply limit
-    enriched.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    enriched.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     enriched.truncate(config.limit);
 
     info!(
@@ -460,7 +526,11 @@ async fn find_concepts_for_memory(pool: &SqlitePool, memory_id: &str) -> Result<
 
 /// Traverse concept graph bidirectionally to find related concepts up to max_hops distance.
 /// Returns (concept_id, hops) for all related concepts.
-async fn traverse_concept_graph(pool: &SqlitePool, concept_id: &str, max_hops: u8) -> Result<Vec<(String, i32)>> {
+async fn traverse_concept_graph(
+    pool: &SqlitePool,
+    concept_id: &str,
+    max_hops: u8,
+) -> Result<Vec<(String, i32)>> {
     let max_hops_limit = (max_hops as i64).max(1);
 
     // Bidirectional traversal: both IS_A forward and backward
@@ -484,7 +554,7 @@ async fn traverse_concept_graph(pool: &SqlitePool, concept_id: &str, max_hops: u
              AND e.from_type = 'concept' AND e.to_type = 'concept'
              AND rc.hops < ?
          )
-         SELECT id, hops FROM related_concepts WHERE hops > 0"
+         SELECT id, hops FROM related_concepts WHERE hops > 0",
     )
     .bind(concept_id)
     .bind(max_hops_limit)
@@ -499,15 +569,21 @@ async fn traverse_concept_graph(pool: &SqlitePool, concept_id: &str, max_hops: u
         "traversed concept graph bidirectionally"
     );
 
-    Ok(related.into_iter().map(|(id, hops)| (id, hops as i32)).collect())
+    Ok(related
+        .into_iter()
+        .map(|(id, hops)| (id, hops as i32))
+        .collect())
 }
 
 /// Find all memories linked to a concept via INSTANCE_OF edge (backward).
 /// Returns (instance_id, instance_type) pairs.
-async fn find_concept_instances(pool: &SqlitePool, concept_id: &str) -> Result<Vec<(String, String)>> {
+async fn find_concept_instances(
+    pool: &SqlitePool,
+    concept_id: &str,
+) -> Result<Vec<(String, String)>> {
     let instances: Vec<(String, String)> = sqlx::query_as(
         "SELECT from_id, from_type FROM ontology_edges
-         WHERE to_id = ? AND rel_type = 'INSTANCE_OF'"
+         WHERE to_id = ? AND rel_type = 'INSTANCE_OF'",
     )
     .bind(concept_id)
     .fetch_all(pool)
@@ -549,7 +625,7 @@ pub fn merge_graph_results(
 /// Expand search results with graph-aware retrieval (tag & concept matching).
 /// This function is called during the search pipeline to add related memories
 /// based on tag overlap and concept relationships.
-/// 
+///
 /// Errors are logged but don't stop the search pipeline (graceful degradation).
 pub async fn expand_graph_results(
     pool: &SqlitePool,
@@ -560,9 +636,12 @@ pub async fn expand_graph_results(
         return Ok(());
     }
 
-    let span = span!(Level::DEBUG, "expand_graph_results",
-                     enabled = config.enabled,
-                     direct_result_count = results.len());
+    let span = span!(
+        Level::DEBUG,
+        "expand_graph_results",
+        enabled = config.enabled,
+        direct_result_count = results.len()
+    );
     let _enter = span.enter();
 
     let start = Instant::now();
@@ -574,10 +653,12 @@ pub async fn expand_graph_results(
     if config.tags.enabled {
         let tag_start = Instant::now();
         if let Ok(tag_related) = find_related_by_tags(pool, results, &config.tags).await {
-            debug!(elapsed_ms = tag_start.elapsed().as_millis() as u64,
-                   result_count = tag_related.len(),
-                   "tag-based retrieval completed");
-            
+            debug!(
+                elapsed_ms = tag_start.elapsed().as_millis() as u64,
+                result_count = tag_related.len(),
+                "tag-based retrieval completed"
+            );
+
             for mut result in tag_related {
                 if !seen_ids.contains(&result.id) {
                     result.source = "graph_tags".to_string();
@@ -592,13 +673,17 @@ pub async fn expand_graph_results(
     if config.concepts.enabled {
         let concept_start = Instant::now();
         let max_hops = config.concepts.max_hops.unwrap_or(config.max_concept_hops);
-        
-        if let Ok(concept_related) = find_related_by_concepts(pool, results, &config.concepts, max_hops).await {
-            debug!(elapsed_ms = concept_start.elapsed().as_millis() as u64,
-                   result_count = concept_related.len(),
-                   max_hops = max_hops,
-                   "concept-based retrieval completed");
-            
+
+        if let Ok(concept_related) =
+            find_related_by_concepts(pool, results, &config.concepts, max_hops).await
+        {
+            debug!(
+                elapsed_ms = concept_start.elapsed().as_millis() as u64,
+                result_count = concept_related.len(),
+                max_hops = max_hops,
+                "concept-based retrieval completed"
+            );
+
             for mut result in concept_related {
                 if !seen_ids.contains(&result.id) {
                     result.source = "graph_concepts".to_string();
@@ -610,14 +695,20 @@ pub async fn expand_graph_results(
     }
 
     // Sort graph results by score and append to results
-    graph_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    
-    info!(total_ms = start.elapsed().as_millis() as u64,
-          graph_result_count = graph_results.len(),
-          tag_enabled = config.tags.enabled,
-          concept_enabled = config.concepts.enabled,
-          "graph-aware retrieval completed");
-    
+    graph_results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    info!(
+        total_ms = start.elapsed().as_millis() as u64,
+        graph_result_count = graph_results.len(),
+        tag_enabled = config.tags.enabled,
+        concept_enabled = config.concepts.enabled,
+        "graph-aware retrieval completed"
+    );
+
     results.extend(graph_results);
     Ok(())
 }
@@ -648,8 +739,19 @@ mod tests {
     #[test]
     fn test_tag_overlap_percentage() {
         // Test: 3 shared tags out of 5 total = 60%
-        let query_tags: Vec<String> = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string(), "e".to_string()];
-        let memory_tags: Vec<String> = vec!["b".to_string(), "c".to_string(), "d".to_string(), "f".to_string()];
+        let query_tags: Vec<String> = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+        ];
+        let memory_tags: Vec<String> = vec![
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "f".to_string(),
+        ];
 
         let query_set: HashSet<_> = query_tags.iter().collect();
         let memory_set: HashSet<_> = memory_tags.iter().collect();
@@ -701,7 +803,7 @@ mod tests {
     fn test_concept_retrieval_config_defaults() {
         let config = ConceptRetrievalConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.max_hops, None);  // Should default to GraphRetrievalConfig value
+        assert_eq!(config.max_hops, None); // Should default to GraphRetrievalConfig value
         assert_eq!(config.decay_factor, 0.7);
         assert_eq!(config.limit, 3);
     }
@@ -717,7 +819,7 @@ mod tests {
     fn test_graph_retrieval_config_defaults() {
         let config = GraphRetrievalConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.max_concept_hops, 2);  // Default should be 2
+        assert_eq!(config.max_concept_hops, 2); // Default should be 2
         assert!(config.tags.enabled);
         assert!(config.concepts.enabled);
     }
@@ -730,20 +832,16 @@ mod tests {
 
     #[test]
     fn test_merge_deduplication() {
-        let original = vec![
-            create_search_result("1", vec!["docker".to_string()]),
-        ];
+        let original = vec![create_search_result("1", vec!["docker".to_string()])];
 
-        let tag_related = vec![
-            create_search_result("2", vec!["kubernetes".to_string()]),
-        ];
+        let tag_related = vec![create_search_result("2", vec!["kubernetes".to_string()])];
 
         let concept_related = vec![
-            create_search_result("1", vec!["docker".to_string()]),  // Duplicate
+            create_search_result("1", vec!["docker".to_string()]), // Duplicate
         ];
 
         let merged = merge_graph_results(original, tag_related, concept_related);
-        
+
         // Should have 2 results (1 original + 1 tag_related, concept duplicate filtered)
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].id, "1");
@@ -752,21 +850,17 @@ mod tests {
 
     #[test]
     fn test_merge_preserves_order() {
-        let original = vec![
-            create_search_result("1", vec!["a".to_string()]),
-        ];
+        let original = vec![create_search_result("1", vec!["a".to_string()])];
 
         let tag_related = vec![
             create_search_result("2", vec!["b".to_string()]),
             create_search_result("3", vec!["c".to_string()]),
         ];
 
-        let concept_related = vec![
-            create_search_result("4", vec!["d".to_string()]),
-        ];
+        let concept_related = vec![create_search_result("4", vec!["d".to_string()])];
 
         let merged = merge_graph_results(original, tag_related, concept_related);
-        
+
         assert_eq!(merged.len(), 4);
         assert_eq!(merged[0].id, "1");
         assert_eq!(merged[1].id, "2");
@@ -795,7 +889,7 @@ mod tests {
         let query_count = 4;
         let memory_count = 5;
         let overlap_count = 3;
-        
+
         let percentage = (overlap_count as f32 / query_count.max(memory_count) as f32) * 100.0;
         assert!((percentage - 60.0).abs() < 0.1);
     }
@@ -809,7 +903,7 @@ mod tests {
             decay_factor: 0.7,
             limit: 3,
         };
-        
+
         assert!(!config.enabled);
     }
 
@@ -823,7 +917,7 @@ mod tests {
             decay_factor: 0.7,
             limit: 5,
         };
-        
+
         assert!(!config.enabled);
     }
 
@@ -836,7 +930,7 @@ mod tests {
             tags: TagRetrievalConfig::default(),
             concepts: ConceptRetrievalConfig::default(),
         };
-        
+
         assert!(!config.enabled);
     }
 }

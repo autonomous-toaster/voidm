@@ -10,6 +10,9 @@ Local-first persistent memory for LLM agents.
 
 - **Hybrid search** — vector (ANN), BM25, fuzzy, keyword, or combined with RRF scoring
 - **Query expansion** — automatically expand queries with synonyms and related terms using local LLMs (tinyllama, phi-2); improves search recall
+- **Trajectory-informed learning tips** — store reusable learnings with trigger, context, task category, priority, source outcome, and trajectory provenance
+- **Trajectory ingestion** — preview or persist candidate learning tips extracted from structured coding-agent run traces
+- **Learning consolidation** — cluster overlapping tips into canonical records and supersede raw variants
 - **Auto-tagging** — automatically generate tags from memory content using NER + TF + type-specific rules; ~60-65% quality for suggestions
 - **Auto-linking** — automatically link memories that share tags; creates RELATES_TO edges in the knowledge graph
 - **Secrets redaction** — automatically detect and mask sensitive secrets (API keys, DB credentials, JWT tokens); prevents leakage into vector DB
@@ -27,7 +30,8 @@ Local-first persistent memory for LLM agents.
 - **Auto-init** — DB created on first write, no setup step
 - **Short IDs** — use any 4+ char UUID prefix instead of full IDs
 - **JSON output** — every command supports `--json` for agent consumption
-- **MCP server** — expose assistant-friendly memory and ontology tools/resources over stdio with `voidm mcp`
+
+Implementation notes for the learning-tip layer live in [docs/TRAJECTORY_LEARNING_LAYER.md](docs/TRAJECTORY_LEARNING_LAYER.md).
 
 ---
 
@@ -539,69 +543,6 @@ voidm search "Docker" --no-graph-retrieval
 voidm search "auth" --intent "oauth2" --scope work/auth --verbose
 ```
 
-
-### MCP server
-
-Expose a small assistant-focused subset of `voidm` as an MCP server over stdio:
-
-```bash
-voidm mcp --transport stdio
-```
-
-This is intended for MCP clients such as `mcporter` and other assistants. v1 exposes assistant-friendly tools for:
-- searching memories
-- storing memories (with `quality_score` and warnings)
-- deleting memories
-- linking memories
-- searching, listing, getting, and creating concepts
-- linking memories to concepts
-- linking concepts together
-
-It also exposes read-only MCP resources for recent memories/concepts and item-by-id reads.
-
-Example with `mcporter`:
-
-```bash
-npx -y mcporter list \
-  --stdio ./target/debug/voidm \
-  --stdio-arg mcp \
-  --stdio-arg --transport \
-  --stdio-arg stdio
-
-npx -y mcporter call \
-  --stdio ./target/debug/voidm \
-  --stdio-arg mcp \
-  --stdio-arg --transport \
-  --stdio-arg stdio \
-  search_concepts query=docker --output json
-```
-
-#### MCP Tool: search_memories
-
-The `search_memories` tool supports the following parameters:
-
-- `query` (string, required) — Search query
-- `mode` (string, optional) — Search mode: `hybrid` (default), `semantic`, `keyword`, `fuzzy`, `bm25`
-- `limit` (number, optional) — Maximum results (default: 10)
-- `scope` (string, optional) — Filter by scope prefix (e.g., `work/acme`)
-- `type` (string, optional) — Filter by memory type
-- `min_score` (number, optional) — Minimum score threshold (0-1)
-- `min_quality` (number, optional) — Minimum quality score (0-1)
-- `intent` (string, optional) — Intent/context for query expansion (e.g., `oauth2`, `database-design`)
-
-Example with intent:
-
-```bash
-npx -y mcporter call \
-  --stdio ./target/debug/voidm \
-  --stdio-arg mcp \
-  --stdio-arg --transport \
-  --stdio-arg stdio \
-  search_memories query=auth intent=oauth2 --output json
-```
-
-The intent parameter guides query expansion toward a specific context, finding more relevant results for focused searches.
-
 Filter by quality score (0.0-1.0, added automatically):
 
 ```bash
@@ -795,6 +736,11 @@ Resolving replaces the `CONTRADICTS` edge with an `INVALIDATES` edge (winner →
 | Command | Description |
 |---------|-------------|
 | `voidm add` | Add a memory. Returns `suggested_links` and `duplicate_warning`. |
+| `voidm learn add` | Add a structured trajectory-informed learning tip. |
+| `voidm learn ingest --from <file>` | Extract candidate learning tips from a trajectory file. Preview by default; use `--write` to persist. |
+| `voidm learn consolidate` | Cluster overlapping learning tips and optionally write canonical records. |
+| `voidm learn search <query>` | Search only structured learning tips. |
+| `voidm learn get <id>` | Retrieve a structured learning tip by ID or short prefix. |
 | `voidm get <id>` | Retrieve a memory by ID or short prefix. |
 | `voidm delete <id>` | Delete a memory. |
 | `voidm list` | List memories, filtered by scope or type. |
@@ -871,7 +817,8 @@ voidm/
 └── migrations/        # SQLite schema (sqlx)
 ```
 
-- **Storage:** `~/.local/share/voidm/memories.db` (single SQLite file)
+- **Storage:** platform-local data dir by default, for example `~/Library/Application Support/voidm/memories.db` on macOS or `~/.local/share/voidm/memories.db` on Linux
+- **Codex sandbox:** when no explicit DB path is set, sandboxed runs fall back to `~/.codex/memories/voidm/memories.db` so agent writes stay inside writable roots
 - **Config:** `~/.config/voidm/config.toml`
 - **ML cache:** `~/.cache/voidm/` (NER + NLI ONNX models, downloaded on first use)
 - **Search pipeline:** Vector ANN (sqlite-vec) + BM25 (FTS5) + fuzzy (strsim) → RRF merge

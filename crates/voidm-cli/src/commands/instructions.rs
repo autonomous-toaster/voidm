@@ -60,6 +60,16 @@ and retrieve knowledge across sessions.
 4. `voidm link <new-id> <EDGE_TYPE> <candidate-id>` (use `--note` for RELATES_TO)
 5. Resolve any `conflict_warning` from `voidm link`
 
+## Trajectory-Informed Learning Tips
+
+Use `voidm learn` when you want structured, reusable guidance distilled from agent trajectories.
+
+- `voidm learn add` stores a generalized tip plus trigger, application context, task category, source outcome, priority, and source trajectory ids.
+- `voidm learn ingest --from <file>` parses coding-agent trajectories, extracts candidate tips, and previews them by default.
+- `voidm learn consolidate` clusters overlapping tips and creates canonical records when run with `--write`.
+- `voidm learn search` retrieves only structured learning tips.
+- `voidm learn get` shows the structured learning metadata for one tip.
+
 ## Examples
 
 ```bash
@@ -73,6 +83,29 @@ voidm search "deployment" --json
 voidm search "database" --scope work/acme --mode semantic --json
 voidm search "auth" --intent "oauth2" --json              # Intent-guided expansion
 voidm search "config" --scope work/acme --intent "environment" --json  # Intent overrides scope
+
+# Add and search a trajectory-informed learning tip
+voidm learn add "Use jittered retries when OAuth refresh gets a transient 401." \
+  --category recovery \
+  --trigger "transient 401 during token refresh" \
+  --application-context "OAuth2 token refresh flow" \
+  --task-category authentication \
+  --source-outcome recovered_failure \
+  --trajectory traj-20260316-auth-01 --json
+
+# Preview candidate tips from a coding-agent trajectory
+voidm learn ingest --from trajectory.json --dry-run --json
+
+# Persist extracted tips
+voidm learn ingest --from trajectory.json --write --scope voidm --json
+
+# Preview consolidation clusters
+voidm learn consolidate --scope voidm --dry-run --json
+
+# Persist canonical learning tips and supersede clustered members
+voidm learn consolidate --scope voidm --write --json
+
+voidm learn search "oauth refresh" --category recovery --json
 
 # Graph
 voidm graph neighbors <id> --depth 2 --json

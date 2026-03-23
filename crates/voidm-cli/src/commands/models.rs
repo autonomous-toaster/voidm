@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
 use sqlx::SqlitePool;
-use voidm_core::{Config, embeddings, vector};
+use voidm_core::{embeddings, vector, Config};
 
 #[derive(Subcommand)]
 pub enum ModelsCommands {
@@ -36,7 +36,12 @@ pub fn run_list(json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn run(cmd: ModelsCommands, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+pub async fn run(
+    cmd: ModelsCommands,
+    pool: &SqlitePool,
+    config: &Config,
+    json: bool,
+) -> Result<()> {
     match cmd {
         ModelsCommands::List => run_list(json),
         ModelsCommands::Download { model } => {

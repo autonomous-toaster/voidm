@@ -19,7 +19,14 @@ pub fn translate(ast: &CypherAst) -> Result<(String, Vec<serde_json::Value>)> {
     let mut join_parts = Vec::new();
 
     for (ci, mc) in ast.match_clauses.iter().enumerate() {
-        translate_pattern(&mc.pattern, ci, &mut ctx, &mut from_parts, &mut join_parts, &mut params)?;
+        translate_pattern(
+            &mc.pattern,
+            ci,
+            &mut ctx,
+            &mut from_parts,
+            &mut join_parts,
+            &mut params,
+        )?;
     }
 
     // SELECT
@@ -40,10 +47,18 @@ pub fn translate(ast: &CypherAst) -> Result<(String, Vec<serde_json::Value>)> {
 
     // ORDER BY
     let order_sql = if !ast.order_by.is_empty() {
-        let parts: Vec<String> = ast.order_by.iter().map(|o| {
-            let col = return_item_to_col(&o.expr, &ctx).unwrap_or_else(|_| "1".into());
-            if o.desc { format!("{} DESC", col) } else { col }
-        }).collect();
+        let parts: Vec<String> = ast
+            .order_by
+            .iter()
+            .map(|o| {
+                let col = return_item_to_col(&o.expr, &ctx).unwrap_or_else(|_| "1".into());
+                if o.desc {
+                    format!("{} DESC", col)
+                } else {
+                    col
+                }
+            })
+            .collect();
         format!(" ORDER BY {}", parts.join(", "))
     } else {
         String::new()
@@ -107,7 +122,10 @@ impl TranslateCtx {
     }
 
     fn is_concept(&self, var: &str) -> bool {
-        self.node_kinds.get(var).map(|k| k == "Concept").unwrap_or(false)
+        self.node_kinds
+            .get(var)
+            .map(|k| k == "Concept")
+            .unwrap_or(false)
     }
 }
 
@@ -168,7 +186,8 @@ fn translate_pattern(
 
                 // Edge type constraint
                 if let Some(ref rt) = edge.rel_type {
-                    ctx.constraints.push(format!("{}.rel_type = '{}'", sub_alias, rt));
+                    ctx.constraints
+                        .push(format!("{}.rel_type = '{}'", sub_alias, rt));
                 }
 
                 // Register n1 alias
@@ -202,7 +221,8 @@ fn translate_pattern(
 
         // Edge type constraint
         if let Some(ref rt) = edge.rel_type {
-            ctx.constraints.push(format!("{}.rel_type = '{}'", e_alias, rt));
+            ctx.constraints
+                .push(format!("{}.rel_type = '{}'", e_alias, rt));
         }
 
         // n1 label constraint — skip :Memory (cosmetic)
@@ -235,13 +255,21 @@ fn translate_pattern(
             ));
             match val {
                 PropValue::String(s) => {
-                    ctx.constraints.push(format!("{}.value = '{}'", pv_alias, s.replace('\'', "''")));
+                    ctx.constraints.push(format!(
+                        "{}.value = '{}'",
+                        pv_alias,
+                        s.replace('\'', "''")
+                    ));
                 }
                 PropValue::Integer(n) => {
                     ctx.constraints.push(format!("{}.value = {}", pv_alias, n));
                 }
                 PropValue::Bool(b) => {
-                    ctx.constraints.push(format!("{}.value = {}", pv_alias, if *b { 1 } else { 0 }));
+                    ctx.constraints.push(format!(
+                        "{}.value = {}",
+                        pv_alias,
+                        if *b { 1 } else { 0 }
+                    ));
                 }
                 PropValue::Null => {}
             }
@@ -276,14 +304,15 @@ fn register_node(
         for (key, val) in &node.props {
             let col = match key.as_str() {
                 "id" | "concept_id" => format!("{}.id", alias),
-                "name"              => format!("{}.name", alias),
-                "description"       => format!("{}.description", alias),
-                "scope"             => format!("{}.scope", alias),
+                "name" => format!("{}.name", alias),
+                "description" => format!("{}.description", alias),
+                "scope" => format!("{}.scope", alias),
                 _ => continue,
             };
             match val {
                 PropValue::String(s) => {
-                    ctx.constraints.push(format!("{} = '{}'", col, s.replace('\'', "''")));
+                    ctx.constraints
+                        .push(format!("{} = '{}'", col, s.replace('\'', "''")));
                 }
                 _ => {}
             }
@@ -316,7 +345,11 @@ fn register_node(
             ));
             match val {
                 PropValue::String(s) => {
-                    ctx.constraints.push(format!("{}.value = '{}'", pv_alias, s.replace('\'', "''")));
+                    ctx.constraints.push(format!(
+                        "{}.value = '{}'",
+                        pv_alias,
+                        s.replace('\'', "''")
+                    ));
                 }
                 PropValue::Integer(n) => {
                     ctx.constraints.push(format!("{}.value = {}", pv_alias, n));
@@ -330,14 +363,17 @@ fn register_node(
 }
 
 fn translate_return(exprs: &[ReturnExpr], ctx: &TranslateCtx) -> Result<String> {
-    let parts: Vec<String> = exprs.iter().map(|re| {
-        let col = return_item_to_col_ctx(&re.expr, ctx);
-        if let Some(ref alias) = re.alias {
-            format!("{} AS \"{}\"", col, alias)
-        } else {
-            col
-        }
-    }).collect();
+    let parts: Vec<String> = exprs
+        .iter()
+        .map(|re| {
+            let col = return_item_to_col_ctx(&re.expr, ctx);
+            if let Some(ref alias) = re.alias {
+                format!("{} AS \"{}\"", col, alias)
+            } else {
+                col
+            }
+        })
+        .collect();
     Ok(parts.join(", "))
 }
 
@@ -349,10 +385,10 @@ fn return_item_to_col_ctx(item: &ReturnItem, ctx: &TranslateCtx) -> String {
                     // Concept node — direct column access
                     return match prop.as_str() {
                         "id" | "concept_id" => format!("{}.id", node_alias),
-                        "name"              => format!("{}.name", node_alias),
-                        "description"       => format!("{}.description", node_alias),
-                        "scope"             => format!("{}.scope", node_alias),
-                        "created_at"        => format!("{}.created_at", node_alias),
+                        "name" => format!("{}.name", node_alias),
+                        "description" => format!("{}.description", node_alias),
+                        "scope" => format!("{}.scope", node_alias),
+                        "created_at" => format!("{}.created_at", node_alias),
                         _ => format!("NULL /* unknown concept prop {} */", prop),
                     };
                 } else {
@@ -364,7 +400,8 @@ fn return_item_to_col_ctx(item: &ReturnItem, ctx: &TranslateCtx) -> String {
                         "(SELECT value FROM graph_node_props_text pt \
                           JOIN graph_property_keys pk ON pk.id = pt.key_id \
                           WHERE pt.node_id = {n}.id AND pk.key = '{p}')",
-                        n = node_alias, p = prop
+                        n = node_alias,
+                        p = prop
                     );
                 }
             }
@@ -372,8 +409,8 @@ fn return_item_to_col_ctx(item: &ReturnItem, ctx: &TranslateCtx) -> String {
             if let Some(edge_alias) = ctx.edge_aliases.get(var.as_str()) {
                 return match prop.as_str() {
                     "rel_type" | "type" => format!("{}.rel_type", edge_alias),
-                    "note"              => format!("{}.note", edge_alias),
-                    "id"                => format!("{}.id", edge_alias),
+                    "note" => format!("{}.note", edge_alias),
+                    "id" => format!("{}.id", edge_alias),
                     _ => format!("NULL /* unknown edge prop {} */", prop),
                 };
             }
@@ -392,12 +429,10 @@ fn return_item_to_col_ctx(item: &ReturnItem, ctx: &TranslateCtx) -> String {
                 format!("NULL /* unknown var {} */", var)
             }
         }
-        ReturnItem::Count(inner) => {
-            match inner {
-                Some(v) => format!("COUNT({})", v),
-                None => "COUNT(*)".into(),
-            }
-        }
+        ReturnItem::Count(inner) => match inner {
+            Some(v) => format!("COUNT({})", v),
+            None => "COUNT(*)".into(),
+        },
     }
 }
 
@@ -405,16 +440,19 @@ fn return_item_to_col(item: &ReturnItem, ctx: &TranslateCtx) -> Result<String> {
     Ok(return_item_to_col_ctx(item, ctx))
 }
 
-fn translate_where(expr: &WhereExpr, ctx: &TranslateCtx) -> Result<(String, Vec<serde_json::Value>)> {
+fn translate_where(
+    expr: &WhereExpr,
+    ctx: &TranslateCtx,
+) -> Result<(String, Vec<serde_json::Value>)> {
     match expr {
         WhereExpr::Comparison(cmp) => {
             let col = if let Some(node_alias) = ctx.node_aliases.get(&cmp.var) {
                 if ctx.is_concept(&cmp.var) {
                     match cmp.prop.as_str() {
                         "id" | "concept_id" => format!("{}.id", node_alias),
-                        "name"              => format!("{}.name", node_alias),
-                        "description"       => format!("{}.description", node_alias),
-                        "scope"             => format!("{}.scope", node_alias),
+                        "name" => format!("{}.name", node_alias),
+                        "description" => format!("{}.description", node_alias),
+                        "scope" => format!("{}.scope", node_alias),
                         _ => bail!("Unknown concept property '{}' in WHERE", cmp.prop),
                     }
                 } else if cmp.prop == "id" || cmp.prop == "memory_id" {
@@ -424,7 +462,8 @@ fn translate_where(expr: &WhereExpr, ctx: &TranslateCtx) -> Result<(String, Vec<
                         "(SELECT value FROM graph_node_props_text pt \
                           JOIN graph_property_keys pk ON pk.id = pt.key_id \
                           WHERE pt.node_id = {n}.id AND pk.key = '{p}')",
-                        n = node_alias, p = cmp.prop
+                        n = node_alias,
+                        p = cmp.prop
                     )
                 }
             } else {
@@ -438,21 +477,30 @@ fn translate_where(expr: &WhereExpr, ctx: &TranslateCtx) -> Result<(String, Vec<
                 }
                 CompOp::Contains => {
                     if let PropValue::String(s) = &cmp.value {
-                        (format!("{} LIKE ?", col), vec![serde_json::json!(format!("%{}%", s))])
+                        (
+                            format!("{} LIKE ?", col),
+                            vec![serde_json::json!(format!("%{}%", s))],
+                        )
                     } else {
                         bail!("CONTAINS requires a string value");
                     }
                 }
                 CompOp::StartsWith => {
                     if let PropValue::String(s) = &cmp.value {
-                        (format!("{} LIKE ?", col), vec![serde_json::json!(format!("{}%", s))])
+                        (
+                            format!("{} LIKE ?", col),
+                            vec![serde_json::json!(format!("{}%", s))],
+                        )
                     } else {
                         bail!("STARTS WITH requires a string value");
                     }
                 }
                 CompOp::EndsWith => {
                     if let PropValue::String(s) = &cmp.value {
-                        (format!("{} LIKE ?", col), vec![serde_json::json!(format!("%{}", s))])
+                        (
+                            format!("{} LIKE ?", col),
+                            vec![serde_json::json!(format!("%{}", s))],
+                        )
                     } else {
                         bail!("ENDS WITH requires a string value");
                     }

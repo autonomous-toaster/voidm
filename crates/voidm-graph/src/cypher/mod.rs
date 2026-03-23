@@ -1,5 +1,5 @@
-pub mod lexer;
 pub mod ast;
+pub mod lexer;
 pub mod parser;
 pub mod translator;
 
@@ -35,18 +35,15 @@ pub async fn execute_read(
     })?;
 
     // Step 4: Translate to SQL
-    let (sql, params) = translator::translate(&ast).map_err(|e| {
-        anyhow::anyhow!("Cypher translation error: {}", e)
-    })?;
+    let (sql, params) = translator::translate(&ast)
+        .map_err(|e| anyhow::anyhow!("Cypher translation error: {}", e))?;
 
     // Step 5: Execute
     let rows = run_query(pool, &sql, &params).await?;
     Ok(rows)
 }
 
-const WRITE_KEYWORDS: &[&str] = &[
-    "CREATE", "MERGE", "SET", "DELETE", "REMOVE", "DROP",
-];
+const WRITE_KEYWORDS: &[&str] = &["CREATE", "MERGE", "SET", "DELETE", "REMOVE", "DROP"];
 
 fn reject_write_clauses(query: &str) -> Result<()> {
     let tokens = lexer::tokenize(query);
@@ -71,8 +68,8 @@ async fn run_query(
     sql: &str,
     params: &[serde_json::Value],
 ) -> Result<Vec<HashMap<String, serde_json::Value>>> {
-    use sqlx::Row;
     use sqlx::Column;
+    use sqlx::Row;
 
     // Build query with dynamic binding
     let mut q = sqlx::query(sql);
@@ -104,8 +101,8 @@ async fn run_query(
                     Err(_) => match row.try_get::<f64, _>(i) {
                         Ok(f) => serde_json::json!(f),
                         Err(_) => serde_json::Value::Null,
-                    }
-                }
+                    },
+                },
             };
             map.insert(col.name().to_string(), val);
         }

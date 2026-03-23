@@ -1,14 +1,17 @@
 #[cfg(test)]
 mod tests {
-    use std::pin::Pin;
-    use std::future::Future;
-    use std::sync::Arc;
-    use anyhow::Result;
-    use crate::db::Database;
-    use crate::models::{AddMemoryRequest, AddMemoryResponse, Memory, EdgeType, LinkResponse};
-    use crate::ontology::{Concept, ConceptWithInstances, OntologyEdge, ConceptWithSimilarityWarning, ConceptSearchResult};
-    use crate::search::{SearchOptions, SearchResponse};
     use crate::config::SearchConfig;
+    use crate::db::Database;
+    use crate::models::{AddMemoryRequest, AddMemoryResponse, EdgeType, LinkResponse, Memory};
+    use crate::ontology::{
+        Concept, ConceptSearchResult, ConceptWithInstances, ConceptWithSimilarityWarning,
+        OntologyEdge,
+    };
+    use crate::search::{SearchOptions, SearchResponse};
+    use anyhow::Result;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
 
     /// Dummy implementation to verify the Database trait is object-safe
     struct DummyDatabase;
@@ -31,28 +34,42 @@ mod tests {
             _req: AddMemoryRequest,
             _config: &crate::Config,
         ) -> Pin<Box<dyn Future<Output = Result<AddMemoryResponse>> + Send + '_>> {
-            Box::pin(async {
-                Err(anyhow::anyhow!("dummy"))
-            })
+            Box::pin(async { Err(anyhow::anyhow!("dummy")) })
         }
 
-        fn get_memory(&self, _id: &str) -> Pin<Box<dyn Future<Output = Result<Option<Memory>>> + Send + '_>> {
+        fn get_memory(
+            &self,
+            _id: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Memory>>> + Send + '_>> {
             Box::pin(async { Ok(None) })
         }
 
-        fn list_memories(&self, _limit: Option<usize>) -> Pin<Box<dyn Future<Output = Result<Vec<Memory>>> + Send + '_>> {
+        fn list_memories(
+            &self,
+            _limit: Option<usize>,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<Memory>>> + Send + '_>> {
             Box::pin(async { Ok(vec![]) })
         }
 
-        fn delete_memory(&self, _id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        fn delete_memory(
+            &self,
+            _id: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
             Box::pin(async { Ok(false) })
         }
 
-        fn update_memory(&self, _id: &str, _content: &str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        fn update_memory(
+            &self,
+            _id: &str,
+            _content: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
 
-        fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        fn resolve_memory_id(
+            &self,
+            id: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
             let id = id.to_string();
             Box::pin(async move { Ok(id) })
         }
@@ -91,11 +108,22 @@ mod tests {
             Box::pin(async { Ok(true) })
         }
 
-        fn list_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>> {
+        fn list_edges(
+            &self,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::MemoryEdge>>> + Send + '_>>
+        {
             Box::pin(async { Ok(vec![]) })
         }
 
-        fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>> + Send + '_>> {
+        fn list_ontology_edges(
+            &self,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<Vec<crate::models::OntologyEdgeForMigration>>>
+                    + Send
+                    + '_,
+            >,
+        > {
             Box::pin(async { Ok(vec![]) })
         }
 
@@ -133,7 +161,8 @@ mod tests {
             _description: Option<&str>,
             _scope: Option<&str>,
             _id: Option<&str>,
-        ) -> Pin<Box<dyn Future<Output = Result<ConceptWithSimilarityWarning>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<ConceptWithSimilarityWarning>> + Send + '_>>
+        {
             let name = name.to_string();
             Box::pin(async move {
                 Ok(ConceptWithSimilarityWarning {
@@ -147,7 +176,10 @@ mod tests {
             })
         }
 
-        fn get_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Concept>> + Send + '_>> {
+        fn get_concept(
+            &self,
+            id: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<Concept>> + Send + '_>> {
             let id = id.to_string();
             Box::pin(async move {
                 Ok(Concept {
@@ -187,11 +219,17 @@ mod tests {
             Box::pin(async { Ok(vec![]) })
         }
 
-        fn delete_concept(&self, _id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        fn delete_concept(
+            &self,
+            _id: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
             Box::pin(async { Ok(true) })
         }
 
-        fn resolve_concept_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        fn resolve_concept_id(
+            &self,
+            id: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
             let id = id.to_string();
             Box::pin(async move { Ok(id) })
         }
@@ -230,7 +268,10 @@ mod tests {
             })
         }
 
-        fn delete_ontology_edge(&self, _edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        fn delete_ontology_edge(
+            &self,
+            _edge_id: i64,
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
             Box::pin(async { Ok(true) })
         }
 
@@ -239,9 +280,7 @@ mod tests {
             _query: &str,
             _params: &serde_json::Value,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
-            Box::pin(async {
-                Ok(serde_json::json!({}))
-            })
+            Box::pin(async { Ok(serde_json::json!({})) })
         }
 
         fn get_neighbors(
@@ -249,9 +288,7 @@ mod tests {
             _id: &str,
             _depth: usize,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
-            Box::pin(async {
-                Ok(serde_json::json!({}))
-            })
+            Box::pin(async { Ok(serde_json::json!({})) })
         }
 
         fn check_model_mismatch(
@@ -266,6 +303,6 @@ mod tests {
     fn test_database_trait_is_object_safe() {
         // Verify that we can create a trait object
         let db: Arc<dyn Database> = Arc::new(DummyDatabase);
-        let _ = db;  // Use the variable
+        let _ = db; // Use the variable
     }
 }

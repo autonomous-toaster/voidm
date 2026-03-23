@@ -14,7 +14,10 @@ pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
         Ok(id) => id,
         Err(e) => {
             if json {
-                println!("{}", serde_json::json!({ "error": e.to_string(), "id": args.id }));
+                println!(
+                    "{}",
+                    serde_json::json!({ "error": e.to_string(), "id": args.id })
+                );
             } else {
                 eprintln!("Error: {}", e);
             }
@@ -24,7 +27,10 @@ pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
     match crud::get_memory(pool, &id).await? {
         None => {
             if json {
-                println!("{}", serde_json::json!({ "error": format!("Memory '{}' not found", id), "id": id }));
+                println!(
+                    "{}",
+                    serde_json::json!({ "error": format!("Memory '{}' not found", id), "id": id })
+                );
             } else {
                 eprintln!("Error: Memory '{}' not found", id);
             }
@@ -41,11 +47,17 @@ pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
                     println!("Quality:    {:.2}", qs);
                 }
                 println!("Created:    {}", m.created_at);
-                if !m.scopes.is_empty() { println!("Scopes:     {}", m.scopes.join(", ")); }
-                if !m.tags.is_empty()   { println!("Tags:       {}", m.tags.join(", ")); }
-                
+                if !m.scopes.is_empty() {
+                    println!("Scopes:     {}", m.scopes.join(", "));
+                }
+                if !m.tags.is_empty() {
+                    println!("Tags:       {}", m.tags.join(", "));
+                }
+
                 // Display auto-generated tags if present
-                if let Some(serde_json::Value::Array(auto_tags)) = m.metadata.get("auto_generated_tags") {
+                if let Some(serde_json::Value::Array(auto_tags)) =
+                    m.metadata.get("auto_generated_tags")
+                {
                     let auto_tag_strs: Vec<String> = auto_tags
                         .iter()
                         .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -54,7 +66,7 @@ pub async fn run(args: GetArgs, pool: &SqlitePool, json: bool) -> Result<()> {
                         println!("Auto-Tags:  {}", auto_tag_strs.join(", "));
                     }
                 }
-                
+
                 println!();
                 println!("{}", m.content);
             }

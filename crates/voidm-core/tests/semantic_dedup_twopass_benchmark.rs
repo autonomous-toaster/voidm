@@ -23,30 +23,140 @@ fn get_large_concept_set() -> Vec<ConceptPair> {
     // We'll use a representative sample
     vec![
         // RELATED (should merge)
-        ConceptPair { name1: "Docker", name2: "Dockerfile", should_merge: true, category: "r" },
-        ConceptPair { name1: "API", name2: "API Design", should_merge: true, category: "r" },
-        ConceptPair { name1: "Configuration", name2: "Config", should_merge: true, category: "r" },
-        ConceptPair { name1: "Authentication", name2: "Authorization", should_merge: true, category: "r" },
-        ConceptPair { name1: "Database", name2: "DB", should_merge: true, category: "r" },
-        ConceptPair { name1: "HTTP", name2: "HTTPS", should_merge: true, category: "r" },
-        ConceptPair { name1: "JSON", name2: "JSON Schema", should_merge: true, category: "r" },
-        ConceptPair { name1: "REST", name2: "RESTful", should_merge: true, category: "r" },
-        ConceptPair { name1: "Testing", name2: "Unit Test", should_merge: true, category: "r" },
-        ConceptPair { name1: "Kubernetes", name2: "K8s", should_merge: true, category: "r" },
+        ConceptPair {
+            name1: "Docker",
+            name2: "Dockerfile",
+            should_merge: true,
+            category: "r",
+        },
+        ConceptPair {
+            name1: "API",
+            name2: "API Design",
+            should_merge: true,
+            category: "r",
+        },
+        ConceptPair {
+            name1: "Configuration",
+            name2: "Config",
+            should_merge: true,
+            category: "r",
+        },
+        ConceptPair {
+            name1: "Authentication",
+            name2: "Authorization",
+            should_merge: true,
+            category: "r",
+        },
+        ConceptPair {
+            name1: "Database",
+            name2: "DB",
+            should_merge: true,
+            category: "r",
+        },
+        ConceptPair {
+            name1: "HTTP",
+            name2: "HTTPS",
+            should_merge: true,
+            category: "r",
+        },
+        ConceptPair {
+            name1: "JSON",
+            name2: "JSON Schema",
+            should_merge: true,
+            category: "r",
+        },
+        ConceptPair {
+            name1: "REST",
+            name2: "RESTful",
+            should_merge: true,
+            category: "r",
+        },
+        ConceptPair {
+            name1: "Testing",
+            name2: "Unit Test",
+            should_merge: true,
+            category: "r",
+        },
+        ConceptPair {
+            name1: "Kubernetes",
+            name2: "K8s",
+            should_merge: true,
+            category: "r",
+        },
         // DIFFERENT (shouldn't merge)
-        ConceptPair { name1: "Docker", name2: "Python", should_merge: false, category: "d" },
-        ConceptPair { name1: "API", name2: "Database", should_merge: false, category: "d" },
-        ConceptPair { name1: "Docker", name2: "Cooking", should_merge: false, category: "d" },
-        ConceptPair { name1: "Authentication", name2: "Food", should_merge: false, category: "d" },
-        ConceptPair { name1: "HTTP", name2: "Pizza", should_merge: false, category: "d" },
-        ConceptPair { name1: "Testing", name2: "Cooking", should_merge: false, category: "d" },
-        ConceptPair { name1: "Database", name2: "Gardening", should_merge: false, category: "d" },
-        ConceptPair { name1: "JSON", name2: "Cooking", should_merge: false, category: "d" },
-        ConceptPair { name1: "REST", name2: "Furniture", should_merge: false, category: "d" },
-        ConceptPair { name1: "Kubernetes", name2: "Cooking", should_merge: false, category: "d" },
+        ConceptPair {
+            name1: "Docker",
+            name2: "Python",
+            should_merge: false,
+            category: "d",
+        },
+        ConceptPair {
+            name1: "API",
+            name2: "Database",
+            should_merge: false,
+            category: "d",
+        },
+        ConceptPair {
+            name1: "Docker",
+            name2: "Cooking",
+            should_merge: false,
+            category: "d",
+        },
+        ConceptPair {
+            name1: "Authentication",
+            name2: "Food",
+            should_merge: false,
+            category: "d",
+        },
+        ConceptPair {
+            name1: "HTTP",
+            name2: "Pizza",
+            should_merge: false,
+            category: "d",
+        },
+        ConceptPair {
+            name1: "Testing",
+            name2: "Cooking",
+            should_merge: false,
+            category: "d",
+        },
+        ConceptPair {
+            name1: "Database",
+            name2: "Gardening",
+            should_merge: false,
+            category: "d",
+        },
+        ConceptPair {
+            name1: "JSON",
+            name2: "Cooking",
+            should_merge: false,
+            category: "d",
+        },
+        ConceptPair {
+            name1: "REST",
+            name2: "Furniture",
+            should_merge: false,
+            category: "d",
+        },
+        ConceptPair {
+            name1: "Kubernetes",
+            name2: "Cooking",
+            should_merge: false,
+            category: "d",
+        },
         // BORDERLINE
-        ConceptPair { name1: "Docker", name2: "Containerization", should_merge: true, category: "b" },
-        ConceptPair { name1: "Python", name2: "PyTorch", should_merge: false, category: "b" },
+        ConceptPair {
+            name1: "Docker",
+            name2: "Containerization",
+            should_merge: true,
+            category: "b",
+        },
+        ConceptPair {
+            name1: "Python",
+            name2: "PyTorch",
+            should_merge: false,
+            category: "b",
+        },
     ]
 }
 
@@ -56,7 +166,11 @@ fn fuzzy_similarity(s1: &str, s2: &str) -> f32 {
 
 fn score_prediction(similarity: f32, threshold: f32, should_merge: bool) -> f32 {
     let predicted_merge = similarity >= threshold;
-    if predicted_merge == should_merge { 1.0 } else { 0.0 }
+    if predicted_merge == should_merge {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 #[test]
@@ -67,7 +181,10 @@ fn benchmark_twopass_algorithm() {
     println!("╚══════════════════════════════════════════════════════════════╝\n");
 
     let pairs = get_large_concept_set();
-    println!("Test pairs: {} (simulating 100-concept database)\n", pairs.len());
+    println!(
+        "Test pairs: {} (simulating 100-concept database)\n",
+        pairs.len()
+    );
 
     let fuzzy_threshold = 0.85;
     let semantic_threshold = 0.75;
@@ -87,12 +204,12 @@ fn benchmark_twopass_algorithm() {
         let sim = fuzzy_similarity(pair.name1, pair.name2);
         let score = score_prediction(sim, fuzzy_threshold, pair.should_merge);
         fuzzy_results.push((pair, sim, score));
-        
+
         // Track which pairs matched fuzzy threshold (for semantic pass)
         if sim >= fuzzy_threshold {
             fuzzy_matches.push((pair, sim));
         }
-        
+
         if score > 0.5 {
             fuzzy_correct += 1;
         }
@@ -103,10 +220,18 @@ fn benchmark_twopass_algorithm() {
 
     println!("Threshold: {}", fuzzy_threshold);
     println!("Total pairs: {}", pairs.len());
-    println!("Fuzzy matches: {} ({:.1}%)", fuzzy_matches.len(), 
-             fuzzy_matches.len() as f32 / pairs.len() as f32 * 100.0);
+    println!(
+        "Fuzzy matches: {} ({:.1}%)",
+        fuzzy_matches.len(),
+        fuzzy_matches.len() as f32 / pairs.len() as f32 * 100.0
+    );
     println!("Latency: {:.2}ms", fuzzy_duration.as_secs_f32() * 1000.0);
-    println!("Accuracy: {}/{} ({:.1}%)", fuzzy_correct, pairs.len(), fuzzy_accuracy * 100.0);
+    println!(
+        "Accuracy: {}/{} ({:.1}%)",
+        fuzzy_correct,
+        pairs.len(),
+        fuzzy_accuracy * 100.0
+    );
     println!();
 
     // PHASE 2: Semantic Pass (only on fuzzy matches)
@@ -127,7 +252,7 @@ fn benchmark_twopass_algorithm() {
                 if score > 0.5 {
                     semantic_correct += 1;
                 }
-                
+
                 // Check if semantic refined the fuzzy prediction
                 let fuzzy_pred = fuzzy_sim >= &fuzzy_threshold;
                 let semantic_pred = sem_sim >= semantic_threshold;
@@ -149,11 +274,20 @@ fn benchmark_twopass_algorithm() {
     };
 
     println!("Fuzzy matches to filter: {}", fuzzy_matches.len());
-    println!("Semantic latency: {:.2}ms", semantic_duration.as_secs_f32() * 1000.0);
-    println!("Per-pair latency: {:.2}ms", 
-             semantic_duration.as_secs_f32() * 1000.0 / fuzzy_matches.len() as f32);
-    println!("Semantic accuracy on fuzzy matches: {}/{} ({:.1}%)",
-             semantic_correct, semantic_results.len(), semantic_accuracy * 100.0);
+    println!(
+        "Semantic latency: {:.2}ms",
+        semantic_duration.as_secs_f32() * 1000.0
+    );
+    println!(
+        "Per-pair latency: {:.2}ms",
+        semantic_duration.as_secs_f32() * 1000.0 / fuzzy_matches.len() as f32
+    );
+    println!(
+        "Semantic accuracy on fuzzy matches: {}/{} ({:.1}%)",
+        semantic_correct,
+        semantic_results.len(),
+        semantic_accuracy * 100.0
+    );
     println!("Cases where semantic refined result: {}", semantic_improved);
     println!();
 
@@ -166,26 +300,42 @@ fn benchmark_twopass_algorithm() {
     let twopass_speedup = semantic_duration.as_secs_f32() / total_twopass_latency;
 
     println!("\nFuzzy-Only:");
-    println!("  Latency: {:.2}ms ({:.3}ms per pair)", 
-             fuzzy_duration.as_secs_f32() * 1000.0,
-             fuzzy_duration.as_secs_f32() * 1000.0 / pairs.len() as f32);
+    println!(
+        "  Latency: {:.2}ms ({:.3}ms per pair)",
+        fuzzy_duration.as_secs_f32() * 1000.0,
+        fuzzy_duration.as_secs_f32() * 1000.0 / pairs.len() as f32
+    );
     println!("  Accuracy: {:.1}%", fuzzy_accuracy * 100.0);
 
     println!("\nTwo-Pass (Fuzzy + Semantic):");
-    println!("  Fuzzy phase: {:.2}ms", fuzzy_duration.as_secs_f32() * 1000.0);
-    println!("  Semantic phase: {:.2}ms ({:.1}% of total)",
-             semantic_duration.as_secs_f32() * 1000.0,
-             twopass_speedup * 100.0);
+    println!(
+        "  Fuzzy phase: {:.2}ms",
+        fuzzy_duration.as_secs_f32() * 1000.0
+    );
+    println!(
+        "  Semantic phase: {:.2}ms ({:.1}% of total)",
+        semantic_duration.as_secs_f32() * 1000.0,
+        twopass_speedup * 100.0
+    );
     println!("  Total: {:.2}ms", total_twopass_latency * 1000.0);
     println!("  Accuracy (fuzzy part): {:.1}%", fuzzy_accuracy * 100.0);
-    println!("  Accuracy (semantic refined): {:.1}%", semantic_accuracy * 100.0);
+    println!(
+        "  Accuracy (semantic refined): {:.1}%",
+        semantic_accuracy * 100.0
+    );
 
     println!("\nEfficiency:");
-    println!("  Semantic needed for: {} / {} pairs ({:.1}%)",
-             fuzzy_matches.len(), pairs.len(),
-             fuzzy_matches.len() as f32 / pairs.len() as f32 * 100.0);
-    println!("  Latency reduction vs semantic-all: {:.0}x faster",
-             (semantic_duration.as_secs_f32() * pairs.len() as f32) / (fuzzy_matches.len() as f32 * total_twopass_latency));
+    println!(
+        "  Semantic needed for: {} / {} pairs ({:.1}%)",
+        fuzzy_matches.len(),
+        pairs.len(),
+        fuzzy_matches.len() as f32 / pairs.len() as f32 * 100.0
+    );
+    println!(
+        "  Latency reduction vs semantic-all: {:.0}x faster",
+        (semantic_duration.as_secs_f32() * pairs.len() as f32)
+            / (fuzzy_matches.len() as f32 * total_twopass_latency)
+    );
 
     // Verdict
     println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -194,9 +344,14 @@ fn benchmark_twopass_algorithm() {
 
     if semantic_improved > 0 {
         println!("\n✅ Semantic refinement helped!");
-        println!("   {} borderline cases were correctly resolved by semantic filtering", semantic_improved);
-        println!("   Cost: Only {:.2}ms extra latency for entire database",
-                 semantic_duration.as_secs_f32() * 1000.0);
+        println!(
+            "   {} borderline cases were correctly resolved by semantic filtering",
+            semantic_improved
+        );
+        println!(
+            "   Cost: Only {:.2}ms extra latency for entire database",
+            semantic_duration.as_secs_f32() * 1000.0
+        );
         println!("\n   RECOMMENDATION: Enable semantic dedup when:");
         println!("   - Accuracy is critical (merge operations are expensive to undo)");
         println!("   - Merge candidate review is manual (reduce false positives)");
@@ -204,7 +359,10 @@ fn benchmark_twopass_algorithm() {
     } else {
         println!("\n⚠️ Semantic refinement didn't improve accuracy on this dataset");
         println!("   Fuzzy matching alone may be sufficient");
-        println!("   Cost: {:.2}ms extra latency", semantic_duration.as_secs_f32() * 1000.0);
+        println!(
+            "   Cost: {:.2}ms extra latency",
+            semantic_duration.as_secs_f32() * 1000.0
+        );
     }
 
     println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

@@ -4,5 +4,5 @@
 
 pub mod cli_config;
 pub mod commands;
-pub mod output;
 pub mod instructions;
+pub mod output;

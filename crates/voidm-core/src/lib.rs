@@ -1,31 +1,37 @@
+pub mod auto_tagger;
 pub mod config;
 pub mod config_loader;
 pub mod crud;
 pub mod db;
-pub mod query;
+pub mod embeddings;
+pub mod gguf_query_expander;
+pub mod graph_retrieval;
+pub mod learning;
 pub mod migrate;
+pub mod migration;
 pub mod models;
 pub mod ner;
 pub mod nli;
-pub mod reranker;
 pub mod ontology;
-pub mod quality;
-pub mod vector;
-pub mod search;
-pub mod embeddings;
-pub mod migration;
-pub mod semantic_dedup;
-pub mod query_expansion;
-pub mod gguf_query_expander;
-pub mod auto_tagger;
-pub mod tag_linker;
-pub mod redactor;
-pub mod graph_retrieval;
-pub mod rrf_fusion;
 pub mod passage;
+pub mod quality;
+pub mod query;
+pub mod query_expansion;
+pub mod redactor;
+pub mod reranker;
+pub mod rrf_fusion;
+pub mod search;
+pub mod semantic_dedup;
+pub mod tag_linker;
+pub mod vector;
 
-pub use config::Config;
-pub use config::config_path_display;
-pub use db::sqlite::open_pool;  // Re-export for backward compatibility
+pub use config::{
+    codex_sandbox_db_path, config_path_display, is_codex_sandbox_active, Config, DbPathResolution,
+    DbPathSource,
+};
 pub use crud::resolve_id;
-pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning, MemoryEdge, OntologyEdgeForMigration};
+pub use db::sqlite::open_pool; // Re-export for backward compatibility
+pub use models::{
+    AddMemoryRequest, AddMemoryResponse, DuplicateWarning, Memory, MemoryEdge, MemoryType,
+    OntologyEdgeForMigration, SuggestedLink,
+};

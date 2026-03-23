@@ -37,7 +37,7 @@ pub async fn upsert_edge(
 
     sqlx::query(
         "INSERT OR IGNORE INTO graph_edges (source_id, target_id, rel_type, note, created_at)
-         VALUES (?, ?, ?, ?, ?)"
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(from_node)
     .bind(to_node)
@@ -48,7 +48,7 @@ pub async fn upsert_edge(
     .await?;
 
     let edge_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?"
+        "SELECT id FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?",
     )
     .bind(from_node)
     .bind(to_node)
@@ -66,24 +66,21 @@ pub async fn delete_edge(
     rel_type: &str,
     to_memory_id: &str,
 ) -> Result<bool> {
-    let from_node: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(from_memory_id)
-    .fetch_optional(pool)
-    .await?;
+    let from_node: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+            .bind(from_memory_id)
+            .fetch_optional(pool)
+            .await?;
 
-    let to_node: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(to_memory_id)
-    .fetch_optional(pool)
-    .await?;
+    let to_node: Option<i64> = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+        .bind(to_memory_id)
+        .fetch_optional(pool)
+        .await?;
 
     match (from_node, to_node) {
         (Some(f), Some(t)) => {
             let r = sqlx::query(
-                "DELETE FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?"
+                "DELETE FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?",
             )
             .bind(f)
             .bind(t)

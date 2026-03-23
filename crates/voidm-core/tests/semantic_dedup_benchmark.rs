@@ -12,7 +12,7 @@ use voidm_core::semantic_dedup;
 struct ConceptPair {
     name1: &'static str,
     name2: &'static str,
-    should_merge: bool,    // Ground truth: should these concepts merge?
+    should_merge: bool,     // Ground truth: should these concepts merge?
     category: &'static str, // For grouping results
 }
 
@@ -183,25 +183,50 @@ fn benchmark_fuzzy_vs_semantic() {
     let fuzzy_accuracy = fuzzy_correct as f32 / test_pairs.len() as f32;
 
     println!("Threshold: {}", fuzzy_threshold);
-    println!("Latency: {:.2}ms (all pairs)", fuzzy_duration.as_secs_f32() * 1000.0);
-    println!("Accuracy: {}/{} ({:.1}%)", fuzzy_correct, test_pairs.len(), fuzzy_accuracy * 100.0);
+    println!(
+        "Latency: {:.2}ms (all pairs)",
+        fuzzy_duration.as_secs_f32() * 1000.0
+    );
+    println!(
+        "Accuracy: {}/{} ({:.1}%)",
+        fuzzy_correct,
+        test_pairs.len(),
+        fuzzy_accuracy * 100.0
+    );
     println!();
 
     // Show fuzzy results by category
     println!("Results by category:");
     for category in &["related", "different", "borderline"] {
-        let category_pairs: Vec<_> = fuzzy_scores.iter()
+        let category_pairs: Vec<_> = fuzzy_scores
+            .iter()
             .filter(|(p, _, _)| p.category == *category)
             .collect();
-        
+
         let correct = category_pairs.iter().filter(|(_, _, s)| *s > 0.5).count();
         let cat_accuracy = correct as f32 / category_pairs.len() as f32;
-        println!("  {}: {}/{} ({:.0}%)", category, correct, category_pairs.len(), cat_accuracy * 100.0);
-        
+        println!(
+            "  {}: {}/{} ({:.0}%)",
+            category,
+            correct,
+            category_pairs.len(),
+            cat_accuracy * 100.0
+        );
+
         for (pair, sim, score) in &category_pairs {
             let status = if *score > 0.5 { "✓" } else { "✗" };
-            println!("    {} {} vs {}: {:.3} ({})", status, pair.name1, pair.name2, sim,
-                     if pair.should_merge { "should merge" } else { "shouldn't merge" });
+            println!(
+                "    {} {} vs {}: {:.3} ({})",
+                status,
+                pair.name1,
+                pair.name2,
+                sim,
+                if pair.should_merge {
+                    "should merge"
+                } else {
+                    "shouldn't merge"
+                }
+            );
         }
     }
 
@@ -228,8 +253,10 @@ fn benchmark_fuzzy_vs_semantic() {
                 }
             }
             Err(e) => {
-                eprintln!("Error computing semantic similarity for {} vs {}: {}", 
-                         pair.name1, pair.name2, e);
+                eprintln!(
+                    "Error computing semantic similarity for {} vs {}: {}",
+                    pair.name1, pair.name2, e
+                );
                 semantic_errors += 1;
             }
         }
@@ -243,13 +270,21 @@ fn benchmark_fuzzy_vs_semantic() {
     };
 
     println!("Threshold: {}", semantic_threshold);
-    println!("Latency: {:.2}ms ({} pairs)", 
-             semantic_duration.as_secs_f32() * 1000.0,
-             semantic_scores.len());
-    println!("Per-pair latency: {:.2}ms", 
-             semantic_duration.as_secs_f32() * 1000.0 / semantic_scores.len() as f32);
-    println!("Accuracy: {}/{} ({:.1}%)", semantic_correct, semantic_scores.len(), 
-             semantic_accuracy * 100.0);
+    println!(
+        "Latency: {:.2}ms ({} pairs)",
+        semantic_duration.as_secs_f32() * 1000.0,
+        semantic_scores.len()
+    );
+    println!(
+        "Per-pair latency: {:.2}ms",
+        semantic_duration.as_secs_f32() * 1000.0 / semantic_scores.len() as f32
+    );
+    println!(
+        "Accuracy: {}/{} ({:.1}%)",
+        semantic_correct,
+        semantic_scores.len(),
+        semantic_accuracy * 100.0
+    );
     if semantic_errors > 0 {
         println!("⚠ Errors: {}", semantic_errors);
     }
@@ -258,22 +293,39 @@ fn benchmark_fuzzy_vs_semantic() {
     // Show semantic results by category
     println!("Results by category:");
     for category in &["related", "different", "borderline"] {
-        let category_pairs: Vec<_> = semantic_scores.iter()
+        let category_pairs: Vec<_> = semantic_scores
+            .iter()
             .filter(|(p, _, _)| p.category == *category)
             .collect();
-        
+
         if category_pairs.is_empty() {
             continue;
         }
-        
+
         let correct = category_pairs.iter().filter(|(_, _, s)| *s > 0.5).count();
         let cat_accuracy = correct as f32 / category_pairs.len() as f32;
-        println!("  {}: {}/{} ({:.0}%)", category, correct, category_pairs.len(), cat_accuracy * 100.0);
-        
+        println!(
+            "  {}: {}/{} ({:.0}%)",
+            category,
+            correct,
+            category_pairs.len(),
+            cat_accuracy * 100.0
+        );
+
         for (pair, sim, score) in &category_pairs {
             let status = if *score > 0.5 { "✓" } else { "✗" };
-            println!("    {} {} vs {}: {:.3} ({})", status, pair.name1, pair.name2, sim,
-                     if pair.should_merge { "should merge" } else { "shouldn't merge" });
+            println!(
+                "    {} {} vs {}: {:.3} ({})",
+                status,
+                pair.name1,
+                pair.name2,
+                sim,
+                if pair.should_merge {
+                    "should merge"
+                } else {
+                    "shouldn't merge"
+                }
+            );
         }
     }
 
@@ -284,14 +336,18 @@ fn benchmark_fuzzy_vs_semantic() {
 
     println!("\nMethod         | Accuracy  | Latency    | Per-Pair  | Notes");
     println!("───────────────┼───────────┼────────────┼───────────┼──────────────────────");
-    println!("Fuzzy          | {:.1}%     | {:.2}ms     | {:.3}ms   | Fast, baseline",
-            fuzzy_accuracy * 100.0,
-            fuzzy_duration.as_secs_f32() * 1000.0,
-            fuzzy_duration.as_secs_f32() * 1000.0 / test_pairs.len() as f32);
-    println!("Semantic       | {:.1}%     | {:.2}ms     | {:.2}ms    | Slower, better quality",
-            semantic_accuracy * 100.0,
-            semantic_duration.as_secs_f32() * 1000.0,
-            semantic_duration.as_secs_f32() * 1000.0 / semantic_scores.len() as f32);
+    println!(
+        "Fuzzy          | {:.1}%     | {:.2}ms     | {:.3}ms   | Fast, baseline",
+        fuzzy_accuracy * 100.0,
+        fuzzy_duration.as_secs_f32() * 1000.0,
+        fuzzy_duration.as_secs_f32() * 1000.0 / test_pairs.len() as f32
+    );
+    println!(
+        "Semantic       | {:.1}%     | {:.2}ms     | {:.2}ms    | Slower, better quality",
+        semantic_accuracy * 100.0,
+        semantic_duration.as_secs_f32() * 1000.0,
+        semantic_duration.as_secs_f32() * 1000.0 / semantic_scores.len() as f32
+    );
 
     let accuracy_improvement = (semantic_accuracy - fuzzy_accuracy) * 100.0;
     let latency_ratio = semantic_duration.as_secs_f32() / fuzzy_duration.as_secs_f32();
@@ -319,11 +375,10 @@ fn benchmark_fuzzy_vs_semantic() {
     for pair in &test_pairs {
         let fuzzy_sim = fuzzy_similarity(pair.name1, pair.name2);
         let fuzzy_pred = fuzzy_sim >= fuzzy_threshold;
-        
-        let semantic_sim = semantic_scores.iter()
-            .find(|(p, _, _)| {
-                p.name1 == pair.name1 && p.name2 == pair.name2
-            })
+
+        let semantic_sim = semantic_scores
+            .iter()
+            .find(|(p, _, _)| p.name1 == pair.name1 && p.name2 == pair.name2)
             .map(|(_, s, _)| *s);
 
         if let Some(sem_sim) = semantic_sim {
@@ -342,14 +397,20 @@ fn benchmark_fuzzy_vs_semantic() {
     if !improvements.is_empty() {
         println!("\n✅ Cases where semantic dedup improved:");
         for (n1, n2, fuzzy, sem) in improvements {
-            println!("  {} vs {}: fuzzy {:.3} → semantic {:.3}", n1, n2, fuzzy, sem);
+            println!(
+                "  {} vs {}: fuzzy {:.3} → semantic {:.3}",
+                n1, n2, fuzzy, sem
+            );
         }
     }
 
     if !regressions.is_empty() {
         println!("\n❌ Cases where semantic dedup regressed:");
         for (n1, n2, fuzzy, sem) in regressions {
-            println!("  {} vs {}: fuzzy {:.3} → semantic {:.3}", n1, n2, fuzzy, sem);
+            println!(
+                "  {} vs {}: fuzzy {:.3} → semantic {:.3}",
+                n1, n2, fuzzy, sem
+            );
         }
     }
 

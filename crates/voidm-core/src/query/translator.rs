@@ -5,8 +5,8 @@
 
 use super::cypher::CypherOperation;
 use super::QueryParams;
-use std::collections::HashMap;
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// Trait for translating Cypher operations to backend-specific queries
 pub trait QueryTranslator: Send + Sync {
@@ -111,7 +111,10 @@ pub trait QueryTranslator: Send + Sync {
     ) -> Result<(String, QueryParams), String>;
 
     /// Translate concept get with instances operation
-    fn translate_concept_get_with_instances(&self, id: &str) -> Result<(String, QueryParams), String>;
+    fn translate_concept_get_with_instances(
+        &self,
+        id: &str,
+    ) -> Result<(String, QueryParams), String>;
 
     /// Translate ontology edge create operation
     fn translate_ontology_edge_create(
@@ -163,7 +166,11 @@ pub trait QueryTranslator: Send + Sync {
     ) -> Result<(String, QueryParams), String>;
 
     /// Translate get neighbors operation
-    fn translate_get_neighbors(&self, id: &str, depth: usize) -> Result<(String, QueryParams), String>;
+    fn translate_get_neighbors(
+        &self,
+        id: &str,
+        depth: usize,
+    ) -> Result<(String, QueryParams), String>;
 }
 
 /// Neo4j translator - Pass-through to native Cypher
@@ -188,14 +195,24 @@ impl QueryTranslator for Neo4jTranslator {
                 embedding,
                 metadata,
             } => self.translate_memory_create(
-                id, memory_type, content, *importance, tags, scopes, created_at, embedding.as_deref(), metadata.as_deref()
+                id,
+                memory_type,
+                content,
+                *importance,
+                tags,
+                scopes,
+                created_at,
+                embedding.as_deref(),
+                metadata.as_deref(),
             ),
             CypherOperation::MemoryGet { id } => self.translate_memory_get(id),
             CypherOperation::MemoryList { limit } => self.translate_memory_list(*limit),
             CypherOperation::MemoryDelete { id } => self.translate_memory_delete(id),
-            CypherOperation::MemoryUpdate { id, content, updated_at } => {
-                self.translate_memory_update(id, content, updated_at)
-            }
+            CypherOperation::MemoryUpdate {
+                id,
+                content,
+                updated_at,
+            } => self.translate_memory_update(id, content, updated_at),
             CypherOperation::MemoryResolveId { prefix } => self.translate_memory_resolve_id(prefix),
             CypherOperation::MemoryListScopes => self.translate_list_scopes(),
             CypherOperation::LinkMemories {
@@ -204,7 +221,9 @@ impl QueryTranslator for Neo4jTranslator {
                 to_id,
                 note,
                 created_at,
-            } => self.translate_link_memories(from_id, rel_type, to_id, note.as_deref(), created_at),
+            } => {
+                self.translate_link_memories(from_id, rel_type, to_id, note.as_deref(), created_at)
+            }
             CypherOperation::UnlinkMemories {
                 from_id,
                 rel_type,
@@ -217,19 +236,29 @@ impl QueryTranslator for Neo4jTranslator {
                 description,
                 scope,
                 created_at,
-            } => self.translate_concept_create(id, name, description.as_deref(), scope.as_deref(), created_at),
+            } => self.translate_concept_create(
+                id,
+                name,
+                description.as_deref(),
+                scope.as_deref(),
+                created_at,
+            ),
             CypherOperation::ConceptGet { id } => self.translate_concept_get(id),
             CypherOperation::ConceptList { scope, limit } => {
                 self.translate_concept_list(scope.as_deref(), *limit)
             }
             CypherOperation::ConceptDelete { id } => self.translate_concept_delete(id),
-            CypherOperation::ConceptResolveId { prefix } => self.translate_concept_resolve_id(prefix),
+            CypherOperation::ConceptResolveId { prefix } => {
+                self.translate_concept_resolve_id(prefix)
+            }
             CypherOperation::ConceptSearch {
                 query,
                 scope,
                 limit,
             } => self.translate_concept_search(query, scope.as_deref(), *limit),
-            CypherOperation::ConceptGetWithInstances { id } => self.translate_concept_get_with_instances(id),
+            CypherOperation::ConceptGetWithInstances { id } => {
+                self.translate_concept_get_with_instances(id)
+            }
             CypherOperation::OntologyEdgeCreate {
                 from_id,
                 from_type,
@@ -257,15 +286,29 @@ impl QueryTranslator for Neo4jTranslator {
                 min_score,
                 scopes,
                 embedding,
-            } => self.translate_search_hybrid(query, *limit, *min_score, scopes, embedding.as_deref()),
+            } => self.translate_search_hybrid(
+                query,
+                *limit,
+                *min_score,
+                scopes,
+                embedding.as_deref(),
+            ),
             CypherOperation::SearchHybridRRF {
                 query,
                 limit,
                 min_score,
                 scopes,
                 embedding,
-            } => self.translate_search_hybrid_rrf(query, *limit, *min_score, scopes, embedding.as_deref()),
-            CypherOperation::QueryCypher { query, params } => self.translate_query_cypher(query, params),
+            } => self.translate_search_hybrid_rrf(
+                query,
+                *limit,
+                *min_score,
+                scopes,
+                embedding.as_deref(),
+            ),
+            CypherOperation::QueryCypher { query, params } => {
+                self.translate_query_cypher(query, params)
+            }
             CypherOperation::GetNeighbors { id, depth } => self.translate_get_neighbors(id, *depth),
         }
     }
@@ -309,7 +352,8 @@ impl QueryTranslator for Neo4jTranslator {
               metadata: $metadata
             })
             RETURN m
-        "#.to_string();
+        "#
+        .to_string();
 
         Ok((cypher, params))
     }
@@ -319,7 +363,8 @@ impl QueryTranslator for Neo4jTranslator {
         let cypher = r#"
             MATCH (m:Memory {id: $id})
             RETURN m
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -329,7 +374,8 @@ impl QueryTranslator for Neo4jTranslator {
             MATCH (m:Memory)
             RETURN m
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -339,7 +385,8 @@ impl QueryTranslator for Neo4jTranslator {
             MATCH (m:Memory {id: $id})
             DELETE m
             RETURN true as deleted
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -357,7 +404,8 @@ impl QueryTranslator for Neo4jTranslator {
             MATCH (m:Memory {id: $id})
             SET m.content = $content, m.updated_at = $updated_at
             RETURN m
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -368,7 +416,8 @@ impl QueryTranslator for Neo4jTranslator {
             WHERE m.id STARTS WITH $prefix
             RETURN m.id
             LIMIT 1
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -379,7 +428,8 @@ impl QueryTranslator for Neo4jTranslator {
             UNWIND m.scopes as scope
             RETURN DISTINCT scope
             ORDER BY scope
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -401,7 +451,8 @@ impl QueryTranslator for Neo4jTranslator {
             MATCH (from:Memory {id: $from_id}), (to:Memory {id: $to_id})
             CREATE (from)-[r {rel_type: $rel_type, note: $note, created_at: $created_at}]->(to)
             RETURN r, from.id, to.id
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -419,7 +470,8 @@ impl QueryTranslator for Neo4jTranslator {
             MATCH (from:Memory {id: $from_id})-[r {rel_type: $rel_type}]->(to:Memory {id: $to_id})
             DELETE r
             RETURN true as deleted
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -428,7 +480,8 @@ impl QueryTranslator for Neo4jTranslator {
         let cypher = r#"
             MATCH (from:Memory)-[r]->(to:Memory)
             RETURN from.id, r.rel_type, to.id, r.note, r.created_at
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -455,7 +508,8 @@ impl QueryTranslator for Neo4jTranslator {
               created_at: $created_at
             })
             RETURN c
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -464,7 +518,8 @@ impl QueryTranslator for Neo4jTranslator {
         let cypher = r#"
             MATCH (c:Concept {id: $id})
             RETURN c
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -481,7 +536,8 @@ impl QueryTranslator for Neo4jTranslator {
             WHERE c.scope = $scope OR $scope IS NULL
             RETURN c
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -491,7 +547,8 @@ impl QueryTranslator for Neo4jTranslator {
             MATCH (c:Concept {id: $id})
             DELETE c
             RETURN true as deleted
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -502,7 +559,8 @@ impl QueryTranslator for Neo4jTranslator {
             WHERE c.id STARTS WITH $prefix
             RETURN c.id
             LIMIT 1
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -522,17 +580,22 @@ impl QueryTranslator for Neo4jTranslator {
               AND (c.scope = $scope OR $scope IS NULL)
             RETURN c
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
-    fn translate_concept_get_with_instances(&self, id: &str) -> Result<(String, QueryParams), String> {
+    fn translate_concept_get_with_instances(
+        &self,
+        id: &str,
+    ) -> Result<(String, QueryParams), String> {
         let params = QueryParams::new().with_param("id", id);
         let cypher = r#"
             MATCH (c:Concept {id: $id})
             OPTIONAL MATCH (c)-[r]->(related)
             RETURN c, collect({rel_type: type(r), node: related}) as relations
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -561,7 +624,8 @@ impl QueryTranslator for Neo4jTranslator {
               note: $note
             }]->(to)
             RETURN r
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -580,7 +644,8 @@ impl QueryTranslator for Neo4jTranslator {
             WHERE r.from_id = $from_id AND r.rel_type = $rel_type AND r.to_id = $to_id
             DELETE r
             RETURN true as deleted
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -590,7 +655,8 @@ impl QueryTranslator for Neo4jTranslator {
             MATCH (from)-[r]->(to)
             WHERE r.from_type IS NOT NULL
             RETURN r.from_id, r.from_type, r.to_id, r.to_type, r.rel_type, r.note
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 
@@ -616,7 +682,8 @@ impl QueryTranslator for Neo4jTranslator {
             WHERE m.content CONTAINS $query
             RETURN m
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
 
         Ok((cypher, params))
     }
@@ -644,7 +711,8 @@ impl QueryTranslator for Neo4jTranslator {
             WHERE m.content CONTAINS $query
             RETURN m
             LIMIT $limit
-        "#.to_string();
+        "#
+        .to_string();
 
         Ok((cypher, params))
     }
@@ -661,14 +729,19 @@ impl QueryTranslator for Neo4jTranslator {
         Ok((query.to_string(), query_params))
     }
 
-    fn translate_get_neighbors(&self, id: &str, depth: usize) -> Result<(String, QueryParams), String> {
+    fn translate_get_neighbors(
+        &self,
+        id: &str,
+        depth: usize,
+    ) -> Result<(String, QueryParams), String> {
         let params = QueryParams::new()
             .with_param("id", id)
             .with_param("depth", depth as i32);
         let cypher = r#"
             MATCH path = (n {id: $id})-[*0..$depth]-(neighbor)
             RETURN collect(neighbor) as neighbors
-        "#.to_string();
+        "#
+        .to_string();
         Ok((cypher, params))
     }
 }

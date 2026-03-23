@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 /// Creates it if absent, drops and recreates if dimension mismatches.
 pub async fn ensure_vector_table(pool: &SqlitePool, dim: usize) -> Result<()> {
     let existing: Option<String> = sqlx::query_scalar(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_memories'"
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_memories'",
     )
     .fetch_optional(pool)
     .await?;
@@ -17,14 +17,18 @@ pub async fn ensure_vector_table(pool: &SqlitePool, dim: usize) -> Result<()> {
             return Ok(()); // Already correct
         }
         tracing::warn!("vec_memories dimension mismatch, dropping and recreating");
-        sqlx::query("DROP TABLE IF EXISTS vec_memories").execute(pool).await?;
+        sqlx::query("DROP TABLE IF EXISTS vec_memories")
+            .execute(pool)
+            .await?;
     }
 
     let sql = format!(
         "CREATE VIRTUAL TABLE vec_memories USING vec0(memory_id TEXT, embedding float[{}])",
         dim
     );
-    sqlx::query(&sql).execute(pool).await
+    sqlx::query(&sql)
+        .execute(pool)
+        .await
         .context("Failed to create vec_memories virtual table")?;
 
     tracing::info!("Created vec_memories with {} dimensions", dim);
@@ -58,7 +62,7 @@ pub async fn delete_embedding(pool: &SqlitePool, memory_id: &str) -> Result<()> 
 /// Check if vec_memories table exists.
 pub async fn vec_table_exists(pool: &SqlitePool) -> Result<bool> {
     let exists: Option<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_memories'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_memories'",
     )
     .fetch_optional(pool)
     .await?;
@@ -67,10 +71,14 @@ pub async fn vec_table_exists(pool: &SqlitePool) -> Result<bool> {
 
 /// ANN search: returns (memory_id, distance) pairs, closest first.
 /// distance is cosine distance (0 = identical, 1 = orthogonal).
-pub async fn ann_search(pool: &SqlitePool, query_embedding: &[f32], limit: usize) -> Result<Vec<(String, f32)>> {
+pub async fn ann_search(
+    pool: &SqlitePool,
+    query_embedding: &[f32],
+    limit: usize,
+) -> Result<Vec<(String, f32)>> {
     let bytes = floats_to_bytes(query_embedding);
     let rows: Vec<(String, f32)> = sqlx::query_as(
-        "SELECT memory_id, distance FROM vec_memories WHERE embedding MATCH ? AND k = ?"
+        "SELECT memory_id, distance FROM vec_memories WHERE embedding MATCH ? AND k = ?",
     )
     .bind(&bytes)
     .bind(limit as i64)
@@ -90,7 +98,9 @@ pub async fn reembed_all(
     use crate::embeddings;
 
     // Clean up stale temp table if present
-    sqlx::query("DROP TABLE IF EXISTS vec_memories_new").execute(pool).await?;
+    sqlx::query("DROP TABLE IF EXISTS vec_memories_new")
+        .execute(pool)
+        .await?;
 
     // Create new table
     let sql = format!(
@@ -114,21 +124,27 @@ pub async fn reembed_all(
 
         for ((id, _), embedding) in chunk.iter().zip(embeddings.iter()) {
             let bytes = floats_to_bytes(embedding);
-            sqlx::query(
-                "INSERT INTO vec_memories_new (memory_id, embedding) VALUES (?, ?)"
-            )
-            .bind(id)
-            .bind(&bytes)
-            .execute(pool)
-            .await?;
+            sqlx::query("INSERT INTO vec_memories_new (memory_id, embedding) VALUES (?, ?)")
+                .bind(id)
+                .bind(&bytes)
+                .execute(pool)
+                .await?;
         }
-        tracing::info!("Re-embedded batch {}/{}", i + 1, (total + batch_size - 1) / batch_size);
+        tracing::info!(
+            "Re-embedded batch {}/{}",
+            i + 1,
+            (total + batch_size - 1) / batch_size
+        );
     }
 
     // Atomic swap
     let mut tx = pool.begin().await?;
-    sqlx::query("DROP TABLE IF EXISTS vec_memories").execute(&mut *tx).await?;
-    sqlx::query("ALTER TABLE vec_memories_new RENAME TO vec_memories").execute(&mut *tx).await?;
+    sqlx::query("DROP TABLE IF EXISTS vec_memories")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("ALTER TABLE vec_memories_new RENAME TO vec_memories")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('embedding_model', ?)")
         .bind(model_name)
         .execute(&mut *tx)
@@ -150,13 +166,15 @@ fn floats_to_bytes(floats: &[f32]) -> Vec<u8> {
 /// Check for stale vec_memories_new from interrupted reembed, and clean it up.
 pub async fn cleanup_stale_temp_table(pool: &SqlitePool) -> Result<()> {
     let exists: Option<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_memories_new'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_memories_new'",
     )
     .fetch_optional(pool)
     .await?;
     if exists.is_some() {
         tracing::warn!("Found stale vec_memories_new from interrupted reembed, cleaning up");
-        sqlx::query("DROP TABLE vec_memories_new").execute(pool).await?;
+        sqlx::query("DROP TABLE vec_memories_new")
+            .execute(pool)
+            .await?;
     }
     Ok(())
 }

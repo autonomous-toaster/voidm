@@ -151,9 +151,9 @@ fn is_update_available(current: &str, latest: &str) -> Result<bool> {
     // If major.minor.patch are equal, compare pre-release versions
     // Release version (None) > pre-release version (Some)
     match (curr_prerelease, latest_prerelease) {
-        (None, None) => Ok(false),           // Both release, same version
-        (Some(_), None) => Ok(true),         // Current is pre-release, latest is release
-        (None, Some(_)) => Ok(false),        // Current is release, latest is pre-release
+        (None, None) => Ok(false),    // Both release, same version
+        (Some(_), None) => Ok(true),  // Current is pre-release, latest is release
+        (None, Some(_)) => Ok(false), // Current is release, latest is pre-release
         (Some(curr_pre), Some(latest_pre)) => Ok(latest_pre > curr_pre), // Both pre-release
     }
 }
@@ -193,9 +193,10 @@ async fn fetch_latest_release() -> Result<GitHubRelease> {
         ));
     }
 
-    let release: GitHubRelease = response.json().await.map_err(|e| {
-        anyhow!("Could not parse GitHub release info: {}", e)
-    })?;
+    let release: GitHubRelease = response
+        .json()
+        .await
+        .map_err(|e| anyhow!("Could not parse GitHub release info: {}", e))?;
 
     // Save to cache
     let _ = save_cached_release(&release);

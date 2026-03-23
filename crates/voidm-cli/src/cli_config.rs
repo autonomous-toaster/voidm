@@ -11,29 +11,29 @@ pub struct CliConfigOverrides {
     // Database
     pub database_backend: Option<String>,
     pub database_sqlite_path: Option<String>,
-    
+
     // Embeddings
     pub embeddings_enabled: Option<bool>,
     pub embeddings_model: Option<String>,
-    
+
     // Search
     pub search_mode: Option<String>,
     pub search_default_limit: Option<usize>,
     pub search_min_score: Option<f32>,
-    
+
     // Reranker
     pub reranker_enabled: Option<bool>,
     pub reranker_model: Option<String>,
     pub reranker_top_k: Option<usize>,
-    
+
     // Query Expansion
     pub qe_enabled: Option<bool>,
     pub qe_timeout_ms: Option<usize>,
-    
+
     // Graph Retrieval
     pub gr_enabled: Option<bool>,
     pub gr_max_hops: Option<usize>,
-    
+
     // Insert
     pub insert_auto_link_threshold: Option<f32>,
     pub insert_duplicate_threshold: Option<f32>,
@@ -51,7 +51,8 @@ impl CliConfigOverrides {
             if let Some(sqlite) = &mut config.database.sqlite {
                 sqlite.path = Some(path);
             } else {
-                config.database.sqlite = Some(voidm_core::config::SqliteConfig { path: Some(path) });
+                config.database.sqlite =
+                    Some(voidm_core::config::SqliteConfig { path: Some(path) });
             }
         }
 

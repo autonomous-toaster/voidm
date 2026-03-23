@@ -23,14 +23,14 @@
 //! - If timeout: expansion fails with error (no fallback)
 //! - CLI will use original query when expansion fails
 
+use crate::config::QueryExpansionConfig;
 use anyhow::{Context, Result};
+use once_cell::sync::OnceCell;
+use ort::session::Session;
+use ort::value::Tensor;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use ort::session::Session;
-use ort::value::Tensor;
-use once_cell::sync::OnceCell;
-use crate::config::QueryExpansionConfig;
 
 /// Prompt templates for query expansion.
 mod prompts {
@@ -138,7 +138,10 @@ fn parse_grammar_guided_output(output: &str) -> Result<String> {
 
     // Validate terms (alphanumeric + spaces/hyphens/underscores/dots)
     for term in &terms {
-        if !term.chars().all(|c| c.is_alphanumeric() || " _-.,".contains(c)) {
+        if !term
+            .chars()
+            .all(|c| c.is_alphanumeric() || " _-.,".contains(c))
+        {
             tracing::debug!("Invalid character in term: '{}'", term);
             // Still include it, but warn
         }
@@ -188,7 +191,7 @@ fn parse_with_fallback(output: &str) -> Result<String> {
                 }
             }
         }
-        
+
         // Just return first line if not empty
         if !trimmed.is_empty() {
             tracing::debug!("Using first-line fallback format");
@@ -220,15 +223,15 @@ impl LLMModelCache {
             models: std::sync::Mutex::new(HashMap::new()),
         }
     }
-    
+
     fn get(&self, model_name: &str) -> Option<SendLLM> {
         self.models.lock().unwrap().get(model_name).cloned()
     }
-    
+
     fn insert(&self, model_name: String, model: SendLLM) {
         self.models.lock().unwrap().insert(model_name, model);
     }
-    
+
     fn contains(&self, model_name: &str) -> bool {
         self.models.lock().unwrap().contains_key(model_name)
     }
@@ -250,14 +253,14 @@ const MODEL_SPECS: &[(&str, &str)] = &[
 ];
 
 fn get_model_spec(name: &str) -> Option<&'static str> {
-    MODEL_SPECS.iter()
+    MODEL_SPECS
+        .iter()
         .find(|(model_name, _)| model_name == &name)
         .map(|(_, hf_id)| *hf_id)
 }
 
 fn llm_cache_dir() -> PathBuf {
-    let cache_root = dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.cache"));
+    let cache_root = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("~/.cache"));
     cache_root.join("voidm").join("llm-models")
 }
 
@@ -267,73 +270,76 @@ fn get_llm_cache() -> &'static LLMModelCache {
 
 pub async fn ensure_llm_model(model_name: &str) -> Result<()> {
     let cache = get_llm_cache();
-    
+
     if cache.contains(model_name) {
         return Ok(());
     }
-    
+
     let _guard = LLM_INIT.lock().await;
-    
+
     // Double-check after acquiring lock
     if cache.contains(model_name) {
         return Ok(());
     }
-    
+
     let hf_id = get_model_spec(model_name)
         .ok_or_else(|| anyhow::anyhow!("Unknown model: {}", model_name))?;
-    
+
     let model_dir = llm_cache_dir().join(model_name);
-    std::fs::create_dir_all(&model_dir)
-        .context("Failed to create LLM cache directory")?;
-    
+    std::fs::create_dir_all(&model_dir).context("Failed to create LLM cache directory")?;
+
     let onnx_path = model_dir.join("model.onnx");
     let tokenizer_path = model_dir.join("tokenizer.json");
-    
+
     // Download if needed
     if !onnx_path.exists() || !tokenizer_path.exists() {
         tracing::info!("Downloading LLM model '{}' (first use) …", model_name);
-        eprintln!("Downloading LLM model '{}' (first use, may take a few minutes) …", model_name);
+        eprintln!(
+            "Downloading LLM model '{}' (first use, may take a few minutes) …",
+            model_name
+        );
         download_llm_files(hf_id, &model_dir).await?;
         eprintln!("LLM model ready at {}", model_dir.display());
     }
-    
+
     let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
         .map_err(|e| anyhow::anyhow!("Failed to load LLM tokenizer: {}", e))?;
-    
+
     let session = Session::builder()
         .context("Failed to create ORT session builder")?
         .commit_from_file(&onnx_path)
         .context("Failed to load LLM ONNX model")?;
-    
+
     let model = LLMModel {
         session: std::sync::Mutex::new(session),
         tokenizer,
     };
-    
+
     cache.insert(model_name.to_string(), SendLLM(Arc::new(model)));
-    
+
     Ok(())
 }
 
 async fn download_llm_files(hf_id: &str, model_dir: &PathBuf) -> Result<()> {
-    let cache_parent = llm_cache_dir().parent()
+    let cache_parent = llm_cache_dir()
+        .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| llm_cache_dir());
-    
+
     let api = hf_hub::api::tokio::ApiBuilder::new()
         .with_cache_dir(cache_parent)
         .build()
         .context("Failed to build hf-hub API")?;
-    
+
     let repo = api.model(hf_id.to_string());
-    
+
     // Download ONNX model - try multiple common paths (for different model sources)
     let onnx_paths = vec![
-        "onnx/model.onnx",          // Standard HF layout
-        "onnx/decoder_model.onnx",  // Some models like TinyLlama
-        "onnx-model/model.onnx",    // Alternative layout
+        "onnx/model.onnx",         // Standard HF layout
+        "onnx/decoder_model.onnx", // Some models like TinyLlama
+        "onnx-model/model.onnx",   // Alternative layout
     ];
-    
+
     let mut onnx_src = None;
     for path in &onnx_paths {
         match repo.get(path).await {
@@ -348,19 +354,21 @@ async fn download_llm_files(hf_id: &str, model_dir: &PathBuf) -> Result<()> {
             }
         }
     }
-    
+
     let onnx_src = onnx_src
         .ok_or_else(|| anyhow::anyhow!("Failed to download ONNX model - tried all known paths"))?;
-    
+
     std::fs::copy(&onnx_src, model_dir.join("model.onnx"))
         .context("Failed to copy ONNX model to cache")?;
-    
+
     // Download tokenizer
-    let tok_src = repo.get("tokenizer.json").await
+    let tok_src = repo
+        .get("tokenizer.json")
+        .await
         .context("Failed to download tokenizer from HuggingFace")?;
     std::fs::copy(&tok_src, model_dir.join("tokenizer.json"))
         .context("Failed to copy tokenizer to cache")?;
-    
+
     Ok(())
 }
 
@@ -374,9 +382,7 @@ pub struct QueryExpander {
 impl QueryExpander {
     /// Create a new query expander with the given configuration.
     pub fn new(config: QueryExpansionConfig) -> Self {
-        Self {
-            config,
-        }
+        Self { config }
     }
 
     /// Expand a query with related terms.
@@ -391,22 +397,33 @@ impl QueryExpander {
             return Err(anyhow::anyhow!("Query expansion disabled"));
         }
 
-        tracing::info!("Query expansion: Starting basic expansion for query: '{}'", query);
-        tracing::debug!("Query expansion config: enabled={}, model={}", self.config.enabled, self.config.model);
-        
+        tracing::info!(
+            "Query expansion: Starting basic expansion for query: '{}'",
+            query
+        );
+        tracing::debug!(
+            "Query expansion config: enabled={}, model={}",
+            self.config.enabled,
+            self.config.model
+        );
+
         // Generate expansion - no fallback, propagate errors
         let result = self.expand_with_timeout(query).await;
-        
+
         match &result {
             Ok(expanded) => {
                 tracing::info!("Query expansion: Successfully expanded query");
-                tracing::debug!("Query expansion: Original='{}' | Expanded='{}'", query, expanded);
-            },
+                tracing::debug!(
+                    "Query expansion: Original='{}' | Expanded='{}'",
+                    query,
+                    expanded
+                );
+            }
             Err(e) => {
                 tracing::warn!("Query expansion: Failed to expand query: {}", e);
             }
         }
-        
+
         result
     }
 
@@ -421,21 +438,24 @@ impl QueryExpander {
             return Err(anyhow::anyhow!("Query expansion disabled"));
         }
 
-        tracing::info!("Query expansion (grammar-guided): Starting for query: '{}'", query);
+        tracing::info!(
+            "Query expansion (grammar-guided): Starting for query: '{}'",
+            query
+        );
         tracing::debug!("Query expansion: Using GBNF grammar for structured output");
-        
+
         let result = self.expand_with_timeout_and_grammar(query).await;
-        
+
         match &result {
             Ok(expanded) => {
                 tracing::info!("Query expansion (grammar-guided): Successfully expanded");
                 tracing::debug!("Query expansion (grammar-guided): Result='{}'", expanded);
-            },
+            }
             Err(e) => {
                 tracing::warn!("Query expansion (grammar-guided): Failed: {}", e);
             }
         }
-        
+
         result
     }
 
@@ -444,7 +464,11 @@ impl QueryExpander {
     /// Uses optional intent parameter to guide more focused expansions.
     /// Gracefully handles missing intent: uses scope if available, else uses original query.
     /// Returns the expanded query (original + related terms).
-    pub async fn expand_with_intent(&self, query: &str, intent: Option<&str>) -> anyhow::Result<String> {
+    pub async fn expand_with_intent(
+        &self,
+        query: &str,
+        intent: Option<&str>,
+    ) -> anyhow::Result<String> {
         if !self.config.enabled {
             tracing::debug!("Query expansion: intent-aware disabled at feature level");
             return Err(anyhow::anyhow!("Query expansion disabled"));
@@ -453,11 +477,17 @@ impl QueryExpander {
         // Check if intent-aware expansion is enabled in config
         if !self.config.intent.enabled {
             // Fall back to regular expansion if intent-aware is disabled
-            tracing::debug!("Query expansion: intent-aware disabled in config, falling back to basic expansion");
+            tracing::debug!(
+                "Query expansion: intent-aware disabled in config, falling back to basic expansion"
+            );
             return self.expand(query).await;
         }
 
-        tracing::info!("Query expansion (intent-aware): Starting for query: '{}' with intent: {:?}", query, intent);
+        tracing::info!(
+            "Query expansion (intent-aware): Starting for query: '{}' with intent: {:?}",
+            query,
+            intent
+        );
         tracing::debug!(
             "Query expansion (intent-aware): use_scope_as_fallback={}, default_intent={:?}",
             self.config.intent.use_scope_as_fallback,
@@ -465,38 +495,37 @@ impl QueryExpander {
         );
 
         let result = self.expand_with_timeout_and_intent(query, intent).await;
-        
+
         match &result {
             Ok(expanded) => {
                 tracing::info!("Query expansion (intent-aware): Successfully expanded");
                 tracing::debug!("Query expansion (intent-aware): Result='{}'", expanded);
-            },
+            }
             Err(e) => {
                 tracing::warn!("Query expansion (intent-aware): Failed: {}", e);
             }
         }
-        
-        result
 
+        result
     }
 
     /// Internal expansion with timeout and grammar guidance.
     async fn expand_with_timeout_and_grammar(&self, query: &str) -> Result<String> {
         use tokio::time::{timeout, Duration};
-        
+
         let query_str = query.to_string();
         let model = self.config.model.clone();
-        
+
         // Ensure model is loaded
         ensure_llm_model(&model).await?;
-        
+
         // Apply timeout to grammar-guided inference
         let timeout_duration = Duration::from_millis(self.config.timeout_ms);
         let result = timeout(timeout_duration, async {
             Self::run_inference_with_grammar(&query_str, &model).await
         })
         .await;
-        
+
         match result {
             Ok(Ok(expanded)) => Ok(expanded),
             Ok(Err(e)) => {
@@ -504,7 +533,10 @@ impl QueryExpander {
                 Err(e)
             }
             Err(_) => {
-                tracing::warn!("Grammar-guided expansion timed out ({}ms)", self.config.timeout_ms);
+                tracing::warn!(
+                    "Grammar-guided expansion timed out ({}ms)",
+                    self.config.timeout_ms
+                );
                 Err(anyhow::anyhow!("Grammar-guided expansion timed out"))
             }
         }
@@ -515,17 +547,17 @@ impl QueryExpander {
         // Use improved template with grammar guidance
         let template = prompts::get_template(&prompts::TemplateMode::Improved);
         let prompt = template.replace("{query}", query);
-        
+
         tracing::debug!("Grammar-guided expansion prompt for query: {}", query);
-        
+
         // Run inference
         let cache = get_llm_cache();
         if let Some(SendLLM(model_arc)) = cache.get(model_name) {
             let raw_output = Self::infer_expansion(&model_arc, &prompt)?;
-            
+
             // Parse with grammar-guided approach and fallback
             let expanded_terms = parse_with_fallback(&raw_output)?;
-            
+
             // Prepend original query to avoid duplication
             let result = if expanded_terms.is_empty() {
                 query.to_string()
@@ -542,7 +574,7 @@ impl QueryExpander {
                     format!("{}, {}", query, expanded_terms)
                 }
             };
-            
+
             Ok(result)
         } else {
             Err(anyhow::anyhow!("Model not loaded: {}", model_name))
@@ -550,27 +582,31 @@ impl QueryExpander {
     }
 
     /// Internal expansion with timeout and intent guidance.
-    async fn expand_with_timeout_and_intent(&self, query: &str, intent: Option<&str>) -> Result<String> {
+    async fn expand_with_timeout_and_intent(
+        &self,
+        query: &str,
+        intent: Option<&str>,
+    ) -> Result<String> {
         use tokio::time::{timeout, Duration};
-        
+
         let query_str = query.to_string();
         let model = self.config.model.clone();
-        
+
         // Resolve intent with fallback logic
         let resolved_intent = intent
             .or_else(|| self.config.intent.default_intent.as_deref())
             .map(|i| i.to_string());
-        
+
         // Ensure model is loaded
         ensure_llm_model(&model).await?;
-        
+
         // Apply timeout to intent-aware inference
         let timeout_duration = Duration::from_millis(self.config.timeout_ms);
         let result = timeout(timeout_duration, async {
             Self::run_inference_with_intent(&query_str, &model, resolved_intent.as_deref()).await
         })
         .await;
-        
+
         match result {
             Ok(Ok(expanded)) => Ok(expanded),
             Ok(Err(e)) => {
@@ -578,14 +614,21 @@ impl QueryExpander {
                 Err(e)
             }
             Err(_) => {
-                tracing::warn!("Intent-aware expansion timed out ({}ms)", self.config.timeout_ms);
+                tracing::warn!(
+                    "Intent-aware expansion timed out ({}ms)",
+                    self.config.timeout_ms
+                );
                 Err(anyhow::anyhow!("Intent-aware expansion timed out"))
             }
         }
     }
 
     /// Run inference with intent-aware prompting.
-    async fn run_inference_with_intent(query: &str, model_name: &str, intent: Option<&str>) -> Result<String> {
+    async fn run_inference_with_intent(
+        query: &str,
+        model_name: &str,
+        intent: Option<&str>,
+    ) -> Result<String> {
         // Use intent-aware template
         let template = prompts::get_template(&prompts::TemplateMode::IntentAware);
         let prompt = if let Some(intent_text) = intent {
@@ -594,20 +637,19 @@ impl QueryExpander {
                 .replace("{intent}", intent_text)
         } else {
             // Fallback: use improved template if no intent available
-            prompts::get_template(&prompts::TemplateMode::Improved)
-                .replace("{query}", query)
+            prompts::get_template(&prompts::TemplateMode::Improved).replace("{query}", query)
         };
-        
+
         tracing::debug!("Intent-aware expansion for query: {}", query);
-        
+
         // Run inference
         let cache = get_llm_cache();
         if let Some(SendLLM(model_arc)) = cache.get(model_name) {
             let raw_output = Self::infer_expansion(&model_arc, &prompt)?;
-            
+
             // Parse with fallback
             let expanded_terms = parse_with_fallback(&raw_output)?;
-            
+
             // Prepend original query
             let result = if expanded_terms.is_empty() {
                 query.to_string()
@@ -624,7 +666,7 @@ impl QueryExpander {
                     format!("{}, {}", query, expanded_terms)
                 }
             };
-            
+
             Ok(result)
         } else {
             Err(anyhow::anyhow!("Model not loaded: {}", model_name))
@@ -634,24 +676,26 @@ impl QueryExpander {
     /// Internal expansion with timeout.
     async fn expand_with_timeout(&self, query: &str) -> Result<String> {
         use tokio::time::{timeout, Duration};
-        
+
         let query_str = query.to_string();
         let model = self.config.model.clone();
-        
+
         // Check if this is a GGUF model that should use the GGUF backend
         #[cfg(feature = "gguf")]
         {
             use crate::gguf_query_expander::GgufQueryExpander;
-            
+
             if GgufQueryExpander::should_use_gguf(&model) {
-                tracing::debug!("Query expansion: Routing to GGUF backend for model: '{}'", model);
+                tracing::debug!(
+                    "Query expansion: Routing to GGUF backend for model: '{}'",
+                    model
+                );
                 let expander = GgufQueryExpander::new(model);
-                
+
                 // Apply timeout
                 let timeout_duration = Duration::from_millis(self.config.timeout_ms);
-                let result = timeout(timeout_duration, expander.expand(&query_str))
-                    .await;
-                
+                let result = timeout(timeout_duration, expander.expand(&query_str)).await;
+
                 return match result {
                     Ok(Ok(expanded)) => Ok(expanded),
                     Ok(Err(e)) => {
@@ -659,26 +703,29 @@ impl QueryExpander {
                         Err(e)
                     }
                     Err(_) => {
-                        tracing::warn!("GGUF query expansion inference timed out ({}ms)", self.config.timeout_ms);
+                        tracing::warn!(
+                            "GGUF query expansion inference timed out ({}ms)",
+                            self.config.timeout_ms
+                        );
                         Err(anyhow::anyhow!("GGUF query expansion inference timed out"))
                     }
                 };
             }
         }
-        
+
         // Default: Use ONNX backend
         tracing::debug!("Query expansion: Using ONNX backend for model: '{}'", model);
-        
+
         // FIRST: Ensure model is loaded (outside timeout, can take time for download)
         ensure_llm_model(&model).await?;
-        
+
         // NOW: Apply timeout only to inference (should be fast)
         let timeout_duration = Duration::from_millis(self.config.timeout_ms);
         let result = timeout(timeout_duration, async {
             Self::run_inference(&query_str, &model).await
         })
         .await;
-        
+
         match result {
             Ok(Ok(expanded)) => Ok(expanded),
             Ok(Err(e)) => {
@@ -686,29 +733,34 @@ impl QueryExpander {
                 Err(e)
             }
             Err(_) => {
-                tracing::warn!("ONNX query expansion inference timed out ({}ms)", self.config.timeout_ms);
+                tracing::warn!(
+                    "ONNX query expansion inference timed out ({}ms)",
+                    self.config.timeout_ms
+                );
                 Err(anyhow::anyhow!("ONNX query expansion inference timed out"))
             }
         }
     }
-    
+
     /// Run actual model inference.
     async fn run_inference(query: &str, model_name: &str) -> Result<String> {
         // Model should already be loaded by expand_with_timeout
         // This just runs the inference
-        
+
         // Get the appropriate prompt template (use original structured)
         let template = prompts::get_template(&prompts::TemplateMode::Structured);
         let prompt = template.replace("{query}", query);
-        
-        tracing::debug!("Query expansion prompt (first 100 chars): {}", 
-                       prompt.chars().take(100).collect::<String>());
-        
+
+        tracing::debug!(
+            "Query expansion prompt (first 100 chars): {}",
+            prompt.chars().take(100).collect::<String>()
+        );
+
         // Get model from cache and run inference
         let cache = get_llm_cache();
         if let Some(SendLLM(model_arc)) = cache.get(model_name) {
             let expanded_terms = Self::infer_expansion(&model_arc, &prompt)?;
-            
+
             // Prepend original query to the expansion (enhancement, not replacement)
             // Avoid duplicates by checking if original query is already the first term
             let result = if expanded_terms.is_empty() {
@@ -720,7 +772,7 @@ impl QueryExpander {
                 } else {
                     expanded_terms.as_str()
                 };
-                
+
                 if first_term.eq_ignore_ascii_case(query) {
                     // Original query is already first, use as-is to avoid duplicate
                     expanded_terms
@@ -729,133 +781,143 @@ impl QueryExpander {
                     format!("{}, {}", query, expanded_terms)
                 }
             };
-            
+
             Ok(result)
         } else {
             Err(anyhow::anyhow!("Model not loaded: {}", model_name))
         }
     }
-    
+
     /// Perform ONNX inference to expand query with greedy text generation.
     fn infer_expansion(model: &Arc<LLMModel>, prompt: &str) -> Result<String> {
         // Tokenize the prompt
-        let encoding = model.tokenizer
+        let encoding = model
+            .tokenizer
             .encode(prompt, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
-        
+
         let mut input_ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
-        
+
         if input_ids.is_empty() {
             return Err(anyhow::anyhow!("Empty input after tokenization"));
         }
-        
+
         // Constants for generation
-        const MAX_NEW_TOKENS: usize = 30;  // Max tokens to generate
-        const MAX_SEQ_LEN: usize = 512;    // Sequence length limit
-        const EOS_TOKEN: i64 = 2;          // End-of-sequence token ID
-        
+        const MAX_NEW_TOKENS: usize = 30; // Max tokens to generate
+        const MAX_SEQ_LEN: usize = 512; // Sequence length limit
+        const EOS_TOKEN: i64 = 2; // End-of-sequence token ID
+
         let mut generated_tokens = Vec::new();
-        
+
         // Autoregressive text generation (greedy decoding)
         for _ in 0..MAX_NEW_TOKENS {
             if input_ids.len() >= MAX_SEQ_LEN {
                 break;
             }
-            
+
             // Create attention mask
             let attention_mask: Vec<i64> = (0..input_ids.len()).map(|_| 1i64).collect();
             let seq_len = input_ids.len();
-            
+
             // Create input tensors
-            let input_ids_tensor = Tensor::<i64>::from_array(
-                ([1usize, seq_len], input_ids.clone().into_boxed_slice())
-            ).context("Failed to create input_ids tensor")?;
-            
-            let attention_mask_tensor = Tensor::<i64>::from_array(
-                ([1usize, seq_len], attention_mask.into_boxed_slice())
-            ).context("Failed to create attention_mask tensor")?;
-            
+            let input_ids_tensor = Tensor::<i64>::from_array((
+                [1usize, seq_len],
+                input_ids.clone().into_boxed_slice(),
+            ))
+            .context("Failed to create input_ids tensor")?;
+
+            let attention_mask_tensor =
+                Tensor::<i64>::from_array(([1usize, seq_len], attention_mask.into_boxed_slice()))
+                    .context("Failed to create attention_mask tensor")?;
+
             // Run inference to get logits for next token
             let mut session = model.session.lock().unwrap();
-            
-            let outputs = session.run(
-                ort::inputs![
+
+            let outputs = session
+                .run(ort::inputs![
                     "input_ids" => input_ids_tensor,
                     "attention_mask" => attention_mask_tensor
-                ]
-            ).context("LLM inference failed")?;
-            
+                ])
+                .context("LLM inference failed")?;
+
             // Extract logits from last position
-            let logits_value = outputs.get("logits")
+            let logits_value = outputs
+                .get("logits")
                 .or_else(|| outputs.get("last_hidden_state"))
                 .context("No logits output from LLM model")?;
-            
+
             let logits = logits_value
                 .try_extract_tensor::<f32>()
                 .context("Failed to extract logits as f32")?;
-            
+
             let (_shape, logits_data) = logits;
-            
+
             if logits_data.len() < 32000 {
                 // Not enough logits for vocab (usually ~32k or more for LLMs)
                 // This might be hidden states instead of logits
                 break;
             }
-            
+
             // Get logits for last token position
             // Shape is [batch_size=1, seq_len, vocab_size]
             // We want the last token's logits
             let vocab_size = logits_data.len() / seq_len;
             let last_token_logits_start = (seq_len - 1) * vocab_size;
             let last_token_logits = &logits_data[last_token_logits_start..];
-            
+
             // Find token with highest logit (greedy decoding)
             let mut next_token: i64 = 0;
             let mut max_logit = f32::NEG_INFINITY;
-            
+
             for (idx, &logit) in last_token_logits.iter().enumerate() {
                 if logit > max_logit {
                     max_logit = logit;
                     next_token = idx as i64;
                 }
             }
-            
+
             // Stop if we generated end-of-sequence token
             if next_token == EOS_TOKEN {
                 break;
             }
-            
+
             // Add to generated tokens
             generated_tokens.push(next_token);
             input_ids.push(next_token);
         }
-        
+
         drop(model.session.lock());
-        
+
         // Decode generated tokens to text
         let generated_ids: Vec<u32> = generated_tokens.iter().map(|&id| id as u32).collect();
-        
-        let decoded = model.tokenizer
+
+        let decoded = model
+            .tokenizer
             .decode(&generated_ids, true)
             .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
-        
+
         // Clean up the decoded text - extract meaningful terms
         let expanded = decoded.trim();
-        
+
         // The prompt ends with "query:" so we expect output after that
         // Extract text after the last colon if there is one
         let terms = if expanded.contains(':') {
             // Get everything after the last colon
-            expanded.rsplit(':').next().unwrap_or(expanded).trim().to_string()
+            expanded
+                .rsplit(':')
+                .next()
+                .unwrap_or(expanded)
+                .trim()
+                .to_string()
         } else {
             expanded.to_string()
         };
-        
+
         if terms.is_empty() {
             tracing::warn!("Generated empty expansion from: {}", expanded);
             return Err(anyhow::anyhow!("Generated empty expansion"));
         }
-        
+
         // Truncate at sentence boundaries (period, newline) to avoid rambling
         let truncated = if let Some(period_idx) = terms.find('.') {
             &terms[..period_idx]
@@ -867,12 +929,12 @@ impl QueryExpander {
         } else {
             &terms
         };
-        
+
         // Remove excessive repetition - if we see the same word repeated 3+ times, keep only first
         let deduped = if let Some(first_comma_idx) = truncated.find(',') {
             let first_term = &truncated[..first_comma_idx].trim();
             let rest = &truncated[first_comma_idx..];
-            
+
             // Count occurrences of the first term in the rest
             let count = rest.matches(first_term).count();
             if count >= 2 {
@@ -893,19 +955,19 @@ impl QueryExpander {
             let parts: Vec<&str> = deduped.split(',').map(|s| s.trim()).collect();
             let mut seen = std::collections::HashSet::new();
             let mut unique_parts = Vec::new();
-            
+
             for part in parts {
                 if !part.is_empty() && !seen.contains(part) {
                     unique_parts.push(part);
                     seen.insert(part);
                 }
             }
-            
+
             // Limit to reasonable number of terms (10 max)
             unique_parts.truncate(10);
             unique_parts.join(", ")
         };
-        
+
         tracing::debug!("LLM generated expansion: {}", final_expansion);
         Ok(final_expansion)
     }
@@ -983,9 +1045,18 @@ mod tests {
         assert!(prompts::FEW_SHOT_INTENT_AWARE.contains("{intent}"));
 
         // Test template selection
-        assert_eq!(prompts::get_template(&prompts::TemplateMode::Structured), prompts::FEW_SHOT_STRUCTURED);
-        assert_eq!(prompts::get_template(&prompts::TemplateMode::Improved), prompts::FEW_SHOT_IMPROVED);
-        assert_eq!(prompts::get_template(&prompts::TemplateMode::IntentAware), prompts::FEW_SHOT_INTENT_AWARE);
+        assert_eq!(
+            prompts::get_template(&prompts::TemplateMode::Structured),
+            prompts::FEW_SHOT_STRUCTURED
+        );
+        assert_eq!(
+            prompts::get_template(&prompts::TemplateMode::Improved),
+            prompts::FEW_SHOT_IMPROVED
+        );
+        assert_eq!(
+            prompts::get_template(&prompts::TemplateMode::IntentAware),
+            prompts::FEW_SHOT_INTENT_AWARE
+        );
     }
 
     #[tokio::test]
@@ -1022,7 +1093,7 @@ mod tests {
         let filled = template
             .replace("{query}", "Docker")
             .replace("{intent}", "orchestration");
-        
+
         assert!(filled.contains("Docker"));
         assert!(filled.contains("orchestration"));
         assert!(!filled.contains("{query}"));

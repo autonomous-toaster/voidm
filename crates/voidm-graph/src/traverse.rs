@@ -43,12 +43,11 @@ pub async fn neighbors(
             continue;
         }
 
-        let current_node: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM graph_nodes WHERE memory_id = ?"
-        )
-        .bind(&current_id)
-        .fetch_optional(pool)
-        .await?;
+        let current_node: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+                .bind(&current_id)
+                .fetch_optional(pool)
+                .await?;
 
         let node_id = match current_node {
             Some(n) => n,
@@ -60,7 +59,7 @@ pub async fn neighbors(
             "SELECT n.memory_id, e.rel_type, e.note
              FROM graph_edges e
              JOIN graph_nodes n ON n.id = e.target_id
-             WHERE e.source_id = ?"
+             WHERE e.source_id = ?",
         )
         .bind(node_id)
         .fetch_all(pool)
@@ -68,7 +67,9 @@ pub async fn neighbors(
 
         for (neighbor_id, rel_type, note) in outgoing {
             if let Some(filter) = rel_filter {
-                if rel_type != filter { continue; }
+                if rel_type != filter {
+                    continue;
+                }
             }
             if !visited.contains(&neighbor_id) {
                 visited.insert(neighbor_id.clone());
@@ -88,7 +89,7 @@ pub async fn neighbors(
             "SELECT n.memory_id, e.rel_type, e.note
              FROM graph_edges e
              JOIN graph_nodes n ON n.id = e.source_id
-             WHERE e.target_id = ?"
+             WHERE e.target_id = ?",
         )
         .bind(node_id)
         .fetch_all(pool)
@@ -99,11 +100,17 @@ pub async fn neighbors(
             let is_undirected = rel_type == "RELATES_TO";
             // For non-RELATES_TO, incoming means something else links TO us — include it
             if let Some(filter) = rel_filter {
-                if rel_type != filter { continue; }
+                if rel_type != filter {
+                    continue;
+                }
             }
             if !visited.contains(&neighbor_id) {
                 visited.insert(neighbor_id.clone());
-                let direction = if is_undirected { "undirected".into() } else { "incoming".into() };
+                let direction = if is_undirected {
+                    "undirected".into()
+                } else {
+                    "incoming".into()
+                };
                 results.push(NeighborResult {
                     memory_id: neighbor_id.clone(),
                     rel_type,
@@ -130,7 +137,10 @@ pub async fn shortest_path(
     let mut visited: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<Vec<PathStep>> = VecDeque::new();
 
-    queue.push_back(vec![PathStep { memory_id: from_id.to_string(), rel_type: None }]);
+    queue.push_back(vec![PathStep {
+        memory_id: from_id.to_string(),
+        rel_type: None,
+    }]);
     visited.insert(from_id.to_string());
 
     while let Some(path) = queue.pop_front() {
@@ -142,12 +152,11 @@ pub async fn shortest_path(
             continue;
         }
 
-        let node_id: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM graph_nodes WHERE memory_id = ?"
-        )
-        .bind(current)
-        .fetch_optional(pool)
-        .await?;
+        let node_id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+                .bind(current)
+                .fetch_optional(pool)
+                .await?;
 
         if let Some(nid) = node_id {
             // Both directions
@@ -156,7 +165,7 @@ pub async fn shortest_path(
                  JOIN graph_nodes n ON n.id = e.target_id WHERE e.source_id = ?
                  UNION
                  SELECT n.memory_id, e.rel_type FROM graph_edges e
-                 JOIN graph_nodes n ON n.id = e.source_id WHERE e.target_id = ?"
+                 JOIN graph_nodes n ON n.id = e.source_id WHERE e.target_id = ?",
             )
             .bind(nid)
             .bind(nid)
@@ -167,7 +176,10 @@ pub async fn shortest_path(
                 if !visited.contains(&neighbor_id) {
                     visited.insert(neighbor_id.clone());
                     let mut new_path = path.clone();
-                    new_path.push(PathStep { memory_id: neighbor_id, rel_type: Some(rel_type) });
+                    new_path.push(PathStep {
+                        memory_id: neighbor_id,
+                        rel_type: Some(rel_type),
+                    });
                     queue.push_back(new_path);
                 }
             }
@@ -186,27 +198,28 @@ pub async fn pagerank(
     iterations: u32,
 ) -> Result<Vec<(String, f64)>> {
     // ── Memory nodes + graph_edges ────────────────────────────────────────────
-    let mem_edges: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT source_id, target_id FROM graph_edges"
-    ).fetch_all(pool).await?;
+    let mem_edges: Vec<(i64, i64)> = sqlx::query_as("SELECT source_id, target_id FROM graph_edges")
+        .fetch_all(pool)
+        .await?;
 
-    let mem_nodes: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, memory_id FROM graph_nodes"
-    ).fetch_all(pool).await?;
+    let mem_nodes: Vec<(i64, String)> = sqlx::query_as("SELECT id, memory_id FROM graph_nodes")
+        .fetch_all(pool)
+        .await?;
 
     // ── Concept nodes + ontology_edges ────────────────────────────────────────
-    let concept_nodes: Vec<(String,)> = sqlx::query_as(
-        "SELECT id FROM ontology_concepts"
-    ).fetch_all(pool).await?;
+    let concept_nodes: Vec<(String,)> = sqlx::query_as("SELECT id FROM ontology_concepts")
+        .fetch_all(pool)
+        .await?;
 
-    let ont_edges: Vec<(String, String)> = sqlx::query_as(
-        "SELECT from_id, to_id FROM ontology_edges"
-    ).fetch_all(pool).await?;
+    let ont_edges: Vec<(String, String)> =
+        sqlx::query_as("SELECT from_id, to_id FROM ontology_edges")
+            .fetch_all(pool)
+            .await?;
 
     // ── Build unified node index ───────────────────────────────────────────────
     // Memory nodes use integer graph_nodes.id as key.
     // Concept nodes use a string key "c::<concept_id>".
-    let mut labels: Vec<String> = Vec::new();  // index → display label
+    let mut labels: Vec<String> = Vec::new(); // index → display label
     let mut mem_graph_id_to_idx: HashMap<i64, usize> = HashMap::new();
     let mut concept_id_to_idx: HashMap<String, usize> = HashMap::new();
 
@@ -231,7 +244,8 @@ pub async fn pagerank(
 
     // Memory ↔ memory edges
     for (src, tgt) in &mem_edges {
-        if let (Some(&si), Some(&ti)) = (mem_graph_id_to_idx.get(src), mem_graph_id_to_idx.get(tgt)) {
+        if let (Some(&si), Some(&ti)) = (mem_graph_id_to_idx.get(src), mem_graph_id_to_idx.get(tgt))
+        {
             out_neighbors[si].push(ti);
             in_neighbors[ti].push(si);
         }
@@ -240,21 +254,22 @@ pub async fn pagerank(
     // Ontology edges (concept ↔ concept, concept ↔ memory)
     for (from_id, to_id) in &ont_edges {
         // from_id could be a concept id or a memory UUID
-        let from_idx = concept_id_to_idx.get(from_id.as_str())
+        let from_idx = concept_id_to_idx
+            .get(from_id.as_str())
             .copied()
             .or_else(|| {
                 // It's a memory UUID — find its graph_nodes.id
-                mem_nodes.iter()
+                mem_nodes
+                    .iter()
                     .find(|(_, mid)| mid == from_id)
                     .and_then(|(gid, _)| mem_graph_id_to_idx.get(gid).copied())
             });
-        let to_idx = concept_id_to_idx.get(to_id.as_str())
-            .copied()
-            .or_else(|| {
-                mem_nodes.iter()
-                    .find(|(_, mid)| mid == to_id)
-                    .and_then(|(gid, _)| mem_graph_id_to_idx.get(gid).copied())
-            });
+        let to_idx = concept_id_to_idx.get(to_id.as_str()).copied().or_else(|| {
+            mem_nodes
+                .iter()
+                .find(|(_, mid)| mid == to_id)
+                .and_then(|(gid, _)| mem_graph_id_to_idx.get(gid).copied())
+        });
 
         if let (Some(si), Some(ti)) = (from_idx, to_idx) {
             out_neighbors[si].push(ti);
@@ -292,7 +307,7 @@ pub async fn graph_stats(pool: &SqlitePool) -> Result<GraphStats> {
         .await?;
 
     let rel_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT rel_type, COUNT(*) as cnt FROM graph_edges GROUP BY rel_type ORDER BY cnt DESC"
+        "SELECT rel_type, COUNT(*) as cnt FROM graph_edges GROUP BY rel_type ORDER BY cnt DESC",
     )
     .fetch_all(pool)
     .await?;

@@ -6,9 +6,9 @@
 //! Run with: cargo run --release --bin gguf_bench
 
 use anyhow::Result;
+use dirs::home_dir;
 use std::fs;
 use std::path::PathBuf;
-use dirs::home_dir;
 
 const MODEL_URL: &str = "https://huggingface.co/tobil/qmd-query-expansion-1.7B-gguf/resolve/main/qmd-query-expansion-1.7B-q4_k_m.gguf";
 const MODEL_SIZE_MB: u32 = 1223;
@@ -49,18 +49,22 @@ fn parse_expansion_output(output: &str) -> Result<QueryExpansion> {
 
 fn find_model_file() -> Option<PathBuf> {
     let home = home_dir()?;
-    
+
     // Check both cache locations
     let cache_dirs = vec![
         home.join(".cache/voidm/models"),
         home.join(".cache/huggingface/hub"),
     ];
-    
+
     for cache_dir in cache_dirs {
         if let Ok(entries) = fs::read_dir(&cache_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.file_name().map(|n| n.to_string_lossy().contains("qmd-query-expansion")).unwrap_or(false) {
+                if path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().contains("qmd-query-expansion"))
+                    .unwrap_or(false)
+                {
                     // Recursively search for GGUF file
                     if let Some(found) = find_gguf_in_dir(&path) {
                         return Some(found);
@@ -69,7 +73,7 @@ fn find_model_file() -> Option<PathBuf> {
             }
         }
     }
-    
+
     None
 }
 
@@ -98,7 +102,7 @@ fn main() -> Result<()> {
 
     // Step 1: Find model in cache
     println!("[1/5] Looking for model in cache...");
-    
+
     match find_model_file() {
         Some(model_path) => {
             let file_size_mb = model_path.metadata()?.len() as f64 / (1024.0 * 1024.0);
@@ -126,7 +130,7 @@ fn main() -> Result<()> {
 
     // Step 3: Test output format
     println!("\n[3/5] Testing output format parsing...");
-    
+
     let sample_output = r#"lex: docker containers
 lex: container networking
 vec: container orchestration and networking
@@ -157,7 +161,7 @@ hyde: Docker containers communicate over networks using virtual network interfac
     // Step 4: Latency analysis
     println!("\n[4/5] Estimated latency analysis...");
     println!("      ─────────────────────────────────────────────────────");
-    
+
     println!("\n      On CPU (Intel i7 / M1):");
     println!("        Query 1 (docker containers):              ~850 ms");
     println!("        Query 2 (machine learning):              ~800 ms");
@@ -168,7 +172,7 @@ hyde: Docker containers communicate over networks using virtual network interfac
     println!("        ├─ Max:  900 ms");
     println!("        └─ Mean: 836 ms");
     println!("        ⚠️  Exceeds 300ms requirement (2.8x slower)");
-    
+
     println!("\n      On GPU (NVIDIA RTX 3070+):");
     println!("        Query 1 (docker containers):              ~180 ms");
     println!("        Query 2 (machine learning):              ~200 ms");
@@ -179,7 +183,7 @@ hyde: Docker containers communicate over networks using virtual network interfac
     println!("        ├─ Max:  210 ms");
     println!("        └─ Mean: 190 ms");
     println!("        ✅ Meets <300ms requirement");
-    
+
     println!("\n      ─────────────────────────────────────────────────────");
 
     // Step 5: Integration roadmap
@@ -202,7 +206,7 @@ hyde: Docker containers communicate over networks using virtual network interfac
     println!("\n╔═══════════════════════════════════════════════════════════════════════╗");
     println!("║                PHASE 2 ANALYSIS COMPLETE                             ║");
     println!("╚═══════════════════════════════════════════════════════════════════════╝");
-    
+
     println!("\n📊 Summary:");
     println!("   Model: qmd-query-expansion-1.7B-q4_k_m.gguf");
     println!("   Format: GGUF (verified)");

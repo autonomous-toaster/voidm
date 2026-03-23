@@ -1,9 +1,8 @@
+use anyhow::Result;
 /// Tag-based automatic linking of memories
 /// When a new memory is created, find other memories with shared tags
 /// and create RELATES_TO edges in the knowledge graph.
-
 use sqlx::SqlitePool;
-use anyhow::Result;
 use std::collections::HashSet;
 
 /// Find all memories that share at least one tag with the given memory.
@@ -18,14 +17,12 @@ pub async fn find_memories_with_shared_tags(
     }
 
     // Convert tags to lowercase for case-insensitive comparison
-    let current_tags_lower: HashSet<String> = current_tags
-        .iter()
-        .map(|t| t.to_lowercase())
-        .collect();
+    let current_tags_lower: HashSet<String> =
+        current_tags.iter().map(|t| t.to_lowercase()).collect();
 
     // Get all memories with their tags
     let all_memories: Vec<(String, String)> = sqlx::query_as::<_, (String, String)>(
-        "SELECT id, tags FROM memories WHERE id != ? ORDER BY created_at DESC"
+        "SELECT id, tags FROM memories WHERE id != ? ORDER BY created_at DESC",
     )
     .bind(memory_id)
     .fetch_all(pool)
@@ -41,10 +38,7 @@ pub async fn find_memories_with_shared_tags(
         };
 
         // Find shared tags (case-insensitive)
-        let other_tags_lower: HashSet<String> = tags
-            .iter()
-            .map(|t| t.to_lowercase())
-            .collect();
+        let other_tags_lower: HashSet<String> = tags.iter().map(|t| t.to_lowercase()).collect();
 
         let shared: HashSet<String> = current_tags_lower
             .intersection(&other_tags_lower)
@@ -65,34 +59,27 @@ pub async fn find_memories_with_shared_tags(
 }
 
 /// Check if a link already exists between two memories
-pub async fn link_exists(
-    pool: &SqlitePool,
-    source_id: &str,
-    target_id: &str,
-) -> Result<bool> {
+pub async fn link_exists(pool: &SqlitePool, source_id: &str, target_id: &str) -> Result<bool> {
     // Get node IDs
-    let source_node: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(source_id)
-    .fetch_optional(pool)
-    .await?;
+    let source_node: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+            .bind(source_id)
+            .fetch_optional(pool)
+            .await?;
 
-    let target_node: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(target_id)
-    .fetch_optional(pool)
-    .await?;
+    let target_node: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+            .bind(target_id)
+            .fetch_optional(pool)
+            .await?;
 
     if let (Some(src), Some(tgt)) = (source_node, target_node) {
-        let exists: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM graph_edges WHERE source_id = ? AND target_id = ?"
-        )
-        .bind(src)
-        .bind(tgt)
-        .fetch_optional(pool)
-        .await?;
+        let exists: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM graph_edges WHERE source_id = ? AND target_id = ?")
+                .bind(src)
+                .bind(tgt)
+                .fetch_optional(pool)
+                .await?;
 
         Ok(exists.is_some())
     } else {
@@ -116,19 +103,17 @@ pub async fn create_tag_link(
     }
 
     // Get node IDs
-    let source_node: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(source_id)
-    .fetch_optional(pool)
-    .await?;
+    let source_node: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+            .bind(source_id)
+            .fetch_optional(pool)
+            .await?;
 
-    let target_node: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(target_id)
-    .fetch_optional(pool)
-    .await?;
+    let target_node: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+            .bind(target_id)
+            .fetch_optional(pool)
+            .await?;
 
     if let (Some(src), Some(tgt)) = (source_node, target_node) {
         let note = if shared_tags.is_empty() {
@@ -141,7 +126,7 @@ pub async fn create_tag_link(
 
         sqlx::query(
             "INSERT OR IGNORE INTO graph_edges (source_id, target_id, rel_type, note, created_at)
-             VALUES (?, ?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(src)
         .bind(tgt)
@@ -195,7 +180,11 @@ mod tests {
 
     #[test]
     fn test_find_shared_tags() {
-        let tags1 = vec!["kubernetes".to_string(), "docker".to_string(), "deployment".to_string()];
+        let tags1 = vec![
+            "kubernetes".to_string(),
+            "docker".to_string(),
+            "deployment".to_string(),
+        ];
         let tags2 = vec!["Docker".to_string(), "containers".to_string()];
 
         let tags1_lower: HashSet<String> = tags1.iter().map(|t| t.to_lowercase()).collect();

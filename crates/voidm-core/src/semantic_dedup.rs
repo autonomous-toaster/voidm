@@ -63,31 +63,42 @@ pub async fn ensure_semantic_model() -> Result<()> {
 
 async fn load_or_download() -> Result<SemanticModel> {
     let cache_dir = semantic_cache_dir();
-    std::fs::create_dir_all(&cache_dir)
-        .with_context(|| format!("Cannot create semantic dedup cache dir: {}", cache_dir.display()))?;
+    std::fs::create_dir_all(&cache_dir).with_context(|| {
+        format!(
+            "Cannot create semantic dedup cache dir: {}",
+            cache_dir.display()
+        )
+    })?;
 
     let tokenizer_path = cache_dir.join("tokenizer.json");
 
     // Download if missing
     if !tokenizer_path.exists() {
-        tracing::info!("Downloading semantic dedup model '{}' (first use) …", SEMANTIC_MODEL_ID);
+        tracing::info!(
+            "Downloading semantic dedup model '{}' (first use) …",
+            SEMANTIC_MODEL_ID
+        );
         eprintln!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         eprintln!("📦 Downloading semantic dedup model: all-MiniLM-L6-v2");
         eprintln!("   Size: ~80MB");
         eprintln!("   Cache: {}", cache_dir.display());
         eprintln!("   (First time only, then cached locally)");
         eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-        
+
         download_model_files(&cache_dir).await?;
         tracing::info!("Semantic dedup model downloaded to {}", cache_dir.display());
-        eprintln!("✅ Semantic dedup model ready at: {}\n", cache_dir.display());
+        eprintln!(
+            "✅ Semantic dedup model ready at: {}\n",
+            cache_dir.display()
+        );
     }
 
     build_model(&tokenizer_path)
 }
 
 async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
-    let hf_cache = cache_dir.parent()
+    let hf_cache = cache_dir
+        .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| cache_dir.clone());
 
@@ -99,8 +110,12 @@ async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
     let repo = api.model(SEMANTIC_MODEL_ID.to_string());
 
     // Download tokenizer
-    let tok_src = repo.get(SEMANTIC_TOKENIZER_FILE).await
-        .with_context(|| format!("Failed to download {} from {}", SEMANTIC_TOKENIZER_FILE, SEMANTIC_MODEL_ID))?;
+    let tok_src = repo.get(SEMANTIC_TOKENIZER_FILE).await.with_context(|| {
+        format!(
+            "Failed to download {} from {}",
+            SEMANTIC_TOKENIZER_FILE, SEMANTIC_MODEL_ID
+        )
+    })?;
     std::fs::copy(&tok_src, cache_dir.join("tokenizer.json"))
         .context("Failed to copy tokenizer to cache")?;
 
@@ -121,7 +136,7 @@ fn semantic_cache_dir() -> PathBuf {
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".local/share")));
-    
+
     base.join("voidm/semantic_dedup")
 }
 
@@ -156,20 +171,20 @@ pub fn encode_batch(texts: &[&str], embeddings_model: &str) -> Result<Vec<Vec<f3
 pub fn similarity(text1: &str, text2: &str, embeddings_model: &str) -> Result<f32> {
     let emb1 = encode(text1, embeddings_model)?;
     let emb2 = encode(text2, embeddings_model)?;
-    
+
     Ok(cosine_similarity(&emb1, &emb2))
 }
 
 /// Compute pairwise cosine similarities between two sets of embeddings.
 pub fn similarity_matrix(embeddings1: &[Vec<f32>], embeddings2: &[Vec<f32>]) -> Vec<Vec<f32>> {
     let mut matrix = vec![vec![0.0; embeddings2.len()]; embeddings1.len()];
-    
+
     for i in 0..embeddings1.len() {
         for j in 0..embeddings2.len() {
             matrix[i][j] = cosine_similarity(&embeddings1[i], &embeddings2[j]);
         }
     }
-    
+
     matrix
 }
 
@@ -180,24 +195,24 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
-    
+
     let mut dot_product = 0.0;
     let mut norm_a = 0.0;
     let mut norm_b = 0.0;
-    
+
     for i in 0..a.len() {
         dot_product += a[i] * b[i];
         norm_a += a[i] * a[i];
         norm_b += b[i] * b[i];
     }
-    
+
     let norm_a = norm_a.sqrt();
     let norm_b = norm_b.sqrt();
-    
+
     if norm_a < 1e-10 || norm_b < 1e-10 {
         return 0.0;
     }
-    
+
     (dot_product / (norm_a * norm_b)).clamp(-1.0, 1.0)
 }
 
@@ -230,24 +245,18 @@ mod tests {
 
     #[test]
     fn test_similarity_matrix() {
-        let emb1 = vec![
-            vec![1.0, 0.0],
-            vec![0.0, 1.0],
-        ];
-        let emb2 = vec![
-            vec![1.0, 0.0],
-            vec![0.0, 1.0],
-        ];
+        let emb1 = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let emb2 = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
 
         let matrix = similarity_matrix(&emb1, &emb2);
-        
+
         assert_eq!(matrix.len(), 2);
         assert_eq!(matrix[0].len(), 2);
-        
+
         // Diagonal should be 1.0 (identical vectors)
         assert!((matrix[0][0] - 1.0).abs() < 1e-5);
         assert!((matrix[1][1] - 1.0).abs() < 1e-5);
-        
+
         // Off-diagonal should be 0.0 (orthogonal)
         assert!((matrix[0][1] - 0.0).abs() < 1e-5);
         assert!((matrix[1][0] - 0.0).abs() < 1e-5);

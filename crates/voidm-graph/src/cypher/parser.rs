@@ -80,8 +80,11 @@ impl Parser {
         // WITH (skip for now — minimal support)
         if self.try_keyword("WITH") {
             // Skip until MATCH or WHERE or RETURN
-            while !matches!(self.peek(), Token::Keyword(k) if ["MATCH","WHERE","RETURN","ORDER","LIMIT"].contains(&k.as_str())) {
-                if matches!(self.peek(), Token::EOF) { break; }
+            while !matches!(self.peek(), Token::Keyword(k) if ["MATCH","WHERE","RETURN","ORDER","LIMIT"].contains(&k.as_str()))
+            {
+                if matches!(self.peek(), Token::EOF) {
+                    break;
+                }
                 self.advance();
             }
         }
@@ -106,7 +109,10 @@ impl Parser {
         if self.try_keyword("LIMIT") {
             match self.advance().clone() {
                 Token::Integer(n) => limit = Some(n),
-                other => bail!("Expected an integer after LIMIT, got {}", token_display(&other)),
+                other => bail!(
+                    "Expected an integer after LIMIT, got {}",
+                    token_display(&other)
+                ),
             }
         }
 
@@ -143,8 +149,13 @@ impl Parser {
 
     fn parse_node_spec(&mut self) -> Result<NodeSpec> {
         match self.peek() {
-            Token::LParen => { self.advance(); }
-            other => bail!("Expected '(' to start a node pattern, got {}", token_display(other)),
+            Token::LParen => {
+                self.advance();
+            }
+            other => bail!(
+                "Expected '(' to start a node pattern, got {}",
+                token_display(other)
+            ),
         }
 
         let var = self.try_ident();
@@ -159,22 +170,36 @@ impl Parser {
         if let Token::LBrace = self.peek() {
             self.advance();
             while !matches!(self.peek(), Token::RBrace | Token::EOF) {
-                let key = self.try_ident().ok_or_else(|| anyhow::anyhow!("Expected property key"))?;
+                let key = self
+                    .try_ident()
+                    .ok_or_else(|| anyhow::anyhow!("Expected property key"))?;
                 match self.advance() {
                     Token::Colon => {}
                     Token::Equals => {}
-                    other => bail!("Expected ':' or '=' after property key, got {}", token_display(other)),
+                    other => bail!(
+                        "Expected ':' or '=' after property key, got {}",
+                        token_display(other)
+                    ),
                 }
                 let val = self.parse_prop_value()?;
                 props.push((key, val));
-                if let Token::Comma = self.peek() { self.advance(); }
+                if let Token::Comma = self.peek() {
+                    self.advance();
+                }
             }
-            if let Token::RBrace = self.peek() { self.advance(); }
+            if let Token::RBrace = self.peek() {
+                self.advance();
+            }
         }
 
         match self.peek() {
-            Token::RParen => { self.advance(); }
-            other => bail!("Expected ')' to close node pattern, got {}", token_display(other)),
+            Token::RParen => {
+                self.advance();
+            }
+            other => bail!(
+                "Expected ')' to close node pattern, got {}",
+                token_display(other)
+            ),
         }
 
         Ok(NodeSpec { var, label, props })
@@ -189,7 +214,9 @@ impl Parser {
 
         let _direction_start = !starts_with_arrow;
         let dash_before = matches!(self.peek(), Token::Dash);
-        if dash_before { self.advance(); }
+        if dash_before {
+            self.advance();
+        }
 
         let mut var = None;
         let mut rel_type = None;
@@ -231,8 +258,13 @@ impl Parser {
             }
 
             match self.peek() {
-                Token::RBracket => { self.advance(); }
-                other => bail!("Expected ']' to close relationship pattern, got {}", token_display(other)),
+                Token::RBracket => {
+                    self.advance();
+                }
+                other => bail!(
+                    "Expected ']' to close relationship pattern, got {}",
+                    token_display(other)
+                ),
             }
         }
 
@@ -242,17 +274,27 @@ impl Parser {
 
         let direction = if starts_with_arrow {
             // Started with <-, so Incoming
-            if after_bracket_dash { self.advance(); }
+            if after_bracket_dash {
+                self.advance();
+            }
             EdgeDirection::Incoming
         } else if after_bracket_arrow {
             self.advance(); // consume ->
             EdgeDirection::Outgoing
         } else {
-            if after_bracket_dash { self.advance(); }
+            if after_bracket_dash {
+                self.advance();
+            }
             EdgeDirection::Undirected
         };
 
-        Ok(EdgeSpec { var, rel_type, direction, min_hops, max_hops })
+        Ok(EdgeSpec {
+            var,
+            rel_type,
+            direction,
+            min_hops,
+            max_hops,
+        })
     }
 
     fn parse_prop_value(&mut self) -> Result<PropValue> {
@@ -262,7 +304,10 @@ impl Parser {
             Token::Keyword(k) if k == "TRUE" => Ok(PropValue::Bool(true)),
             Token::Keyword(k) if k == "FALSE" => Ok(PropValue::Bool(false)),
             Token::Keyword(k) if k == "NULL" => Ok(PropValue::Null),
-            other => bail!("Expected a property value (string, integer, true/false, null), got {}", token_display(&other)),
+            other => bail!(
+                "Expected a property value (string, integer, true/false, null), got {}",
+                token_display(&other)
+            ),
         }
     }
 
@@ -286,14 +331,23 @@ impl Parser {
         }
 
         // var.prop OP value
-        let var = self.try_ident().ok_or_else(|| anyhow::anyhow!("Expected variable in WHERE clause"))?;
+        let var = self
+            .try_ident()
+            .ok_or_else(|| anyhow::anyhow!("Expected variable in WHERE clause"))?;
         self.advance(); // consume Dot
-        let prop = self.try_ident().ok_or_else(|| anyhow::anyhow!("Expected property name after '.'"))?;
+        let prop = self
+            .try_ident()
+            .ok_or_else(|| anyhow::anyhow!("Expected property name after '.'"))?;
 
         let op = self.parse_comp_op()?;
         let value = self.parse_prop_value()?;
 
-        Ok(WhereExpr::Comparison(Comparison { var, prop, op, value }))
+        Ok(WhereExpr::Comparison(Comparison {
+            var,
+            prop,
+            op,
+            value,
+        }))
     }
 
     fn parse_comp_op(&mut self) -> Result<CompOp> {
@@ -308,7 +362,10 @@ impl Parser {
                 self.expect_keyword("WITH")?;
                 Ok(CompOp::EndsWith)
             }
-            other => bail!("Unknown comparison operator: {}. Supported: =, CONTAINS, STARTS WITH, ENDS WITH", token_display(&other)),
+            other => bail!(
+                "Unknown comparison operator: {}. Supported: =, CONTAINS, STARTS WITH, ENDS WITH",
+                token_display(&other)
+            ),
         }
     }
 
@@ -343,17 +400,23 @@ impl Parser {
                 if let Token::LParen = self.peek() {
                     self.advance();
                     let inner = self.try_ident();
-                    if let Token::RParen = self.peek() { self.advance(); }
+                    if let Token::RParen = self.peek() {
+                        self.advance();
+                    }
                     return Ok(ReturnItem::Count(inner));
                 }
             }
         }
 
-        let var = self.try_ident().ok_or_else(|| anyhow::anyhow!("Expected variable in RETURN"))?;
+        let var = self
+            .try_ident()
+            .ok_or_else(|| anyhow::anyhow!("Expected variable in RETURN"))?;
 
         if let Token::Dot = self.peek() {
             self.advance();
-            let prop = self.try_ident().ok_or_else(|| anyhow::anyhow!("Expected property after '.'"))?;
+            let prop = self
+                .try_ident()
+                .ok_or_else(|| anyhow::anyhow!("Expected property after '.'"))?;
             Ok(ReturnItem::Property(var, prop))
         } else {
             Ok(ReturnItem::Variable(var))
@@ -379,27 +442,27 @@ impl Parser {
 
 fn token_display(t: &Token) -> String {
     match t {
-        Token::Keyword(k)    => format!("keyword '{}'", k),
-        Token::Ident(s)      => format!("identifier '{}'", s),
-        Token::StringLit(s)  => format!("string \"{}\"", s),
-        Token::Integer(n)    => format!("integer '{}'", n),
-        Token::LParen        => "'('".into(),
-        Token::RParen        => "')'".into(),
-        Token::LBracket      => "'['".into(),
-        Token::RBracket      => "']'".into(),
-        Token::LBrace        => "'{'".into(),
-        Token::RBrace        => "'}'".into(),
-        Token::Arrow         => "'->' or '<-'".into(),
-        Token::Dash          => "'-'".into(),
-        Token::Dot           => "'.'".into(),
-        Token::Comma         => "','".into(),
-        Token::Equals        => "'='".into(),
-        Token::Colon         => "':'".into(),
-        Token::Star          => "'*'".into(),
-        Token::DotDot        => "'..'".into(),
-        Token::Label(l)      => format!("label ':{}'", l),
-        Token::RelType(r)    => format!("rel-type '[:{}'", r),
-        Token::Newline       => "newline".into(),
-        Token::EOF           => "end of query".into(),
+        Token::Keyword(k) => format!("keyword '{}'", k),
+        Token::Ident(s) => format!("identifier '{}'", s),
+        Token::StringLit(s) => format!("string \"{}\"", s),
+        Token::Integer(n) => format!("integer '{}'", n),
+        Token::LParen => "'('".into(),
+        Token::RParen => "')'".into(),
+        Token::LBracket => "'['".into(),
+        Token::RBracket => "']'".into(),
+        Token::LBrace => "'{'".into(),
+        Token::RBrace => "'}'".into(),
+        Token::Arrow => "'->' or '<-'".into(),
+        Token::Dash => "'-'".into(),
+        Token::Dot => "'.'".into(),
+        Token::Comma => "','".into(),
+        Token::Equals => "'='".into(),
+        Token::Colon => "':'".into(),
+        Token::Star => "'*'".into(),
+        Token::DotDot => "'..'".into(),
+        Token::Label(l) => format!("label ':{}'", l),
+        Token::RelType(r) => format!("rel-type '[:{}'", r),
+        Token::Newline => "newline".into(),
+        Token::EOF => "end of query".into(),
     }
 }

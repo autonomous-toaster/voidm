@@ -449,7 +449,7 @@ impl Default for SearchConfig {
             reranker: None,
             query_expansion: None,
             graph_retrieval: Some(crate::graph_retrieval::GraphRetrievalConfig::default()),
-            metadata_ranking: None,
+            metadata_ranking: Some(MetadataRankingConfig::default()),
         }
     }
 }

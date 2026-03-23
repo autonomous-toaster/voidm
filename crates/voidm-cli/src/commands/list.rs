@@ -36,7 +36,13 @@ pub async fn run(args: ListArgs, db: &Arc<dyn Database>, pool: &SqlitePool, _con
             return Ok(());
         }
         for m in &memories {
-            let preview = if m.content.len() > 80 { format!("{}...", &m.content[..80]) } else { m.content.clone() };
+            // Use char_indices to safely truncate at 80 chars (not bytes)
+            let preview = if m.content.chars().count() > 80 {
+                let truncated: String = m.content.chars().take(80).collect();
+                format!("{}...", truncated)
+            } else {
+                m.content.clone()
+            };
             println!("{} [{}] imp:{} {}", m.id, m.memory_type, m.importance, m.created_at);
             println!("  {}", preview);
             if !m.scopes.is_empty() {

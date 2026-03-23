@@ -9,6 +9,18 @@ use ort::value::Tensor;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+// ─── Helper Functions ──────────────────────────────────────────────────────
+
+/// Safely truncate a string to max characters (respecting UTF-8 boundaries)
+fn truncate_for_display(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        s.to_string()
+    } else {
+        chars[..max_chars].iter().collect()
+    }
+}
+
 // ─── Public API ────────────────────────────────────────────────────────────
 
 /// Cross-encoder reranker for scoring (query, document) pairs.
@@ -674,7 +686,7 @@ mod tests {
             total_scores += delta;
 
             let query_short = if case.query.len() > 50 {
-                format!("{}...", &case.query[..47])
+                format!("{}...", truncate_for_display(&case.query, 7))
             } else {
                 case.query.to_string()
             };
@@ -741,7 +753,7 @@ mod tests {
             total_scores += delta;
 
             let query_short = if case.query.len() > 50 {
-                format!("{}...", &case.query[..47])
+                format!("{}...", truncate_for_display(&case.query, 7))
             } else {
                 case.query.to_string()
             };
@@ -800,7 +812,7 @@ mod tests {
             let ms_res = &ms_results[rank];
             let bge_res = &bge_results[rank];
             let doc_short = if documents[ms_res.index].len() > 20 {
-                format!("{}...", &documents[ms_res.index][..17])
+                format!("{}...", truncate_for_display(&documents[ms_res.index], 17))
             } else {
                 documents[ms_res.index].to_string()
             };

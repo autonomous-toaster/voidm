@@ -75,6 +75,10 @@ pub struct Neo4jConfig {
     /// Neo4j password (default: "password")
     #[serde(default = "default_neo4j_password")]
     pub password: String,
+    
+    /// Neo4j database name (default: "neo4j")
+    #[serde(default = "default_neo4j_database")]
+    pub database: String,
 }
 
 fn default_neo4j_uri() -> String {
@@ -89,6 +93,10 @@ fn default_neo4j_password() -> String {
     "password".to_string()
 }
 
+fn default_neo4j_database() -> String {
+    "neo4j".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingsConfig {
     pub enabled: bool,
@@ -96,11 +104,53 @@ pub struct EmbeddingsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalConfig {
+    /// Enable vector (embedding) search signal. Default: true (if embeddings enabled).
+    #[serde(default = "default_signal_vector")]
+    pub vector: bool,
+    /// Enable BM25 (full-text search) signal. Default: true.
+    #[serde(default = "default_signal_bm25")]
+    pub bm25: bool,
+    /// Enable fuzzy (Jaro-Winkler) search signal. Default: true.
+    #[serde(default = "default_signal_fuzzy")]
+    pub fuzzy: bool,
+}
+
+fn default_signal_vector() -> bool {
+    true
+}
+
+fn default_signal_bm25() -> bool {
+    true
+}
+
+fn default_signal_fuzzy() -> bool {
+    true
+}
+
+impl Default for SignalConfig {
+    fn default() -> Self {
+        Self {
+            vector: true,
+            bm25: true,
+            fuzzy: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchConfig {
+    /// Ranking method. Currently only "rrf" is supported (RRF is always used).
+    /// "hybrid" maps to "rrf" for backward compatibility.
+    /// Kept for backward compatibility only.
+    #[serde(default = "default_search_mode")]
     pub mode: String,
     pub default_limit: usize,
-    /// Minimum score threshold for hybrid mode results (0.0–1.0). Default: 0.3.
+    /// Minimum score threshold for RRF results (0.0–1.0). Default: 0.3.
     pub min_score: f32,
+    /// RRF signal configuration (which signals to include in fusion).
+    #[serde(default)]
+    pub signals: SignalConfig,
     /// Score decay per hop for graph-expanded neighbors. neighbor_score = parent_score * decay^depth.
     pub neighbor_decay: f32,
     /// Minimum score for graph-expanded neighbors to be included. Default: 0.2.
@@ -128,13 +178,17 @@ pub struct SearchConfig {
     pub metadata_ranking: Option<MetadataRankingConfig>,
 }
 
+fn default_search_mode() -> String {
+    "rrf".to_string()
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RerankerConfig {
     /// Enable reranking (default: false).
     #[serde(default)]
     pub enabled: bool,
-    /// Model name: "ms-marco-TinyBERT-L-2" (default)
+    /// Model name: "ms-marco-MiniLM-L-6-v2" (default, recommended)
     #[serde(default = "default_reranker_model")]
     pub model: String,
     /// Apply reranker to top-k results only (default: 15).
@@ -379,9 +433,10 @@ impl Default for EmbeddingsConfig {
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
-            mode: "hybrid".into(),
+            mode: "rrf".into(),
             default_limit: 10,
             min_score: 0.3,
+            signals: SignalConfig::default(),
             neighbor_decay: 0.7,
             neighbor_min_score: 0.2,
             default_neighbor_depth: 1,
@@ -504,6 +559,12 @@ pub fn config_path_display() -> String {
 }
 
 fn config_path() -> Option<PathBuf> {
+    // VOIDM_CONFIG environment variable (highest priority)
+    if let Ok(config_env) = std::env::var("VOIDM_CONFIG") {
+        if !config_env.is_empty() {
+            return Some(PathBuf::from(config_env));
+        }
+    }
     // XDG_CONFIG_HOME/voidm/config.toml
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         if !xdg.is_empty() {

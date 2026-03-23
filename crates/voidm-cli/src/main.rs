@@ -179,52 +179,98 @@ async fn run(cli: Cli) -> Result<()> {
         _ => {}
     }
 
-    // Load config + open DB
+    // Load config
     let config = Config::load();
-    let db_path = config.db_path(cli.db.as_deref());
-    let pool = open_pool(&db_path).await?;
-    let db = Arc::new(voidm_sqlite::SqliteDatabase::new(pool.clone())) as Arc<dyn voidm_db_trait::Database>;
+    
+    // Route to appropriate backend - independent paths, no pool mixing
+    match config.database.backend.as_str() {
+        "neo4j" => {
+            // Neo4j backend - no SQLite pool
+            let neo4j_config = config.database.neo4j.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Neo4j config missing in config.toml"))?;
+            
+            let db = Arc::new(voidm_neo4j::Neo4jDatabase::connect(
+                &neo4j_config.uri,
+                &neo4j_config.username,
+                &neo4j_config.password,
+                &neo4j_config.database,
+            ).await?) as Arc<dyn voidm_db_trait::Database>;
+            
+            db.ensure_schema().await?;
 
-    // Run migrations
-    voidm_core::migrate::run(&pool).await?;
+            // Dummy pool for command compatibility (Neo4j doesn't use it)
+            let dummy_pool = open_pool(std::path::Path::new(":memory:")).await?;
 
-    // Clean up stale reembed temp table
-    let _ = voidm_core::vector::cleanup_stale_temp_table(&pool).await;
-
-    // Check model mismatch
-    if config.embeddings.enabled {
-        if let Ok(Some((db_model, db_dim))) =
-            voidm_core::crud_trait::check_model_mismatch(&db, &config.embeddings.model).await
-        {
-            eprintln!(
-                "Warning: configured model '{}' differs from DB model '{}' (dim {}). \
-                 Vector search disabled. Run 'voidm models reembed' to re-embed all memories.",
-                config.embeddings.model, db_model, db_dim
-            );
+            match cli.command {
+                Commands::Add(args) => commands::add::run(args, &db, &dummy_pool, &config, cli.json).await,
+                Commands::Get(args) => commands::get::run(args, &db, &dummy_pool, cli.json).await,
+                Commands::Search(args) => commands::search::run(args, &db, &dummy_pool, &config, cli.json).await,
+                Commands::List(args) => commands::list::run(args, &db, &dummy_pool, &config, cli.json).await,
+                Commands::Delete(args) => commands::delete::run(args, &db, &dummy_pool, cli.json).await,
+                Commands::Link(args) => commands::link::run(args, &db, &dummy_pool, cli.json).await,
+                Commands::Unlink(args) => commands::unlink::run(args, &db, &dummy_pool, cli.json).await,
+                Commands::Graph(cmd) => commands::graph::run(cmd, &db, &dummy_pool, cli.json).await,
+                Commands::Ontology(cmd) => commands::ontology::run(cmd, &db, &dummy_pool, &config, cli.json).await,
+                Commands::Conflicts(cmd) => commands::conflicts::run(cmd, &db, &dummy_pool, cli.json).await,
+                Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, &dummy_pool, cli.json).await,
+                Commands::Export(args) => commands::export::run(args, &db, &dummy_pool, &config, cli.json).await,
+                Commands::Config(_) => unreachable!(),
+                Commands::Models(cmd) => commands::models::run(cmd, &db, &dummy_pool, &config, cli.json).await,
+                Commands::Instructions(_) => unreachable!(),
+                Commands::Info(_) => unreachable!(),
+                Commands::Init(_) => unreachable!(),
+                Commands::Migrate(_) => unreachable!(),
+                Commands::CheckUpdate(_) => unreachable!(),
+                Commands::Stats(args) => commands::stats::run(args, &db, &dummy_pool, &config, cli.json).await,
+                Commands::Mcp(_) => anyhow::bail!("MCP server is only available with SQLite backend"),
+            }
         }
-    }
+        "sqlite" | _ => {
+            // SQLite backend - with pool
+            let db_path = config.db_path(cli.db.as_deref());
+            let pool = open_pool(&db_path).await?;
+            let db = Arc::new(voidm_sqlite::SqliteDatabase::new(pool.clone())) as Arc<dyn voidm_db_trait::Database>;
 
-    match cli.command {
-        Commands::Add(args) => commands::add::run(args, &db, &pool, &config, cli.json).await,
-        Commands::Get(args) => commands::get::run(args, &db, &pool, cli.json).await,
-        Commands::Search(args) => commands::search::run(args, &db, &pool, &config, cli.json).await,
-        Commands::List(args) => commands::list::run(args, &db, &pool, &config, cli.json).await,
-        Commands::Delete(args) => commands::delete::run(args, &db, &pool, cli.json).await,
-        Commands::Link(args) => commands::link::run(args, &db, &pool, cli.json).await,
-        Commands::Unlink(args) => commands::unlink::run(args, &db, &pool, cli.json).await,
-        Commands::Graph(cmd) => commands::graph::run(cmd, &db, &pool, cli.json).await,
-        Commands::Ontology(cmd) => commands::ontology::run(cmd, &db, &pool, &config, cli.json).await,
-        Commands::Conflicts(cmd) => commands::conflicts::run(cmd, &db, &pool, cli.json).await,
-        Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, &pool, cli.json).await,
-        Commands::Export(args) => commands::export::run(args, &db, &pool, &config, cli.json).await,
-        Commands::Config(_) => unreachable!(),
-        Commands::Models(cmd) => commands::models::run(cmd, &db, &pool, &config, cli.json).await,
-        Commands::Instructions(_) => unreachable!(),
-        Commands::Info(_) => unreachable!(),
-        Commands::Init(_) => unreachable!(),
-        Commands::Migrate(_) => unreachable!(),
-        Commands::CheckUpdate(_) => unreachable!(),
-        Commands::Stats(args) => commands::stats::run(args, &db, &pool, &config, cli.json).await,
-        Commands::Mcp(args) => commands::mcp::run(args, pool, config).await,
+            // Run migrations
+            voidm_core::migrate::run(&pool).await?;
+            let _ = voidm_core::vector::cleanup_stale_temp_table(&pool).await;
+
+            // Check model mismatch
+            if config.embeddings.enabled {
+                if let Ok(Some((db_model, db_dim))) =
+                    voidm_core::crud_trait::check_model_mismatch(&db, &config.embeddings.model).await
+                {
+                    eprintln!(
+                        "Warning: configured model '{}' differs from DB model '{}' (dim {}). \
+                         Vector search disabled. Run 'voidm models reembed' to re-embed all memories.",
+                        config.embeddings.model, db_model, db_dim
+                    );
+                }
+            }
+
+            match cli.command {
+                Commands::Add(args) => commands::add::run(args, &db, &pool, &config, cli.json).await,
+                Commands::Get(args) => commands::get::run(args, &db, &pool, cli.json).await,
+                Commands::Search(args) => commands::search::run(args, &db, &pool, &config, cli.json).await,
+                Commands::List(args) => commands::list::run(args, &db, &pool, &config, cli.json).await,
+                Commands::Delete(args) => commands::delete::run(args, &db, &pool, cli.json).await,
+                Commands::Link(args) => commands::link::run(args, &db, &pool, cli.json).await,
+                Commands::Unlink(args) => commands::unlink::run(args, &db, &pool, cli.json).await,
+                Commands::Graph(cmd) => commands::graph::run(cmd, &db, &pool, cli.json).await,
+                Commands::Ontology(cmd) => commands::ontology::run(cmd, &db, &pool, &config, cli.json).await,
+                Commands::Conflicts(cmd) => commands::conflicts::run(cmd, &db, &pool, cli.json).await,
+                Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, &pool, cli.json).await,
+                Commands::Export(args) => commands::export::run(args, &db, &pool, &config, cli.json).await,
+                Commands::Config(_) => unreachable!(),
+                Commands::Models(cmd) => commands::models::run(cmd, &db, &pool, &config, cli.json).await,
+                Commands::Instructions(_) => unreachable!(),
+                Commands::Info(_) => unreachable!(),
+                Commands::Init(_) => unreachable!(),
+                Commands::Migrate(_) => unreachable!(),
+                Commands::CheckUpdate(_) => unreachable!(),
+                Commands::Stats(args) => commands::stats::run(args, &db, &pool, &config, cli.json).await,
+                Commands::Mcp(args) => commands::mcp::run(args, pool, config).await,
+            }
+        }
     }
 }

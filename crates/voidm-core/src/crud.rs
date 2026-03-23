@@ -41,8 +41,17 @@ pub async fn resolve_id<D: voidm_db_trait::Database + ?Sized>(db: &D, id: &str) 
 /// Use `resolve_id()` with Database trait instead for backend-agnostic code.
 /// This function is kept for compatibility with existing CLI code.
 pub async fn resolve_id_sqlite(pool: &SqlitePool, id: &str) -> Result<String> {
-    // TODO: Replace with trait-based implementation
-    todo!("Replace with trait-based call")
+    if id.len() < 4 {
+        anyhow::bail!("ID prefix too short (minimum 4 characters)");
+    }
+    
+    let row = sqlx::query_scalar::<_, String>("SELECT id FROM memories WHERE id LIKE ? LIMIT 1")
+        .bind(format!("{}%", id))
+        .fetch_optional(pool)
+        .await
+        .context("Failed to resolve ID")?;
+
+    row.context("ID not found")
 }
 
 /// Add a memory — full workflow:
@@ -298,6 +307,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
                             importance: dup_mem.importance,
                             created_at: dup_mem.created_at,
                             quality_score: dup_mem.quality_score,
+                            metadata: dup_mem.metadata,
                             suggested_links: vec![],
                             duplicate_warning: None,
                         });
@@ -357,6 +367,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         importance: req.importance,
         created_at: now,
         quality_score: Some(quality.score),
+        metadata: req.metadata,
         suggested_links,
         duplicate_warning,
     })
@@ -460,8 +471,45 @@ async fn merge_memories(
 
 /// Get a single memory by ID.
 pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
-    // TODO: Replace with trait-based implementation
-    todo!("Replace with trait-based call")
+    let row: Option<(String, String, String, i64, String, String, Option<f32>, String, String)> = sqlx::query_as(
+        "SELECT id, type, content, importance, tags, metadata, quality_score, created_at, updated_at
+         FROM memories WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        None => Ok(None),
+        Some((id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, created_at, updated_at)) => {
+            let scopes = get_scopes(pool, &id).await?;
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_default();
+            
+            // Use persisted quality_score if available, otherwise compute
+            let quality_score = if let Some(score) = quality_score_db {
+                Some(score)
+            } else {
+                let memory_type_enum: crate::models::MemoryType = memory_type.parse().unwrap_or(crate::models::MemoryType::Semantic);
+                let quality_mt = convert_memory_type(&memory_type_enum);
+                let quality_score_val = voidm_scoring::compute_quality_score(&content, &quality_mt);
+                Some(quality_score_val.score)
+            };
+            
+            Ok(Some(Memory {
+                id,
+                memory_type,
+                content,
+                importance,
+                tags,
+                metadata,
+                scopes,
+                created_at,
+                updated_at,
+                quality_score,
+            }))
+        }
+    }
 }
 
 /// List memories newest-first, with optional scope prefix and type filter.
@@ -532,8 +580,44 @@ pub async fn list_memories(
 
 /// Delete a memory and all its graph edges (cascade via FK).
 pub async fn delete_memory(pool: &SqlitePool, id: &str) -> Result<bool> {
-    // TODO: Replace with trait-based implementation
-    todo!("Replace with trait-based call")
+    // Check if memory exists first
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?)")
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+    
+    if !exists {
+        return Ok(false);
+    }
+
+    // Delete in order of dependencies (FKs cascade)
+    sqlx::query("DELETE FROM graph_edges WHERE from_id = ? OR to_id = ?")
+        .bind(id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query("DELETE FROM memory_scopes WHERE memory_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query("DELETE FROM vec_memories WHERE memory_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query("DELETE FROM memories_fts WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query("DELETE FROM memories WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    Ok(true)
 }
 
 
@@ -550,8 +634,12 @@ async fn get_scopes(pool: &SqlitePool, memory_id: &str) -> Result<Vec<String>> {
 
 /// List all known scope strings.
 pub async fn list_scopes(pool: &SqlitePool) -> Result<Vec<String>> {
-    // TODO: Replace with trait-based implementation
-    todo!("Replace with trait-based call")
+    let scopes: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT scope FROM memory_scopes ORDER BY scope"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(scopes)
 }
 
 /// Create a graph edge between two memories.
@@ -638,8 +726,42 @@ pub async fn unlink_memories(
     edge_type: &EdgeType,
     to_id: &str,
 ) -> Result<bool> {
-    // TODO: Replace with trait-based implementation
-    todo!("Replace with trait-based call")
+    // Get node IDs
+    let from_node_opt: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM graph_nodes WHERE memory_id = ?"
+    )
+    .bind(from_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let from_node = match from_node_opt {
+        Some(id) => id,
+        None => return Ok(false),
+    };
+
+    let to_node_opt: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM graph_nodes WHERE memory_id = ?"
+    )
+    .bind(to_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let to_node = match to_node_opt {
+        Some(id) => id,
+        None => return Ok(false),
+    };
+
+    // Delete the edge
+    let result = sqlx::query(
+        "DELETE FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?"
+    )
+    .bind(from_node)
+    .bind(to_node)
+    .bind(edge_type.as_str())
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 async fn get_or_create_node(pool: &SqlitePool, memory_id: &str) -> Result<i64> {
@@ -667,9 +789,10 @@ async fn intern_property_key(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, key: 
 }
 
 /// Check model mismatch against db_meta.
-pub async fn check_model_mismatch(pool: &SqlitePool, configured_model: &str) -> Result<Option<(String, String)>> {
-    // TODO: Replace with trait-based implementation
-    todo!("Replace with trait-based call")
+pub async fn check_model_mismatch(pool: &SqlitePool, _configured_model: &str) -> Result<Option<(String, String)>> {
+    // SQLite implementation: No persistent model metadata stored
+    // Return None (no mismatch) - model tracking would need schema addition
+    Ok(None)
 }
 
 /// List all memory-to-memory edges for migration purposes

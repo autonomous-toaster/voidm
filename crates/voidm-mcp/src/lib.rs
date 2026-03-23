@@ -262,6 +262,15 @@ impl VoidmMcpServer {
             })
             .collect::<std::result::Result<Vec<_>, String>>()?;
 
+        // Build metadata with author and source
+        let mut metadata = serde_json::Map::new();
+        if let Some(author) = params.author {
+            metadata.insert("author".to_string(), serde_json::Value::String(author));
+        }
+        if let Some(source) = params.source {
+            metadata.insert("source".to_string(), serde_json::Value::String(source));
+        }
+
         let req = AddMemoryRequest {
             id: None,
             content: params.content,
@@ -269,7 +278,7 @@ impl VoidmMcpServer {
             scopes: params.scope,
             tags: params.tags.unwrap_or_default(),
             importance,
-            metadata: serde_json::Value::Object(Default::default()),
+            metadata: serde_json::Value::Object(metadata),
             links,
         };
 
@@ -475,6 +484,10 @@ struct RememberParams {
     scope: Vec<String>,
     #[serde(default)]
     tags: Option<Vec<String>>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
     #[serde(default)]
     links: Option<Vec<LinkSpecInput>>,
 }

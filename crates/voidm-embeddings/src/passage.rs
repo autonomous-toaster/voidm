@@ -194,8 +194,16 @@ fn truncate_content(content: &str, max_length: usize) -> String {
         return content.to_string();
     }
 
-    // Find word boundary before max_length
-    let truncated = &content[..max_length];
+    // Collect chars and truncate at character boundary, not byte boundary
+    let chars: Vec<char> = content.chars().collect();
+    if chars.len() <= max_length {
+        return content.to_string();
+    }
+
+    // Take first max_length chars and convert back to string
+    let truncated: String = chars[..max_length].iter().collect();
+    
+    // Find last whitespace to break at word boundary
     match truncated.rfind(|c: char| c.is_whitespace()) {
         Some(idx) => truncated[..idx].to_string(),
         None => truncated.to_string(),

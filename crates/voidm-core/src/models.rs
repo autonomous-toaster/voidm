@@ -173,6 +173,8 @@ pub struct AddMemoryResponse {
     pub importance: i64,
     pub created_at: String,
     pub quality_score: Option<f32>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
     pub suggested_links: Vec<SuggestedLink>,
     pub duplicate_warning: Option<DuplicateWarning>,
 }

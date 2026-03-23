@@ -15,36 +15,53 @@ use voidm_core::search::{SearchOptions, SearchResponse};
 #[derive(Clone)]
 pub struct Neo4jDatabase {
     pub graph: Graph,
+    pub database: String,
 }
 
 impl Neo4jDatabase {
     /// Connect to a Neo4j instance
-    pub async fn connect(uri: &str, username: &str, password: &str) -> Result<Self> {
+    pub async fn connect(uri: &str, username: &str, password: &str, database: &str) -> Result<Self> {
+        tracing::info!("Neo4j: Connecting to {} with database '{}'", uri, database);
         let graph = Graph::new(uri, username, password)
             .await
             .with_context(|| format!("Failed to connect to Neo4j at {}", uri))?;
 
         // Initialize schema
-        let db = Self { graph };
+        let db = Self { 
+            graph,
+            database: database.to_string(),
+        };
+        tracing::info!("Neo4j: Connected with database '{}'", db.database);
         db.init_schema().await?;
 
         Ok(db)
     }
 
-    /// Initialize Neo4j schema with constraints and indices
+    /// Prepend USE database statement to Cypher query
+    fn use_database(&self, cypher: &str) -> String {
+        format!("USE `{}`; {}", self.database, cypher)
+    }
     async fn init_schema(&self) -> Result<()> {
         // Create constraints for Memory nodes
         self.graph
-            .run(
+            .run_on(&self.database, 
                 neo4rs::query("CREATE CONSTRAINT memory_id IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE")
             )
             .await
             .ok();  // Ignore errors if constraint already exists
 
-        // Create constraint for Concept nodes
+        // Create constraint for Concept nodes (by ID)
         self.graph
-            .run(
+            .run_on(&self.database, 
                 neo4rs::query("CREATE CONSTRAINT concept_id IF NOT EXISTS FOR (c:Concept) REQUIRE c.id IS UNIQUE")
+            )
+            .await
+            .ok();
+
+        // Create constraint for Concept nodes (by name - concept names are globally unique)
+        self.graph
+            .run_on(&self.database, 
+                neo4rs::query("CREATE CONSTRAINT concept_name IF NOT EXISTS FOR (c:Concept) REQUIRE c.name IS UNIQUE")
             )
             .await
             .ok();
@@ -59,7 +76,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
         let graph = self.graph.clone();
         Box::pin(async move {
             graph
-                .run(neo4rs::query("RETURN 1 as ping"))
+                .run_on(&self.database, neo4rs::query("RETURN 1 as ping"))
                 .await
                 .map(|_| ())
                 .context("Neo4j health check failed")
@@ -86,6 +103,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
         let graph = self.graph.clone();
         let config = config.clone();
+        let database = self.database.clone();
 
         Box::pin(async move {
             // Deserialize the request
@@ -98,35 +116,86 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             let id = req.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let created_at = chrono::Utc::now().to_rfc3339();
             let memory_type = req.memory_type.to_string();
+            
+            // Compute quality score (same as SQLite path)
+            let quality_mt = match req.memory_type {
+                voidm_core::models::MemoryType::Episodic => voidm_scoring::MemoryType::Episodic,
+                voidm_core::models::MemoryType::Semantic => voidm_scoring::MemoryType::Semantic,
+                voidm_core::models::MemoryType::Procedural => voidm_scoring::MemoryType::Procedural,
+                voidm_core::models::MemoryType::Conceptual => voidm_scoring::MemoryType::Conceptual,
+                voidm_core::models::MemoryType::Contextual => voidm_scoring::MemoryType::Contextual,
+            };
+            let quality = voidm_scoring::compute_quality_score(&req.content, &quality_mt);
+            
+            // Extract author and source from metadata (set by MCP layer)
+            let author = req.metadata.get("author")
+                .and_then(|v| v.as_str())
+                .unwrap_or("user")
+                .to_string();
+            let source = req.metadata.get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            
+            // Convert metadata and tags to JSON strings for Neo4j storage
+            let metadata_str = serde_json::to_string(&req.metadata)
+                .context("Failed to serialize metadata")?;
+            let tags_str = serde_json::to_string(&req.tags)
+                .context("Failed to serialize tags")?;
+            let scopes_str = serde_json::to_string(&req.scopes)
+                .context("Failed to serialize scopes")?;
 
-            let query = neo4rs::query(
-                "CREATE (m:Memory {
-                    id: $id,
-                    type: $type,
-                    content: $content,
-                    importance: $importance,
-                    tags: $tags,
-                    metadata: $metadata,
-                    scopes: $scopes,
-                    created_at: $created_at,
-                    updated_at: $created_at,
-                    embedding_model: $model
-                }) RETURN m"
-            )
-            .param("id", id.clone())
-            .param("type", memory_type.clone())
-            .param("content", req.content.clone())
-            .param("importance", req.importance)
-            .param("tags", req.tags.clone())
-            .param("metadata", req.metadata.to_string())
-            .param("scopes", req.scopes.clone())
-            .param("created_at", created_at.clone())
-            .param("model", config_model);
+            // Use MERGE to handle duplicates gracefully (upsert pattern)
+            let cypher = r#"MERGE (m:Memory { id: $id }) 
+            SET m += { 
+                type: $type, 
+                content: $content, 
+                importance: $importance, 
+                tags: $tags, 
+                metadata: $metadata, 
+                scopes: $scopes, 
+                quality_score: $quality_score,
+                author: $author,
+                source: $source,
+                created_at: $created_at, 
+                updated_at: $updated_at, 
+                embedding_model: $embedding_model 
+            } 
+            RETURN m"#;
+            
+            let query_obj = neo4rs::query(cypher)
+                .param("id", id.clone())
+                .param("type", memory_type.clone())
+                .param("content", req.content.clone())
+                .param("importance", req.importance)
+                .param("tags", tags_str)
+                .param("metadata", metadata_str)
+                .param("scopes", scopes_str)
+                .param("quality_score", quality.score)
+                .param("author", author.clone())
+                .param("source", source.clone())
+                .param("created_at", created_at.clone())
+                .param("updated_at", created_at.clone())
+                .param("embedding_model", config_model.clone());
 
-            graph
-                .run(query)
+            tracing::debug!("Neo4j: Creating/updating memory in database '{}' with id: {}", 
+                database, id);
+
+            let mut result = graph
+                .execute_on(&database, query_obj)
                 .await
-                .context("Failed to create memory in Neo4j")?;
+                .map_err(|e| {
+                    tracing::error!("Neo4j create_memory error: {}", e);
+                    anyhow::anyhow!("Failed to create memory in Neo4j: {}", e)
+                })?;
+
+            // Check if this was a new create or an update
+            let _is_duplicate = if let Ok(Some(_row)) = result.next().await {
+                // MERGE doesn't tell us if it was created or matched
+                false
+            } else {
+                false
+            };
 
             let response = AddMemoryResponse {
                 id,
@@ -137,6 +206,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                 importance: req.importance,
                 created_at,
                 quality_score: None,
+                metadata: req.metadata,
                 suggested_links: vec![],
                 duplicate_warning: None,
             };
@@ -151,7 +221,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query("MATCH (m:Memory {id: $id}) RETURN m")
                         .param("id", id),
                 )
@@ -187,7 +257,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query("MATCH (m:Memory) RETURN m ORDER BY m.created_at DESC LIMIT $limit")
                         .param("limit", limit as i64),
                 )
@@ -225,7 +295,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query("MATCH (m:Memory {id: $id}) DELETE m RETURN count(m) as deleted")
                         .param("id", id),
                 )
@@ -253,7 +323,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
         Box::pin(async move {
             let updated_at = chrono::Utc::now().to_rfc3339();
             graph
-                .run(
+                .run_on(&self.database, 
                     neo4rs::query("MATCH (m:Memory {id: $id}) SET m.content = $content, m.updated_at = $updated_at")
                         .param("id", id)
                         .param("content", content)
@@ -273,7 +343,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
         Box::pin(async move {
             // Try exact match first
             let mut result = graph
-                .execute(neo4rs::query("MATCH (m:Memory {id: $id}) RETURN m.id LIMIT 1")
+                .execute_on(&self.database, neo4rs::query("MATCH (m:Memory {id: $id}) RETURN m.id LIMIT 1")
                     .param("id", id.clone()))
                 .await
                 .context("Failed to query Neo4j")?;
@@ -291,7 +361,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
             let pattern = format!("{}.*", id);
             let mut result = graph
-                .execute(neo4rs::query("MATCH (m:Memory) WHERE m.id STARTS WITH $prefix RETURN m.id")
+                .execute_on(&self.database, neo4rs::query("MATCH (m:Memory) WHERE m.id STARTS WITH $prefix RETURN m.id")
                     .param("prefix", id.clone()))
                 .await
                 .context("Failed to query Neo4j")?;
@@ -320,7 +390,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut result = graph
-                .execute(neo4rs::query("MATCH (m:Memory) WHERE m.scopes IS NOT NULL UNWIND m.scopes as scope RETURN DISTINCT scope"))
+                .execute_on(&self.database, neo4rs::query("MATCH (m:Memory) WHERE m.scopes IS NOT NULL UNWIND m.scopes as scope RETURN DISTINCT scope"))
                 .await
                 .context("Failed to list scopes from Neo4j")?;
 
@@ -371,7 +441,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             };
 
             let mut result = graph
-                .execute(query)
+                .execute_on(&self.database, query)
                 .await
                 .context("Failed to link memories in Neo4j")?;
 
@@ -406,7 +476,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query(
                         "MATCH (from:Memory {id: $from_id})-[r:RELATES {type: $rel_type}]->(to:Memory {id: $to_id})
                          DELETE r RETURN count(r) as deleted"
@@ -432,7 +502,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query("MATCH (from:Memory)-[r:RELATES]->(to:Memory) RETURN from.id as from_id, to.id as to_id, r.type as rel_type, r.note as note")
                 )
                 .await
@@ -468,7 +538,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             "#;
             
             let mut result = graph
-                .execute(neo4rs::query(cypher))
+                .execute_on(&self.database, neo4rs::query(cypher))
                 .await
                 .context("Failed to list ontology edges from Neo4j")?;
             
@@ -527,7 +597,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             );
 
             let mut result = graph
-                .execute(neo4rs::query(&query_str)
+                .execute_on(&self.database, neo4rs::query(&query_str)
                     .param("from_id", from_id.clone())
                     .param("from_type", from_type_str)
                     .param("to_id", to_id.clone())
@@ -571,6 +641,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
         id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
         let graph = self.graph.clone();
+        let database = self.database.clone();
         let name = name.to_string();
         let description = description.map(|s| s.to_string());
         let scope = scope.map(|s| s.to_string());
@@ -581,13 +652,10 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             let created_at = chrono::Utc::now().to_rfc3339();
 
             let query = neo4rs::query(
-                "CREATE (c:Concept {
-                    id: $id,
-                    name: $name,
-                    description: $description,
-                    scope: $scope,
-                    created_at: $created_at
-                }) RETURN c"
+                "MERGE (c:Concept {id: $id})
+                 ON CREATE SET c.name = $name, c.description = $description, c.scope = $scope, c.created_at = $created_at
+                 ON MATCH SET c.name = $name, c.description = $description, c.scope = $scope
+                 RETURN c"
             )
             .param("id", id.clone())
             .param("name", name.clone())
@@ -596,7 +664,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             .param("created_at", created_at.clone());
 
             graph
-                .run(query)
+                .run_on(&database, query)
                 .await
                 .context("Failed to create concept in Neo4j")?;
 
@@ -619,7 +687,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c")
                         .param("id", id.clone()),
                 )
@@ -653,7 +721,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c")
                         .param("id", id.clone()),
                 )
@@ -704,7 +772,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             };
 
             let mut result = graph
-                .execute(query)
+                .execute_on(&self.database, query)
                 .await
                 .context("Failed to list concepts from Neo4j")?;
 
@@ -734,7 +802,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query("MATCH (c:Concept {id: $id}) DELETE c RETURN count(c) as deleted")
                         .param("id", id),
                 )
@@ -757,7 +825,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
         Box::pin(async move {
             // Try exact match first
             let mut result = graph
-                .execute(neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c.id LIMIT 1")
+                .execute_on(&self.database, neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c.id LIMIT 1")
                     .param("id", id.clone()))
                 .await
                 .context("Failed to query Neo4j")?;
@@ -774,7 +842,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             }
 
             let mut result = graph
-                .execute(neo4rs::query("MATCH (c:Concept) WHERE c.id STARTS WITH $prefix RETURN c.id")
+                .execute_on(&self.database, neo4rs::query("MATCH (c:Concept) WHERE c.id STARTS WITH $prefix RETURN c.id")
                     .param("prefix", id.clone()))
                 .await
                 .context("Failed to query Neo4j")?;
@@ -825,7 +893,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             };
 
             let mut result = graph
-                .execute(cypher_query)
+                .execute_on(&self.database, cypher_query)
                 .await
                 .context("Failed to search concepts in Neo4j")?;
 
@@ -859,6 +927,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
         note: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
         let graph = self.graph.clone();
+        let database = self.database.clone();
         let from_id = from_id.to_string();
         let from_kind = from_kind.to_string();
         let rel = rel.to_string();
@@ -878,21 +947,22 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                 _ => "Concept", // default
             };
 
-            let query = format!(
+            // Use the actual relationship type (INSTANCE_OF, SUPPORTS, etc.)
+            let query_str = format!(
                 "MATCH (from:{} {{id: $from_id}}), (to:{} {{id: $to_id}})
-                 CREATE (from)-[r:ONTOLOGY {{type: $rel, note: $note}}]->(to)
+                 CREATE (from)-[r:{}]->(to)
+                 SET r.note = $note
                  RETURN id(r) as edge_id",
-                from_label, to_label
+                from_label, to_label, rel
             );
 
-            let q = neo4rs::query(&query)
+            let q = neo4rs::query(&query_str)
                 .param("from_id", from_id.clone())
-                .param("rel", rel.clone())
                 .param("to_id", to_id.clone())
                 .param("note", note.clone() as Option<String>);
 
             let mut result = graph
-                .execute(q)
+                .execute_on(&database, q)
                 .await
                 .context("Failed to create ontology edge in Neo4j")?;
 
@@ -945,7 +1015,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             "#;
             
             let mut result = graph
-                .execute(neo4rs::query(cypher).param("edge_id", edge_id))
+                .execute_on(&self.database, neo4rs::query(cypher).param("edge_id", edge_id))
                 .await
                 .context("Failed to delete ontology edge from Neo4j")?;
             
@@ -985,14 +1055,16 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             }
 
             let mut result = graph
-                .execute(q)
+                .execute_on(&self.database, q)
                 .await
                 .context("Failed to execute Cypher query")?;
 
-            let mut rows = Vec::new();
+            let mut rows: Vec<serde_json::Value> = Vec::new();
             while let Ok(Some(_row)) = result.next().await {
-                // TODO: Convert row to JSON
-                rows.push(serde_json::json!({}));
+                // TODO: Convert neo4rs Row to JSON properly
+                // neo4rs::Row doesn't expose column names directly
+                // For now, return empty result
+                // Workaround: use raw Cypher with explicit RETURN fields in the query
             }
 
             Ok(serde_json::json!(rows))
@@ -1011,7 +1083,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             let depth = std::cmp::min(depth, 3);
 
             let mut result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query(
                         &format!("MATCH (m:Memory {{id: $id}})-[*1..{}]-(neighbor) RETURN DISTINCT neighbor.id as neighbor_id", depth)
                     )
@@ -1051,7 +1123,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                          LIMIT $limit".to_string();
             
             let result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query(&cypher)
                         .param("query", query)
                         .param("limit", limit as i64)
@@ -1087,7 +1159,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             let cypher = "MATCH (m:Memory) RETURN m.id as id, m.content as content ORDER BY m.created_at DESC LIMIT $limit";
             
             let result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query(cypher)
                         .param("limit", limit as i64)
                 )
@@ -1103,21 +1175,72 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                 }
             }
             
-            // Apply Jaro-Winkler locally
-            let query_lower = query.to_lowercase();
+            // Apply fuzzy matching locally (placeholder - returns empty for now)
+            // TODO: Add strsim dependency and implement proper Jaro-Winkler matching
             let mut results: Vec<(String, f32)> = Vec::new();
             
-            for (id, content) in memories {
-                let sim = 0.0; // TODO: Implement fuzzy matching with strsim
-                if sim >= threshold {
-                    results.push((id, sim));
-                }
+            // For now, fuzzy search returns empty (not yet implemented)
+            // Can be enabled when strsim is added to dependencies
+            
+            Ok(results)
+        })
+    }
+
+    fn search_ann(
+        &self,
+        embedding: Vec<f32>,
+        limit: usize,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let scope_filter = scope_filter.map(|s| s.to_string());
+        let type_filter = type_filter.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // Neo4j vector search
+            // Fetch memories matching filters; vector similarity would be computed client-side
+            // or via stored embeddings if available
+            
+            let mut cypher = String::from("MATCH (m:Memory)");
+            let mut where_clause = Vec::new();
+            
+            if let Some(scope) = &scope_filter {
+                where_clause.push(format!("ANY(s IN m.scopes WHERE s STARTS WITH '{}')", scope));
+            }
+            if let Some(mtype) = &type_filter {
+                where_clause.push(format!("m.type = '{}'", mtype));
             }
             
-            // Sort by score descending
-            results.sort_by(|a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            if !where_clause.is_empty() {
+                cypher.push_str(" WHERE ");
+                cypher.push_str(&where_clause.join(" AND "));
+            }
+            
+            cypher.push_str(" RETURN m.id as id LIMIT $limit");
+
+            let result = graph
+                .execute_on(&self.database, 
+                    neo4rs::query(&cypher)
+                        .param("limit", (limit * 3) as i64)
+                )
+                .await
+                .context("Failed to execute vector search on Neo4j")?;
+
+            let mut result_handle = result;
+            let mut results: Vec<(String, f32)> = Vec::new();
+            
+            while let Ok(Some(row)) = result_handle.next().await {
+                if let Ok(id) = row.get::<String>("id") {
+                    // Return 0.5 as placeholder score for all results
+                    // In production, would compute cosine similarity with stored embeddings
+                    results.push((id, 0.5));
+                }
+            }
+
+            // Sort by score descending and truncate to limit
+            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            results.truncate(limit);
             
             Ok(results)
         })
@@ -1137,7 +1260,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             let cypher = "MATCH (m:Memory) RETURN m.id as id, m.content as content ORDER BY m.created_at DESC LIMIT $limit";
             
             let result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query(cypher)
                         .param("limit", limit as i64)
                 )
@@ -1166,7 +1289,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
         Box::pin(async move {
             let mut result = graph
-                .execute(
+                .execute_on(&self.database, 
                     neo4rs::query("MATCH (m:Memory) WHERE m.embedding_model IS NOT NULL RETURN DISTINCT m.embedding_model LIMIT 1")
                 )
                 .await
@@ -1197,7 +1320,7 @@ mod neo4j_integration_tests {
     #[tokio::test]
     #[ignore]  // Run manually with local Neo4j instance
     async fn test_neo4j_health_check() {
-        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j")
+        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j", "neo4j")
             .await
             .expect("Failed to connect to Neo4j - is it running?");
 
@@ -1208,7 +1331,7 @@ mod neo4j_integration_tests {
     #[tokio::test]
     #[ignore]
     async fn test_neo4j_memory_crud() {
-        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j")
+        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j", "neo4j")
             .await
             .expect("Failed to connect to Neo4j");
 
@@ -1258,7 +1381,7 @@ mod neo4j_integration_tests {
     #[tokio::test]
     #[ignore]
     async fn test_neo4j_relationships() {
-        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j")
+        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j", "neo4j")
             .await
             .expect("Failed to connect to Neo4j");
 
@@ -1319,7 +1442,7 @@ mod neo4j_integration_tests {
     #[tokio::test]
     #[ignore]
     async fn test_neo4j_concepts() {
-        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j")
+        let db = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j", "neo4j")
             .await
             .expect("Failed to connect to Neo4j");
 
@@ -1361,7 +1484,7 @@ mod neo4j_integration_tests {
     #[tokio::test]
     async fn test_neo4j_basic_operations() {
         // Connect to local Neo4j instance (assumes it's running)
-        let db_result = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j").await;
+        let db_result = Neo4jDatabase::connect("bolt://localhost:7687", "neo4j", "neo4jneo4j", "neo4j").await;
         if db_result.is_err() {
             println!("Skipping Neo4j test - local instance not available: {:?}", db_result.err());
             return;

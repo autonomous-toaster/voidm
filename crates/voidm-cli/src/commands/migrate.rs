@@ -24,6 +24,11 @@ pub struct MigrateArgs {
     /// Skip memories with these IDs (comma-separated)
     #[arg(long)]
     pub skip_ids: Option<String>,
+
+    /// Force update ALL existing records (including already-migrated ones)
+    /// Useful when schema changes and you need to backfill new fields
+    #[arg(long)]
+    pub update_all: bool,
 }
 
 pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<&str>, json: bool) -> Result<()> {
@@ -31,8 +36,8 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
     let from_backend = args.from.to_lowercase();
     let to_backend = args.to.to_lowercase();
 
-    if from_backend == to_backend {
-        anyhow::bail!("Source and destination backends cannot be the same");
+    if from_backend == to_backend && !args.update_all {
+        anyhow::bail!("Source and destination backends cannot be the same (use --update-all to refresh schema on same backend)");
     }
 
     if ![from_backend.as_str(), to_backend.as_str()].iter().all(|b| matches!(*b, "sqlite" | "neo4j")) {
@@ -61,6 +66,7 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
             &neo4j_config.uri,
             &neo4j_config.username,
             &neo4j_config.password,
+            &neo4j_config.database,
         ).await?)
     };
 
@@ -75,6 +81,7 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
             &neo4j_config.uri,
             &neo4j_config.username,
             &neo4j_config.password,
+            &neo4j_config.database,
         ).await?)
     };
 
@@ -85,7 +92,7 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
     }
 
     // Migrate memories
-    migrate_memories(source_db.as_ref(), dest_db.as_ref(), config, &args.scope_filter, &skip_ids, args.dry_run, json).await?;
+    migrate_memories(source_db.as_ref(), dest_db.as_ref(), config, &args.scope_filter, &skip_ids, args.dry_run, args.update_all, json).await?;
 
     // Migrate concepts
     migrate_concepts(source_db.as_ref(), dest_db.as_ref(), &args.scope_filter, args.dry_run, json).await?;
@@ -115,6 +122,7 @@ async fn migrate_memories(
     scope_filter: &Option<String>,
     skip_ids: &std::collections::HashSet<String>,
     dry_run: bool,
+    update_all: bool,
     json: bool,
 ) -> Result<()> {
     let memories_json = source.list_memories(Some(10000)).await?;

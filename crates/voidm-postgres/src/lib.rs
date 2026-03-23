@@ -550,6 +550,20 @@ impl Database for PostgresDatabase {
         })
     }
 
+    fn search_ann(
+        &self,
+        _embedding: Vec<f32>,
+        _limit: usize,
+        _scope_filter: Option<&str>,
+        _type_filter: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+        // PostgreSQL pgvector support - placeholder for future implementation
+        // Would use: SELECT id, 1 - (embedding <=> $1) as similarity FROM vec_memories ...
+        Box::pin(async move {
+            Ok(vec![])
+        })
+    }
+
     fn fetch_memories_raw(
         &self,
         scope_filter: Option<&str>,

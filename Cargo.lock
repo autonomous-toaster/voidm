@@ -4878,6 +4878,7 @@ dependencies = [
  "uuid",
  "voidm-core",
  "voidm-db-trait",
+ "voidm-scoring",
 ]
 
 [[package]]

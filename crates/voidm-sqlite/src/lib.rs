@@ -466,13 +466,53 @@ impl Database for SqliteDatabase {
 
     fn search_bm25(
         &self,
-        _query: &str,
-        _scope_filter: Option<&str>,
-        _type_filter: Option<&str>,
-        _limit: usize,
+        query: &str,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+        limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let query_str = query.to_string();
+        let scope_filter = scope_filter.map(|s| s.to_string());
+        let type_filter = type_filter.map(|s| s.to_string());
+
         Box::pin(async move {
-            Ok(vec![])
+            // Query FTS5 using raw query to avoid type serialization issues
+            let fts_sql = "
+                SELECT id, bm25(memories_fts) as bm25_score
+                FROM memories_fts
+                WHERE memories_fts MATCH ?
+                ORDER BY bm25_score DESC
+                LIMIT ?
+            ";
+
+            // Use raw query to manually deserialize
+            let rows = sqlx::query(fts_sql)
+                .bind(&query_str)
+                .bind((limit * 2) as i64)
+                .fetch_all(&pool)
+                .await?;
+
+            let mut results: Vec<(String, f32)> = Vec::new();
+            
+            for row in rows {
+                let id: String = row.try_get("id")?;
+                let score: f64 = row.try_get::<f64, _>("bm25_score")?;
+                
+                // Normalize BM25 score: negative → [0, 1]
+                // BM25 returns scores in range roughly [-10, 0]
+                // Use exp(score) to convert to [0, 1]
+                let normalized = (score as f32).exp();
+                let clamped = normalized.clamp(0.0, 1.0);
+                
+                results.push((id, clamped));
+                
+                if results.len() >= limit {
+                    break;
+                }
+            }
+
+            Ok(results)
         })
     }
 
@@ -485,6 +525,94 @@ impl Database for SqliteDatabase {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
         Box::pin(async move {
             Ok(vec![])
+        })
+    }
+
+    fn search_ann(
+        &self,
+        embedding: Vec<f32>,
+        limit: usize,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let scope_filter = scope_filter.map(|s| s.to_string());
+        let type_filter = type_filter.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // For now, use a simpler approach: query all memories with embeddings 
+            // and compute similarity client-side
+            // TODO: Replace with proper sqlite-vec ANN when extension is stable
+            
+            let mut sql = r#"
+                SELECT m.id, m.importance, v.embedding
+                FROM vec_memories v
+                JOIN memories m ON v.memory_id = m.id
+                WHERE 1=1
+            "#.to_string();
+
+            if type_filter.is_some() {
+                sql.push_str(" AND m.type = ?");
+            }
+
+            if scope_filter.is_some() {
+                sql.push_str(" AND EXISTS (SELECT 1 FROM memory_scopes WHERE memory_id = m.id AND scope LIKE ? || '%')");
+            }
+
+            sql.push_str(&format!(" LIMIT {}", limit * 2)); // Over-fetch for reranking
+
+            let mut query_builder = sqlx::query_as::<_, (String, i64, Vec<u8>)>(&sql);
+
+            if let Some(ref type_) = type_filter {
+                query_builder = query_builder.bind(type_);
+            }
+
+            if let Some(ref scope) = scope_filter {
+                query_builder = query_builder.bind(scope);
+            }
+
+            let rows = query_builder.fetch_all(&pool).await.unwrap_or_default();
+
+            // Compute cosine similarity for each row
+            let mut scored_results: Vec<(String, f32)> = rows.into_iter().filter_map(|(id, _importance, embedding_bytes)| {
+                // Convert bytes back to f32 vector
+                if embedding_bytes.len() % 4 != 0 {
+                    return None;
+                }
+                
+                let mut stored_vec = Vec::with_capacity(embedding_bytes.len() / 4);
+                for chunk in embedding_bytes.chunks(4) {
+                    if let Ok(bytes) = <[u8; 4]>::try_from(chunk) {
+                        stored_vec.push(f32::from_le_bytes(bytes));
+                    }
+                }
+
+                // Compute cosine similarity
+                if stored_vec.len() != embedding.len() {
+                    return None;
+                }
+
+                let dot_product: f32 = embedding.iter().zip(&stored_vec).map(|(a, b)| a * b).sum();
+                let query_norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                let stored_norm: f32 = stored_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+                if query_norm < 1e-10 || stored_norm < 1e-10 {
+                    return Some((id, 0.0));
+                }
+
+                let similarity = dot_product / (query_norm * stored_norm);
+                let normalized = (similarity + 1.0) / 2.0; // Convert [-1, 1] to [0, 1]
+
+                Some((id, normalized.clamp(0.0, 1.0)))
+            }).collect();
+
+            // Sort by similarity descending
+            scored_results.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            scored_results.truncate(limit);
+            Ok(scored_results)
         })
     }
 
@@ -577,7 +705,7 @@ impl Database for SqliteDatabase {
     fn list_concepts(&self, _scope: Option<&str>, limit: usize) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
         let pool = self.pool.clone();
         Box::pin(async move {
-            let rows = sqlx::query("SELECT id, name, description, scope FROM ontology_concepts LIMIT ?")
+            let rows = sqlx::query("SELECT id, name, description, scope, created_at FROM ontology_concepts LIMIT ?")
                 .bind(limit as i64)
                 .fetch_all(&pool)
                 .await
@@ -588,7 +716,8 @@ impl Database for SqliteDatabase {
                     "id": r.get::<String, _>("id"),
                     "name": r.get::<String, _>("name"),
                     "description": r.get::<Option<String>, _>("description"),
-                    "scope": r.get::<Option<String>, _>("scope")
+                    "scope": r.get::<Option<String>, _>("scope"),
+                    "created_at": r.get::<String, _>("created_at")
                 })
             }).collect())
         })

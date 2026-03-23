@@ -39,24 +39,23 @@ pub struct SearchResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SearchMode {
-    /// Hybrid search combining vector, BM25, and fuzzy signals via Reciprocal Rank Fusion (RRF)
-    Hybrid,
-    Semantic,
-    Keyword,
-    Fuzzy,
-    Bm25,
+    /// RRF (Reciprocal Rank Fusion) - the only ranking method.
+    /// All search modes map to this for backward compatibility.
+    Rrf,
 }
 
 impl std::str::FromStr for SearchMode {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "hybrid" | "hybrid-rrf" => Ok(SearchMode::Hybrid),
-            "semantic" => Ok(SearchMode::Semantic),
-            "keyword" => Ok(SearchMode::Keyword),
-            "fuzzy" => Ok(SearchMode::Fuzzy),
-            "bm25" => Ok(SearchMode::Bm25),
-            other => Err(anyhow::anyhow!("Unknown search mode: '{}'. Valid: hybrid, semantic, keyword, fuzzy, bm25", other)),
+            // All modes map to RRF (first-class, only method)
+            "hybrid" | "hybrid-rrf" | "rrf" | "semantic" | "keyword" | "fuzzy" | "bm25" => {
+                Ok(SearchMode::Rrf)
+            }
+            other => Err(anyhow::anyhow!(
+                "Unknown search mode: '{}'. All modes map to RRF (Reciprocal Rank Fusion): hybrid, rrf, semantic, keyword, fuzzy, bm25",
+                other
+            )),
         }
     }
 }
@@ -106,59 +105,124 @@ pub async fn search(
     config_min_score: f32,
     config_search: &crate::config::SearchConfig,
 ) -> Result<SearchResponse> {
-    // Hybrid now uses RRF (Reciprocal Rank Fusion)
-    if opts.mode == SearchMode::Hybrid {
-        return search_with_rrf(db, opts, model_name, embeddings_enabled, config_min_score, config_search).await;
-    }
-
     use std::collections::HashMap;
 
-    tracing::info!("Search: Starting search request");
-    tracing::debug!("Search: query='{}', mode={:?}, limit={}, min_quality={:?}", 
-                    opts.query, opts.mode, opts.limit, opts.min_quality);
-    tracing::debug!("Search: embeddings_enabled={}, config_min_score={}", 
-                    embeddings_enabled, config_min_score);
+    // RRF (Reciprocal Rank Fusion) is the ONLY ranking method.
+    // All search is RRF. Configuration determines which signals to include.
+    tracing::info!("Search: Starting RRF search request");
+    tracing::debug!("Search: query='{}', limit={}", opts.query, opts.limit);
 
-    let fetch_limit = opts.limit * 3; // over-fetch for merging
-    let mut scores: HashMap<String, f32> = HashMap::new();
+    // Pipeline: fetch (top X) → RRF (top Y) → reranking (top Z) → return (top K)
+    // Increase fetch_limit if reranking is enabled to give it more candidates
+    let fetch_limit = if config_search.reranker.as_ref().map_or(false, |r| r.enabled) {
+        (opts.limit * 5).max(config_search.reranker.as_ref().map(|r| r.apply_to_top_k * 2).unwrap_or(30))
+    } else {
+        opts.limit * 3  // Standard: over-fetch 3x for merging
+    };
+    
+    tracing::debug!("Search: fetch_limit={} (reranker enabled: {})", 
+        fetch_limit, 
+        config_search.reranker.as_ref().map_or(false, |r| r.enabled));
+    
+    // Determine which signals to compute (from config)
+    let use_vector = embeddings_enabled && config_search.signals.vector;
+    let use_bm25 = config_search.signals.bm25;
+    let use_fuzzy = config_search.signals.fuzzy;
+    
+    tracing::info!("Search: Signals enabled - vector: {}, bm25: {}, fuzzy: {}", use_vector, use_bm25, use_fuzzy);
 
-    // Vector search is now handled by search_with_rrf for hybrid mode
-    // For semantic-only mode, vector search should be implemented but is currently disabled
-    // TODO: Re-implement vector-only search when Database trait has ann_search method
-
-    // --- BM25 via FTS5 ---
-    let use_bm25 = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Bm25 | SearchMode::Keyword);
-    if use_bm25 {
-        let rows = db.search_bm25(
-            &opts.query,
-            opts.scope_filter.as_deref(),
-            opts.type_filter.as_deref(),
-            fetch_limit,
-        ).await.unwrap_or_default();
-
-        // Rows are already normalized by Database trait implementation
-        for (id, norm_score) in rows {
-            *scores.entry(id).or_default() += norm_score * 0.3;
+    // ===== PARALLEL: Vector + BM25 (independent operations) =====
+    let (vector_results, bm25_results) = tokio::join!(
+        // Vector signal (embedding + ANN)
+        async {
+            let mut results = Vec::new();
+            if use_vector {
+                tracing::debug!("Search: Computing vector signal");
+                if let Ok(embedding) = crate::embeddings::embed_text(model_name, &opts.query) {
+                    if let Ok(rows) = db.search_ann(
+                        embedding,
+                        fetch_limit,
+                        opts.scope_filter.as_deref(),
+                        opts.type_filter.as_deref(),
+                    ).await {
+                        results = rows;
+                        results.sort_by(|a, b| {
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        tracing::debug!("Search: Vector signal returned {} results", results.len());
+                    } else {
+                        tracing::warn!("Search: Vector ANN search failed");
+                    }
+                } else {
+                    tracing::warn!("Search: Failed to embed query for vector signal");
+                }
+            }
+            results
+        },
+        // BM25 signal (FTS5 query)
+        async {
+            let mut results = Vec::new();
+            if use_bm25 {
+                if let Ok(rows) = db.search_bm25(
+                    &opts.query,
+                    opts.scope_filter.as_deref(),
+                    opts.type_filter.as_deref(),
+                    fetch_limit,
+                ).await {
+                    results = rows;
+                    tracing::debug!("Search: BM25 returned {} results", results.len());
+                    results.sort_by(|a, b| {
+                        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                } else {
+                    tracing::warn!("Search: BM25 search failed");
+                }
+            }
+            results
         }
-    }
+    );
 
-    // --- Fuzzy (Jaro-Winkler) ---
-    let use_fuzzy = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Fuzzy);
+    // --- Fuzzy Signal (sequential) ---
+    let mut fuzzy_results = Vec::new();
     if use_fuzzy {
-        let all = db.search_fuzzy(
+        tracing::debug!("Search: Computing fuzzy signal");
+        if let Ok(results) = db.search_fuzzy(
             &opts.query,
             opts.scope_filter.as_deref(),
             fetch_limit,
             0.6,
-        ).await.unwrap_or_default();
-
-        for (id, sim) in all {
-            *scores.entry(id).or_default() += sim * 0.2;
+        ).await {
+            fuzzy_results = results;
+            fuzzy_results.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            tracing::debug!("Search: Fuzzy signal returned {} results", fuzzy_results.len());
         }
     }
 
-    if scores.is_empty() {
-        // Fallback: return newest memories (no threshold applied — no scores to compare)
+    // Prepare signals for RRF fusion
+    let mut signals: Vec<(&str, Vec<(String, f32)>)> = Vec::new();
+    let vector_len = vector_results.len();
+    let bm25_len = bm25_results.len();
+    let fuzzy_len = fuzzy_results.len();
+    
+    tracing::info!("Search: Signal collection - vector: {}, bm25: {}, fuzzy: {}", vector_len, bm25_len, fuzzy_len);
+    
+    if !vector_results.is_empty() {
+        signals.push(("vector", vector_results));
+    }
+    if !bm25_results.is_empty() {
+        signals.push(("bm25", bm25_results));
+    }
+    if !fuzzy_results.is_empty() {
+        signals.push(("fuzzy", fuzzy_results));
+    }
+
+    tracing::info!("Search: Total signals for RRF fusion: {}", signals.len());
+
+    if signals.is_empty() {
+        // Fallback: return newest memories
+        tracing::warn!("Search: No signals collected, falling back to newest memories");
         let memories = fetch_memories_newest(db, opts).await?;
         return Ok(SearchResponse {
             results: memories,
@@ -167,16 +231,25 @@ pub async fn search(
         });
     }
 
-    // Collect IDs sorted by score
-    let mut ranked: Vec<(String, f32)> = scores.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    ranked.truncate(opts.limit);
+    // Apply RRF fusion
+    let rrf = crate::rrf_fusion::RRFFusion::default();
+    let fused = rrf.fuse(signals);
 
-    // Fetch full memory records for top results
+    tracing::debug!("Search: RRF fusion complete, {} results", fused.len());
+
+    // Fetch full memory records (before reranking, fetch more results)
     let mut results = Vec::new();
-    for (id, score) in ranked {
-        if let Some(m) = fetch_memory_by_id(db, &id).await? {
-            // Apply scope/type filters
+    let mut best_score = None;
+    
+    // RRF filter: take top (limit * 2) from RRF, then reranking will filter to final K
+    let rrf_limit = if config_search.reranker.is_some() {
+        (opts.limit * 3).min(fused.len())  // Fetch 3x for reranking to choose from
+    } else {
+        (opts.limit * 2).min(fused.len())
+    };
+
+    for rrf_result in fused.iter().take(rrf_limit) {
+        if let Some(m) = fetch_memory_by_id(db, &rrf_result.id).await? {
             if let Some(ref scope) = opts.scope_filter {
                 if !m.scopes.iter().any(|s| s.starts_with(scope.as_str())) {
                     continue;
@@ -187,15 +260,20 @@ pub async fn search(
                     continue;
                 }
             }
-            // Boost by importance
+
             let importance_boost = (m.importance as f32 - 5.0) * 0.02;
+            // RRF scores in [0.01, 0.2] are too small. Scale to [0.2, 0.9] for visibility.
+            let mut final_score = 0.2 + (rrf_result.rrf_score * 3.5).min(0.7) + importance_boost;
             
-            // Use persisted quality_score from DB (already fetched via get_memory)
-            let quality_score = m.quality_score;
+            if let Some(ref meta_config) = config_search.metadata_ranking {
+                final_score = apply_metadata_ranking(&m, final_score, meta_config);
+            }
             
+            best_score = Some(best_score.unwrap_or(final_score).max(final_score));
+
             results.push(SearchResult {
-                id,
-                score: score + importance_boost,
+                id: rrf_result.id.clone(),
+                score: final_score,
                 memory_type: m.memory_type,
                 content: m.content,
                 scopes: m.scopes,
@@ -207,79 +285,48 @@ pub async fn search(
                 direction: None,
                 hop_depth: None,
                 parent_id: None,
-                quality_score,
+                quality_score: m.quality_score,
             });
+
+            if results.len() >= rrf_limit {
+                break;
+            }
         }
     }
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Apply reranker if enabled (before quality/threshold filters)
+    
+    // Apply reranking if configured
     #[cfg(feature = "reranker")]
     if let Some(reranker_config) = &config_search.reranker {
         if reranker_config.enabled {
-            if !results.is_empty() {
-                tracing::info!("Search: Reranker enabled, applying to {} results", results.len());
-                if let Err(e) = apply_reranker(reranker_config, &opts.query, &mut results).await {
-                    tracing::warn!("Search: Reranking failed, using original scores: {}", e);
-                }
-            } else {
-                tracing::debug!("Search: Reranker enabled but no results to rerank");
+            tracing::info!("Search: Applying reranking to {} results before final filtering", results.len());
+            if let Err(e) = apply_reranker(reranker_config, &opts.query, &mut results).await {
+                tracing::warn!("Search: Reranking failed, continuing with RRF scores: {}", e);
             }
-        } else {
-            tracing::debug!("Search: Reranker disabled");
         }
-    } else {
-        tracing::debug!("Search: No reranker config found");
     }
+    
+    // Final filter to return only top-K results
+    results.truncate(opts.limit);
 
-    // Apply graph-aware retrieval if enabled (before quality/threshold filters)
+    // Apply graph-aware retrieval if enabled (post-RRF expansion)
     if let Some(graph_config) = &config_search.graph_retrieval {
         if graph_config.enabled {
             if !results.is_empty() {
-                tracing::info!("Search: Graph-aware retrieval enabled, applying to {} results", results.len());
+                tracing::info!("Search: Applying graph-aware retrieval to {} results", results.len());
                 if let Err(e) = crate::graph_retrieval::expand_graph_results(db as &dyn voidm_db_trait::Database, &mut results, graph_config).await {
-                    tracing::warn!("Search: Graph-aware retrieval failed, continuing with original results: {}", e);
+                    tracing::warn!("Search: Graph-aware retrieval failed: {}", e);
                 }
-            } else {
-                tracing::debug!("Search: Graph-aware retrieval enabled but no results to expand");
             }
-        } else {
-            tracing::debug!("Search: Graph-aware retrieval disabled");
         }
-    } else {
-        tracing::debug!("Search: No graph-retrieval config found");
     }
 
-    // Apply quality filter if specified
-    if let Some(min_quality) = opts.min_quality {
-        results.retain(|r| r.quality_score.unwrap_or(0.0) >= min_quality);
-    }
+    tracing::info!("Search: Returning {} results", results.len());
 
-    // Apply threshold — only in hybrid mode
-    if opts.mode == SearchMode::Hybrid {
-        let threshold = opts.min_score.unwrap_or(config_min_score);
-        let best_score = results.first().map(|r| r.score);
-        let before_count = results.len();
-        results.retain(|r| r.score >= threshold);
-
-        let threshold_applied = if results.len() < before_count {
-            Some(threshold)
-        } else {
-            None
-        };
-
-        if opts.include_neighbors {
-            expand_neighbors(db, &mut results, opts, config_search).await?;
-        }
-
-        return Ok(SearchResponse { results, threshold_applied, best_score });
-    }
-
-    if opts.include_neighbors {
-        expand_neighbors(db, &mut results, opts, config_search).await?;
-    }
-
-    Ok(SearchResponse { results, threshold_applied: None, best_score: None })
+    Ok(SearchResponse {
+        results,
+        threshold_applied: None,
+        best_score,
+    })
 }
 
 /// Expand search results with graph neighbors in-place.
@@ -300,7 +347,7 @@ async fn fetch_memories_newest(db: &dyn voidm_db_trait::Database, opts: &SearchO
         let memory: Memory = serde_json::from_value(memory_json)?;
         results.push(SearchResult {
             id: memory.id,
-            score: 0.0,
+            score: 0.35, // Fallback score for unranked newest memories (above 0.3 threshold)
             memory_type: memory.memory_type,
             content: memory.content,
             scopes: memory.scopes,
@@ -498,186 +545,6 @@ async fn apply_reranker(
 /// - Prevents any single signal from dominating
 ///
 /// Usage: Enable via SearchMode or config option
-pub async fn search_with_rrf(
-    db: &dyn voidm_db_trait::Database,
-    opts: &SearchOptions,
-    model_name: &str,
-    embeddings_enabled: bool,
-    config_min_score: f32,
-    config_search: &crate::config::SearchConfig,
-) -> Result<SearchResponse> {
-    use std::collections::HashMap;
-
-    tracing::info!("Search (RRF): Starting RRF-enhanced search request");
-    tracing::debug!("Search (RRF): query='{}', mode={:?}, limit={}", 
-                    opts.query, opts.mode, opts.limit);
-
-    let fetch_limit = opts.limit * 3; // over-fetch for merging
-    
-    // Determine which signals to compute
-    let use_vector = embeddings_enabled
-        && matches!(opts.mode, SearchMode::Hybrid | SearchMode::Semantic)
-        && true; // TODO: vec_table_exists check when pool is available
-
-    let use_bm25 = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Bm25 | SearchMode::Keyword);
-    let use_fuzzy = matches!(opts.mode, SearchMode::Hybrid | SearchMode::Fuzzy);
-
-    // ===== PARALLEL: Vector + BM25 (independent operations) =====
-    let (vector_results, bm25_results) = tokio::join!(
-        // Vector signal (embedding + ANN)
-        async {
-            let mut results = Vec::new();
-            if use_vector {
-                tracing::debug!("Search (RRF): Starting Vector signal (parallel)");
-                if let Ok(embedding) = crate::embeddings::embed_text(model_name, &opts.query) {
-                    // TODO: Implement ann_search in Database trait
-                    tracing::debug!("ANN search not yet implemented for generic Database trait");
-                }
-            }
-            results
-        },
-        // BM25 signal (FTS5 query)
-        async {
-            let mut results = Vec::new();
-            if use_bm25 {
-                tracing::debug!("Search (RRF): Starting BM25 signal (parallel)");
-                if let Ok(rows) = db.search_bm25(
-                    &opts.query,
-                    opts.scope_filter.as_deref(),
-                    opts.type_filter.as_deref(),
-                    fetch_limit,
-                ).await {
-                    results = rows;
-                    results.sort_by(|a, b| {
-                        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                }
-            }
-            results
-        }
-    );
-
-    // --- Fuzzy Signal (sequential, only 10% of time) ---
-    let mut fuzzy_results = Vec::new();
-    if use_fuzzy {
-        tracing::debug!("Search (RRF): Fuzzy signal");
-        if let Ok(results) = db.search_fuzzy(
-            &opts.query,
-            opts.scope_filter.as_deref(),
-            fetch_limit,
-            0.6,
-        ).await {
-            fuzzy_results = results;
-            fuzzy_results.sort_by(|a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-    }
-
-    // Prepare signals for RRF
-    let mut signals: Vec<(&str, Vec<(String, f32)>)> = Vec::new();
-    if !vector_results.is_empty() {
-        signals.push(("vector", vector_results));
-    }
-    if !bm25_results.is_empty() {
-        signals.push(("bm25", bm25_results));
-    }
-    if !fuzzy_results.is_empty() {
-        signals.push(("fuzzy", fuzzy_results));
-    }
-
-    if signals.is_empty() {
-        // Fallback: return newest memories
-        let memories = fetch_memories_newest(db, opts).await?;
-        return Ok(SearchResponse {
-            results: memories,
-            threshold_applied: None,
-            best_score: None,
-        });
-    }
-
-    // Apply RRF fusion
-    let rrf = crate::rrf_fusion::RRFFusion::default();
-    let fused = rrf.fuse(signals);
-
-    tracing::debug!("Search (RRF): RRF fusion complete, {} results", fused.len());
-
-    // Fetch full memory records
-    let mut results = Vec::new();
-    let mut best_score = None;
-
-    for rrf_result in fused.iter().take(opts.limit * 2) {
-        if let Some(m) = fetch_memory_by_id(db, &rrf_result.id).await? {
-            if let Some(ref scope) = opts.scope_filter {
-                if !m.scopes.iter().any(|s| s.starts_with(scope.as_str())) {
-                    continue;
-                }
-            }
-            if let Some(ref t) = opts.type_filter {
-                if m.memory_type != *t {
-                    continue;
-                }
-            }
-
-            let importance_boost = (m.importance as f32 - 5.0) * 0.02;
-            let mut final_score = rrf_result.rrf_score + importance_boost;
-            
-            if let Some(ref meta_config) = config_search.metadata_ranking {
-                final_score = apply_metadata_ranking(&m, final_score, meta_config);
-            }
-            
-            best_score = Some(best_score.unwrap_or(final_score).max(final_score));
-
-            results.push(SearchResult {
-                id: rrf_result.id.clone(),
-                score: final_score,
-                memory_type: m.memory_type,
-                content: m.content,
-                scopes: m.scopes,
-                tags: m.tags,
-                importance: m.importance,
-                created_at: m.created_at,
-                source: "search".into(),
-                rel_type: None,
-                direction: None,
-                hop_depth: None,
-                parent_id: None,
-                quality_score: m.quality_score,
-            });
-
-            if results.len() >= opts.limit {
-                break;
-            }
-        }
-    }
-
-    // Apply graph-aware retrieval if enabled (post-RRF expansion)
-    if let Some(graph_config) = &config_search.graph_retrieval {
-        if graph_config.enabled {
-            if !results.is_empty() {
-                tracing::info!("Search (RRF): Graph-aware retrieval enabled, applying to {} results", results.len());
-                if let Err(e) = crate::graph_retrieval::expand_graph_results(db as &dyn voidm_db_trait::Database, &mut results, graph_config).await {
-                    tracing::warn!("Search (RRF): Graph-aware retrieval failed, continuing with original results: {}", e);
-                }
-            } else {
-                tracing::debug!("Search (RRF): Graph-aware retrieval enabled but no results to expand");
-            }
-        } else {
-            tracing::debug!("Search (RRF): Graph-aware retrieval disabled");
-        }
-    } else {
-        tracing::debug!("Search (RRF): No graph-retrieval config found");
-    }
-
-    tracing::info!("Search (RRF): Returning {} results", results.len());
-
-    Ok(SearchResponse {
-        results,
-        threshold_applied: None,
-        best_score,
-    })
-}
-
 // ─── Metadata Ranking Signals ───────────────────────────────────────────────
 
 /// Compute recency signal: exp(-days_since_created / half_life)

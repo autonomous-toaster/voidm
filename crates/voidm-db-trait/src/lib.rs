@@ -130,6 +130,16 @@ pub trait Database: Send + Sync {
         threshold: f32,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>>;
 
+    /// Vector ANN search using sqlite-vec
+    /// Returns ranked results as (id, similarity_score) tuples where score is in [0,1]
+    fn search_ann(
+        &self,
+        embedding: Vec<f32>,
+        limit: usize,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>>;
+
     /// Fetch raw memories for custom scoring
     /// Returns (id, content) tuples ordered by creation timestamp (newest first)
     fn fetch_memories_raw(

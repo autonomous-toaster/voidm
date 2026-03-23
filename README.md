@@ -4,6 +4,8 @@ Local-first persistent memory for LLM agents.
 
 `voidm` is a single-binary CLI that gives AI agents a durable memory store: add typed memories, search them with hybrid vector+BM25+fuzzy retrieval, connect them in a knowledge graph, define ontology concepts with IS-A hierarchies, extract entities with a local NER model, detect contradictions with a local NLI model, and query with Cypher — all offline, no API keys required.
 
+This repository is maintained as a fork of [autonomous-toaster/voidm](https://github.com/autonomous-toaster/voidm).
+
 ---
 
 ## Features
@@ -840,6 +842,8 @@ voidm/
 ---
 
 ## Acknowledgements
+
+Thanks to the original author of [autonomous-toaster/voidm](https://github.com/autonomous-toaster/voidm) for building and sharing the upstream project.
 
 Inspired by [byteowlz/mmry](https://github.com/byteowlz/mmry) and [colliery-io/graphqlite](https://github.com/colliery-io/graphqlite).
 

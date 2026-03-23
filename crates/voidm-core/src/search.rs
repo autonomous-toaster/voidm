@@ -117,7 +117,7 @@ pub async fn search(
     let fetch_limit = if config_search.reranker.as_ref().map_or(false, |r| r.enabled) {
         (opts.limit * 5).max(config_search.reranker.as_ref().map(|r| r.apply_to_top_k * 2).unwrap_or(30))
     } else {
-        opts.limit * 3  // Standard: over-fetch 3x for merging
+        opts.limit * 5  // Increased from 3x to 5x for optimal consensus merging
     };
     
     tracing::debug!("Search: fetch_limit={} (reranker enabled: {})", 

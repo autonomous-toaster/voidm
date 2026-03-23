@@ -32,8 +32,8 @@ impl Default for RRFConfig {
         Self {
             k: 60,
             top_rank_bonus: true,
-            rank_1_bonus: 0.12,  // Increased from 0.05 to reward consensus
-            rank_2_3_bonus: 0.06,  // Increased from 0.02 to reward near-consensus
+            rank_1_bonus: 0.12,  // Tuned for consensus
+            rank_2_3_bonus: 0.06,  // Tuned for near-consensus
         }
     }
 }

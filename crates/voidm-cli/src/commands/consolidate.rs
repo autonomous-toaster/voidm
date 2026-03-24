@@ -608,15 +608,15 @@ async fn phase_4_nli_conflicts(
     pool: &SqlitePool,
     results: &mut ConsolidateResults,
 ) -> Result<()> {
-    // Query all CONTRADICTS edges
-    let edges: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT gn1.concept_id, gn2.concept_id, oc1.description, oc2.description
-         FROM graph_edges ge
-         JOIN graph_nodes gn1 ON ge.from_node = gn1.id
-         JOIN graph_nodes gn2 ON ge.to_node = gn2.id
-         JOIN ontology_concepts oc1 ON gn1.concept_id = oc1.id
-         JOIN ontology_concepts oc2 ON gn2.concept_id = oc2.id
-         WHERE ge.rel_type = 'CONTRADICTS'"
+    // Query all CONTRADICTS edges (ontology_edges table)
+    let edges: Vec<(String, String)> = sqlx::query_as(
+        "SELECT oc1.description, oc2.description
+         FROM ontology_edges e
+         JOIN ontology_concepts oc1 ON e.from_id = oc1.id
+         JOIN ontology_concepts oc2 ON e.to_id = oc2.id
+         WHERE e.rel_type = 'CONTRADICTS'
+           AND e.from_type = 'concept'
+           AND e.to_type = 'concept'"
     )
     .fetch_all(pool)
     .await?;
@@ -634,7 +634,7 @@ async fn phase_4_nli_conflicts(
 
     let mut confirmed = 0;
 
-    for (_concept1_id, _concept2_id, text1, text2) in edges {
+    for (text1, text2) in edges {
         // Run NLI classifier
         let scores = voidm_nli::classify(&text1, &text2)
             .map_err(|e| {

@@ -330,6 +330,13 @@ pub async fn search(
     let quality_filter_config = crate::quality_filtering::QualityFilterConfig::default();
     crate::quality_filtering::filter_by_quality(&mut results, &quality_filter_config);
     
+    // Apply recency-based boosting to surface fresher content
+    let recency_boost_config = crate::recency_boosting::RecencyBoostConfig::default();
+    crate::recency_boosting::boost_by_recency(&mut results, &recency_boost_config);
+    
+    // Re-sort after recency boosting
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    
     // Final filter to return only top-K results
     results.truncate(opts.limit);
 

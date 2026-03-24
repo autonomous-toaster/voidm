@@ -10,7 +10,7 @@ use crate::search::SearchResult;
 pub struct QualityFilterConfig {
     /// Enable quality filtering (default: true)
     pub enabled: bool,
-    /// Minimum quality score (0.0-1.0) to include results (default: 0.4)
+    /// Minimum quality score (0.0-1.0) to include results (default: 0.5)
     pub min_quality_score: f32,
     /// If true, results without quality_score are always included (default: true)
     pub include_unscored: bool,
@@ -20,7 +20,7 @@ impl Default for QualityFilterConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            min_quality_score: 0.4,
+            min_quality_score: 0.5,  // Increased from 0.4 for stricter quality filtering
             include_unscored: true,
         }
     }
@@ -88,7 +88,7 @@ mod tests {
     fn test_quality_filter_default_config() {
         let config = QualityFilterConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.min_quality_score, 0.4);
+        assert_eq!(config.min_quality_score, 0.5);
         assert!(config.include_unscored);
     }
 

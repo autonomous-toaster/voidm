@@ -234,25 +234,25 @@ async fn phase_1_memory_dedup(
 
             let (id2, type2, _, _) = &memories[j];
 
-            // Check type match
-            if type1 != type2 {
-                results.phase_1_memory_dedup.skipped_type_mismatch += 1;
-                results.warnings.push(format!(
-                    "Phase 1: Skipped merge (type mismatch): {} ({}) vs {} ({})",
-                    id1, type1, id2, type2
-                ));
-                continue;
-            }
-
             let emb2 = match embedding_map.get(id2) {
                 Some(e) => e,
                 None => continue,
             };
 
-            // Compute cosine similarity
+            // Compute cosine similarity first
             let similarity = voidm_core::fast_vector::cosine_similarity(emb1, emb2);
 
             if similarity >= args.similarity_threshold {
+                // Only now check type - warn ONLY if high similarity but type mismatch
+                if type1 != type2 {
+                    results.phase_1_memory_dedup.skipped_type_mismatch += 1;
+                    results.warnings.push(format!(
+                        "Phase 1: Skipped merge (type mismatch): {} ({}) vs {} ({}) - similarity {:.3}",
+                        id1, type1, id2, type2, similarity
+                    ));
+                    continue;
+                }
+
                 // Mark id2 (older) to be merged into id1 (newer, since sorted DESC)
                 pairs_to_merge.push((id2.clone(), id1.clone()));
                 merged_ids.insert(id2.clone());

@@ -205,8 +205,15 @@ pub async fn list_concepts(
 
 /// Delete a concept (and its ontology edges via CASCADE).
 pub async fn delete_concept(pool: &SqlitePool, id: &str) -> Result<bool> {
-    // TODO: Replace with trait-based implementation
-    todo!("Replace with trait-based call")
+    // Resolve short IDs to full IDs (supports 4+ char prefixes)
+    let full_id = resolve_concept_id(pool, id).await?;
+    
+    let result = sqlx::query("DELETE FROM ontology_concepts WHERE id = ?")
+        .bind(&full_id)
+        .execute(pool)
+        .await?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 // ─── Ontology Edge CRUD ───────────────────────────────────────────────────────
@@ -221,9 +228,19 @@ pub async fn add_ontology_edge(
     to_kind: NodeKind,
     note: Option<&str>,
 ) -> Result<OntologyEdge> {
-    // Validate endpoints exist
-    validate_node(pool, from_id, &from_kind).await?;
-    validate_node(pool, to_id, &to_kind).await?;
+    // Resolve short IDs to full IDs (supports 4+ char prefixes)
+    let from_id = match from_kind {
+        NodeKind::Concept => resolve_concept_id(pool, from_id).await?,
+        NodeKind::Memory => crate::crud::resolve_id_sqlite(pool, from_id).await?,
+    };
+    let to_id = match to_kind {
+        NodeKind::Concept => resolve_concept_id(pool, to_id).await?,
+        NodeKind::Memory => crate::crud::resolve_id_sqlite(pool, to_id).await?,
+    };
+    
+    // Validate endpoints exist (using full IDs now)
+    validate_node(pool, &from_id, &from_kind).await?;
+    validate_node(pool, &to_id, &to_kind).await?;
 
     // IS_A and HAS_PROPERTY only make sense between concepts
     match rel_type {
@@ -246,10 +263,10 @@ pub async fn add_ontology_edge(
          (from_id, from_type, rel_type, to_id, to_type, note, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)"
     )
-    .bind(from_id)
+    .bind(&from_id)
     .bind(from_kind.to_string())
     .bind(rel_type.as_str())
-    .bind(to_id)
+    .bind(&to_id)
     .bind(to_kind.to_string())
     .bind(note)
     .bind(&now)
@@ -260,18 +277,18 @@ pub async fn add_ontology_edge(
     let id: i64 = sqlx::query_scalar(
         "SELECT id FROM ontology_edges WHERE from_id = ? AND to_id = ? AND rel_type = ?"
     )
-    .bind(from_id)
-    .bind(to_id)
+    .bind(&from_id)
+    .bind(&to_id)
     .bind(rel_type.as_str())
     .fetch_one(pool)
     .await?;
 
     Ok(OntologyEdge {
         id,
-        from_id: from_id.to_string(),
+        from_id,
         from_type: from_kind,
         rel_type: rel_type.as_str().to_string(),
-        to_id: to_id.to_string(),
+        to_id,
         to_type: to_kind,
         note: note.map(str::to_string),
         created_at: now,
@@ -461,8 +478,17 @@ pub struct ConceptInstance {
 
 /// Resolve full or short (prefix, min 4 chars) concept ID.
 pub async fn resolve_concept_id(pool: &SqlitePool, id: &str) -> Result<String> {
-    // TODO: Replace with trait-based implementation
-    todo!("Replace with trait-based call")
+    if id.len() < 4 {
+        anyhow::bail!("ID prefix too short (minimum 4 characters)");
+    }
+    
+    let row = sqlx::query_scalar::<_, String>("SELECT id FROM ontology_concepts WHERE id LIKE ? LIMIT 1")
+        .bind(format!("{}%", id))
+        .fetch_optional(pool)
+        .await
+        .context("Failed to resolve concept ID")?;
+
+    row.context(format!("Concept ID not found: {}", id))
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

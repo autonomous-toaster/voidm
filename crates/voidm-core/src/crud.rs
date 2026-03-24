@@ -130,14 +130,13 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     }
 
     // Validate --link targets exist before opening transaction
+    // Also resolve short IDs to full IDs for later use
+    let mut resolved_link_targets = Vec::new();
     for link in &req.links {
-        let exists: Option<String> = sqlx::query_scalar("SELECT id FROM memories WHERE id = ?")
-            .bind(&link.target_id)
-            .fetch_optional(pool)
-            .await?;
-        if exists.is_none() {
-            anyhow::bail!("Link target '{}' not found", link.target_id);
-        }
+        // Use resolve_id_sqlite to support short ID prefixes (minimum 4 chars)
+        let target_id = resolve_id_sqlite(pool, &link.target_id).await?;
+        resolved_link_targets.push((link.edge_type.clone(), link.note.clone(), target_id));
+        
         if link.edge_type.requires_note() && link.note.is_none() {
             anyhow::bail!(
                 "RELATES_TO requires --note explaining why no stronger relationship applies."
@@ -222,14 +221,14 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
     .await?;
 
     // Create --link edges
-    for link in &req.links {
+    for (edge_type, note, target_id) in resolved_link_targets {
         let target_node: i64 = sqlx::query_scalar(
             "SELECT n.id FROM graph_nodes n WHERE n.memory_id = ?"
         )
-        .bind(&link.target_id)
+        .bind(&target_id)
         .fetch_one(&mut *tx)
         .await
-        .with_context(|| format!("Graph node not found for target '{}'", link.target_id))?;
+        .with_context(|| format!("Graph node not found for target '{}'", target_id))?;
 
         sqlx::query(
             "INSERT OR IGNORE INTO graph_edges (source_id, target_id, rel_type, note, created_at)
@@ -237,8 +236,8 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         )
         .bind(node_id)
         .bind(target_node)
-        .bind(link.edge_type.as_str())
-        .bind(&link.note)
+        .bind(edge_type.as_str())
+        .bind(&note)
         .bind(&now)
         .execute(&mut *tx)
         .await?;
@@ -474,11 +473,25 @@ async fn merge_memories(
 
 /// Get a single memory by ID.
 pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
+    // Resolve short IDs to full IDs (supports 4+ char prefixes)
+    let full_id = if id.len() < 4 {
+        // If less than 4 chars, can't be a valid short ID, treat as exact match attempt
+        id.to_string()
+    } else {
+        match resolve_id_sqlite(pool, id).await {
+            Ok(resolved) => resolved,
+            Err(_) => {
+                // If resolution fails, it means ID not found
+                return Ok(None);
+            }
+        }
+    };
+
     let row: Option<(String, String, String, i64, String, String, Option<f32>, Option<String>, String, String)> = sqlx::query_as(
         "SELECT id, type, content, importance, tags, metadata, quality_score, context, created_at, updated_at
          FROM memories WHERE id = ?"
     )
-    .bind(id)
+    .bind(&full_id)
     .fetch_optional(pool)
     .await?;
 
@@ -585,9 +598,20 @@ pub async fn list_memories(
 
 /// Delete a memory and all its graph edges (cascade via FK).
 pub async fn delete_memory(pool: &SqlitePool, id: &str) -> Result<bool> {
+    // Resolve short IDs to full IDs (supports 4+ char prefixes)
+    let full_id = resolve_id_sqlite(pool, id).await
+        .or_else(|_| {
+            // If resolution fails, treat as not found
+            Ok::<String, anyhow::Error>(String::new())
+        })?;
+    
+    if full_id.is_empty() {
+        return Ok(false);
+    }
+
     // Check if memory exists first
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?)")
-        .bind(id)
+        .bind(&full_id)
         .fetch_one(pool)
         .await?;
     
@@ -598,7 +622,7 @@ pub async fn delete_memory(pool: &SqlitePool, id: &str) -> Result<bool> {
     // Delete graph_edges (using source_id and target_id, not from_id/to_id)
     // First get the graph node IDs for this memory
     let node_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
-        .bind(id)
+        .bind(&full_id)
         .fetch_all(pool)
         .await?;
     
@@ -617,28 +641,28 @@ pub async fn delete_memory(pool: &SqlitePool, id: &str) -> Result<bool> {
 
     // Delete memory_edges (which uses from_id and to_id)
     sqlx::query("DELETE FROM memory_edges WHERE from_id = ? OR to_id = ?")
-        .bind(id)
-        .bind(id)
+        .bind(&full_id)
+        .bind(&full_id)
         .execute(pool)
         .await?;
 
     sqlx::query("DELETE FROM memory_scopes WHERE memory_id = ?")
-        .bind(id)
+        .bind(&full_id)
         .execute(pool)
         .await?;
 
     sqlx::query("DELETE FROM vec_memories WHERE memory_id = ?")
-        .bind(id)
+        .bind(&full_id)
         .execute(pool)
         .await?;
 
     sqlx::query("DELETE FROM memories_fts WHERE id = ?")
-        .bind(id)
+        .bind(&full_id)
         .execute(pool)
         .await?;
 
     sqlx::query("DELETE FROM memories WHERE id = ?")
-        .bind(id)
+        .bind(&full_id)
         .execute(pool)
         .await?;
 
@@ -681,19 +705,13 @@ pub async fn link_memories(
     }
 
     // Check both memories exist
-    for id in &[from_id, to_id] {
-        let exists: Option<String> = sqlx::query_scalar("SELECT id FROM memories WHERE id = ?")
-            .bind(id)
-            .fetch_optional(pool)
-            .await?;
-        if exists.is_none() {
-            anyhow::bail!("Memory '{}' not found", id);
-        }
-    }
+    // Support short ID prefixes (minimum 4 chars) for flexibility
+    let from_id = resolve_id_sqlite(pool, from_id).await?;
+    let to_id = resolve_id_sqlite(pool, to_id).await?;
 
     // Get or create graph nodes
-    let from_node = get_or_create_node(pool, from_id).await?;
-    let to_node = get_or_create_node(pool, to_id).await?;
+    let from_node = get_or_create_node(pool, &from_id).await?;
+    let to_node = get_or_create_node(pool, &to_id).await?;
 
     // Check for conflicting edge
     let conflict_rel = edge_type.conflict();
@@ -751,11 +769,15 @@ pub async fn unlink_memories(
     edge_type: &EdgeType,
     to_id: &str,
 ) -> Result<bool> {
+    // Resolve short IDs to full IDs (supports 4+ char prefixes)
+    let from_id = resolve_id_sqlite(pool, from_id).await?;
+    let to_id = resolve_id_sqlite(pool, to_id).await?;
+    
     // Get node IDs
     let from_node_opt: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM graph_nodes WHERE memory_id = ?"
     )
-    .bind(from_id)
+    .bind(&from_id)
     .fetch_optional(pool)
     .await?;
 
@@ -767,7 +789,7 @@ pub async fn unlink_memories(
     let to_node_opt: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM graph_nodes WHERE memory_id = ?"
     )
-    .bind(to_id)
+    .bind(&to_id)
     .fetch_optional(pool)
     .await?;
 

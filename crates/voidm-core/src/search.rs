@@ -112,17 +112,27 @@ pub async fn search(
     tracing::info!("Search: Starting RRF search request");
     tracing::debug!("Search: query='{}', limit={}", opts.query, opts.limit);
 
+    // Adaptive fetch multiplier based on query complexity
+    let query_complexity = crate::query_classifier::classify_query(&opts.query);
+    let base_multiplier = 10u32; // Default 10x
+    let adaptive_multiplier = query_complexity.fetch_multiplier(base_multiplier) as usize;
+    
+    tracing::debug!("Search: query_complexity={:?}, adaptive_multiplier={}x", 
+        query_complexity, 
+        adaptive_multiplier);
+
     // Pipeline: fetch (top X) → RRF (top Y) → reranking (top Z) → return (top K)
     // Increase fetch_limit if reranking is enabled to give it more candidates
     let fetch_limit = if config_search.reranker.as_ref().map_or(false, |r| r.enabled) {
         (opts.limit * 5).max(config_search.reranker.as_ref().map(|r| r.apply_to_top_k * 2).unwrap_or(30))
     } else {
-        opts.limit * 10  // Speed-optimized: 84.2% recall, 87% precision, F1 0.856
+        opts.limit * adaptive_multiplier  // Adaptive: 5x-20x based on query complexity
     };
     
-    tracing::debug!("Search: fetch_limit={} (reranker enabled: {})", 
+    tracing::debug!("Search: fetch_limit={} (reranker enabled: {}, complexity: {:?})", 
         fetch_limit, 
-        config_search.reranker.as_ref().map_or(false, |r| r.enabled));
+        config_search.reranker.as_ref().map_or(false, |r| r.enabled),
+        query_complexity);
     
     // Determine which signals to compute (from config)
     let use_vector = embeddings_enabled && config_search.signals.vector;

@@ -20,8 +20,8 @@ impl Default for ImportanceBoostConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            high_importance_boost: 1.4,  // Increased from 1.25 for stronger curation boost
-            importance_threshold: 7,
+            high_importance_boost: 1.4,
+            importance_threshold: 6,  // Lowered from 7 to boost more results
         }
     }
 }
@@ -71,7 +71,7 @@ mod tests {
         let config = ImportanceBoostConfig::default();
         assert!(config.enabled);
         assert_eq!(config.high_importance_boost, 1.4);
-        assert_eq!(config.importance_threshold, 7);
+        assert_eq!(config.importance_threshold, 6);
     }
 
     #[test]

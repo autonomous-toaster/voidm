@@ -308,7 +308,11 @@ pub async fn search(
     let context_boost_config = crate::context_boosting::ContextBoostConfig::default();
     crate::context_boosting::boost_by_context(&mut results, opts.intent.as_deref(), &context_boost_config);
     
-    // Re-sort results after context boosting
+    // Apply importance-based boosting for better precision
+    let importance_boost_config = crate::importance_boosting::ImportanceBoostConfig::default();
+    crate::importance_boosting::boost_by_importance(&mut results, &importance_boost_config);
+    
+    // Re-sort results after boosting
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     
     // Apply reranking if configured

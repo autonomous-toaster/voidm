@@ -16,6 +16,7 @@ pub mod fast_vector;
 pub mod vector; // Deprecated: kept for compatibility only
 pub mod query_classifier;
 pub mod context_boosting;
+pub mod importance_boosting;
 
 pub use config::Config;
 pub use config::config_path_display;

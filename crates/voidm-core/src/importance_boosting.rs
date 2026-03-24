@@ -10,7 +10,7 @@ use crate::search::SearchResult;
 pub struct ImportanceBoostConfig {
     /// Enable importance boosting (default: true)
     pub enabled: bool,
-    /// Score multiplier for high-importance results (default: 1.25)
+    /// Score multiplier for high-importance results (default: 1.4)
     pub high_importance_boost: f32,
     /// Importance threshold (0-10) above which results get boosted (default: 7)
     pub importance_threshold: i64,
@@ -20,7 +20,7 @@ impl Default for ImportanceBoostConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            high_importance_boost: 1.25,
+            high_importance_boost: 1.4,  // Increased from 1.25 for stronger curation boost
             importance_threshold: 7,
         }
     }
@@ -70,7 +70,7 @@ mod tests {
     fn test_importance_boost_default_config() {
         let config = ImportanceBoostConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.high_importance_boost, 1.25);
+        assert_eq!(config.high_importance_boost, 1.4);
         assert_eq!(config.importance_threshold, 7);
     }
 

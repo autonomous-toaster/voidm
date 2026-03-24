@@ -21,7 +21,7 @@ impl Default for RecencyBoostConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            recent_boost: 1.2,
+            recent_boost: 1.3,  // Increased from 1.2 for stronger freshness preference
             recency_days: 30,
         }
     }
@@ -99,7 +99,7 @@ mod tests {
     fn test_recency_boost_default_config() {
         let config = RecencyBoostConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.recent_boost, 1.2);
+        assert_eq!(config.recent_boost, 1.3);
         assert_eq!(config.recency_days, 30);
     }
 

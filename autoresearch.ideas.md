@@ -290,3 +290,105 @@ To exceed F1 0.856, must implement:
 - Session 9+: Architectural improvements based on results
 
 **Current Status**: 10x configuration is FINAL for RRF-only optimization. Ready for production deployment with clear roadmap for future enhancements.
+
+---
+
+## Session 8-9 Progress: Architectural Features & Per-Query Routing
+
+### Session 8: Architectural Feature Activation ✅
+- Enabled Graph Retrieval (tag/concept-based related memory expansion)
+- Enabled Metadata Ranking (quality/importance/recency signals)
+- Synthetic benchmark limitation: No graph/metadata data to test
+- Status: Features enabled, await real-world validation
+
+### Session 9: Per-Query Routing Framework ✅
+- Implemented QueryComplexity classifier (Common/Standard/Rare/Typo)
+- Heuristics: word count, technical terms, acronyms, misspellings
+- Expected routing: 60% common→8x, 30% standard→10x, 10% rare→20x
+- Performance: Maintains 84.1% recall, 86.9% precision, 15.3ms latency
+- **Status: IMPLEMENTATION COMPLETE, READY FOR INTEGRATION**
+
+## Phase Progression Update
+
+**Phase 1: RRF Parameter Tuning** ✅ COMPLETE (Sessions 1-7)
+- Exhaustively tested: fetch limit, RRF bonuses, metadata weights, k, scaling, thresholds
+- Result: 10x fetch optimal (84.2% recall, 87% precision, F1 0.856)
+- Conclusion: Parameter space saturated
+
+**Phase 2: Architectural Features** 🚀 ACTIVATED (Session 8)
+- Graph retrieval enabled (tag/concept-based expansion)
+- Metadata ranking enabled (quality/importance/recency)
+- Status: Ready for real-world validation (no impact on synthetic)
+
+**Phase 3: Per-Query Adaptation** 🛠️ FRAMEWORK READY (Session 9)
+- Query classifier implemented (241-line module, 6 tests passing)
+- Routing logic designed and simulated
+- Estimated UX improvement: +20-26% for common queries
+- **Status: READY FOR INTEGRATION INTO search.rs**
+
+## Next Priorities (Session 10+)
+
+### Priority 1: Per-Query Routing Integration (HIGH VALUE)
+- **What**: Call classifier in search.rs, use multiplier for fetch_limit
+- **Expected**: +20-26% faster common queries, maintained quality
+- **Effort**: 2-3 hours
+- **Status**: Framework complete, ready to integrate
+- **Risk**: Low (neutral or positive impact)
+
+### Priority 2: Real-World Validation (CRITICAL)
+- **What**: Test all optimizations on real query dataset
+- **Expected**: Validate synthetic predictions match reality
+- **Effort**: 4-8 hours (depends on data availability)
+- **Status**: Blocked on dataset access
+- **Value**: De-risks all optimizations
+
+### Priority 3: Reranker Integration Testing (MEDIUM)
+- **What**: Enable cross-encoder for precision improvement
+- **Expected**: +5-10% precision on top-K results
+- **Effort**: 2-3 hours
+- **Status**: Available in code, needs testing infrastructure
+- **Value**: Orthogonal to routing, can be combined
+
+### Priority 4: Refinement & Monitoring (ONGOING)
+- **What**: Monitor per-query-type metrics, refine classifier
+- **Expected**: Improve classifier accuracy based on real distributions
+- **Effort**: Continuous
+- **Status**: After integration
+
+## Status Summary
+
+| Dimension | Status | Next Step |
+|-----------|--------|-----------|
+| RRF Parameters | ✅ Saturated | Stop tuning |
+| Graph Features | ✅ Enabled | Real-world test |
+| Metadata Ranking | ✅ Enabled | Real-world test |
+| Per-Query Routing | ✅ Framework | Integrate into search |
+| Production Config | ✅ 10x optimal | Deploy with routing |
+
+## Pruned Ideas (No Longer Relevant)
+
+❌ **Fuzzy threshold tuning** (Session 3 tested 0.4-0.7, zero effect)
+❌ **Score scaling micro-optimization** (Session 2 tested 2.5-4.5, saturated)
+❌ **RRF k further tuning** (Session 4 tested 30-120, saturated at 60)
+❌ **Neighbor expansion decay micro-tuning** (Session 7 analysis: low ROI <1%)
+❌ **Signal reweighting without per-query logic** (low precision gain, requires classifier)
+
+---
+
+## Cumulative Progress Across Sessions
+
+| Session | Focus | Baseline | Result | Status |
+|---------|-------|----------|--------|--------|
+| 1 | RRF bonuses | 85% syn | 100% syn | ✅ |
+| 2 | Realistic + metadata | 100% syn | 79.9% real | ✅ |
+| 3 | Fetch 5x→20x | 79.9% | 90.5% | ✅ |
+| 4 | Fetch 20x→27x | 90.5% | 94.9% | ✅ |
+| 5 | Precision optimization | 94.9% | 85.5% balanced | ✅ |
+| 6 | Speed optimization | 85.5% | 84.2% fast | ✅ |
+| 7 | Saturation analysis | 84.2% | Confirmed frontier | ✅ |
+| 8 | Arch features (graph/meta) | 84.2% | Enabled, untested | ✅ |
+| 9 | Per-query routing | 84.2% | Framework ready | ✅ |
+
+**Total Improvement**: From 79.9% baseline → 84.2% production (10x fetch) with optimal UX balance + framework for adaptive routing
+
+**Code Quality**: 23 experiments logged, 2 production features enabled, 1 framework implemented and tested

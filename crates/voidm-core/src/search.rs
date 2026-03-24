@@ -326,6 +326,10 @@ pub async fn search(
         }
     }
     
+    // Apply quality-based filtering to improve result reliability
+    let quality_filter_config = crate::quality_filtering::QualityFilterConfig::default();
+    crate::quality_filtering::filter_by_quality(&mut results, &quality_filter_config);
+    
     // Final filter to return only top-K results
     results.truncate(opts.limit);
 

@@ -85,7 +85,7 @@ pub async fn run(
     args: ConsolidateArgs,
     db: &std::sync::Arc<dyn voidm_db_trait::Database>,
     pool: &SqlitePool,
-    _config: &Config,
+    config: &Config,
     json: bool,
 ) -> Result<()> {
     let start = Instant::now();
@@ -118,13 +118,20 @@ pub async fn run(
         }
     }
 
-    // Phase 1: Memory Deduplication (needs raw embeddings access, so uses pool)
-    if !json {
-        eprintln!("\n📋 Phase 1: Memory Deduplication...");
+    // Phase 1: Memory Deduplication (SQLite only - requires direct embedding access)
+    if config.database.backend == "sqlite" {
+        if !json {
+            eprintln!("\n📋 Phase 1: Memory Deduplication...");
+        }
+        phase_1_memory_dedup(&args, pool, &mut results).await?;
+    } else {
+        if !json {
+            eprintln!("\n⏭️  Phase 1: Memory Deduplication (skipped - not available for {} backend)", config.database.backend);
+        }
+        results.warnings.push("Phase 1: Memory deduplication not available for Neo4j backend (requires embedding table access)".to_string());
     }
-    phase_1_memory_dedup(&args, pool, &mut results).await?;
 
-    // Phase 2: Entity Extraction & Concept Creation (use database trait + pool for existence check)
+    // Phase 2: Entity Extraction & Concept Creation (use database trait)
     if !json {
         eprintln!("📋 Phase 2: Entity Extraction...");
     }

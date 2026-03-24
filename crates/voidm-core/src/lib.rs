@@ -15,6 +15,7 @@ pub mod rrf_fusion;
 pub mod fast_vector;
 pub mod vector; // Deprecated: kept for compatibility only
 pub mod query_classifier;
+pub mod context_boosting;
 
 pub use config::Config;
 pub use config::config_path_display;

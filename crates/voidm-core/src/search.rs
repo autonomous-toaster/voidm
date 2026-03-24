@@ -304,6 +304,13 @@ pub async fn search(
         }
     }
     
+    // Apply context-aware score boosting if query has intent
+    let context_boost_config = crate::context_boosting::ContextBoostConfig::default();
+    crate::context_boosting::boost_by_context(&mut results, opts.intent.as_deref(), &context_boost_config);
+    
+    // Re-sort results after context boosting
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    
     // Apply reranking if configured
     #[cfg(feature = "reranker")]
     if let Some(reranker_config) = &config_search.reranker {

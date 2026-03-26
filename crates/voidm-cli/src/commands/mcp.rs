@@ -273,6 +273,7 @@ impl VoidmMcpServer {
             metadata: serde_json::Value::Object(Default::default()),
             links,
             context: params.context,
+            title: params.title,
         };
 
         let resp = crud::add_memory(&self.pool, req, &self.config)
@@ -479,6 +480,8 @@ struct RememberParams {
     tags: Option<Vec<String>>,
     #[serde(default)]
     context: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
     #[serde(default)]
     links: Option<Vec<LinkSpecInput>>,
 }

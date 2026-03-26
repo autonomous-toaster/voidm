@@ -38,6 +38,10 @@ pub struct AddArgs {
     #[arg(long)]
     pub context: Option<String>,
 
+    /// Brief title/summary (max 200 characters, optional)
+    #[arg(long)]
+    pub title: Option<String>,
+
     /// Link to existing memory: <id>:<EDGE_TYPE> or <id>:<EDGE_TYPE>:<note>
     /// RELATES_TO requires a note: <id>:RELATES_TO:<reason>
     #[arg(long = "link")]
@@ -81,6 +85,9 @@ pub async fn run(args: AddArgs, db: &Arc<dyn Database>, pool: &SqlitePool, confi
         let _: voidm_core::models::MemoryContext = ctx.parse()?;
     }
 
+    // Validate and prepare title
+    let validated_title = voidm_core::validate_title(args.title)?;
+
     let req = AddMemoryRequest {
         id: None,
         content: args.content,
@@ -91,6 +98,7 @@ pub async fn run(args: AddArgs, db: &Arc<dyn Database>, pool: &SqlitePool, confi
         metadata: serde_json::Value::Object(metadata),
         links: link_specs,
         context: args.context,
+        title: validated_title,
     };
 
     let resp = crud_trait::add_memory(db, req, config).await?;

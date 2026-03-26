@@ -232,6 +232,8 @@ pub struct Memory {
     pub quality_score: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// Request to add a memory.
@@ -246,6 +248,7 @@ pub struct AddMemoryRequest {
     pub metadata: serde_json::Value,
     pub links: Vec<LinkSpec>,
     pub context: Option<String>,
+    pub title: Option<String>,
 }
 
 /// A link spec from --link id:TYPE or --link id:RELATES_TO:"note"
@@ -274,6 +277,8 @@ pub struct AddMemoryResponse {
     pub duplicate_warning: Option<DuplicateWarning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -358,6 +363,43 @@ pub fn edge_hint(new_type: &str, existing_type: &str) -> &'static str {
     }
 }
 
+/// Validate a title field for memory.
+/// 
+/// Rules:
+/// - If Some, must be non-empty after trimming
+/// - Max length: 200 characters
+/// - Whitespace is trimmed
+/// 
+/// # Arguments
+/// * `title` - Optional title string to validate
+/// 
+/// # Returns
+/// - Ok(Some(trimmed)) if valid and non-empty after trim
+/// - Ok(None) if input is None or empty after trim
+/// - Err with message if validation fails
+pub fn validate_title(title: Option<String>) -> anyhow::Result<Option<String>> {
+    match title {
+        None => Ok(None),
+        Some(t) => {
+            let trimmed = t.trim().to_string();
+            
+            // Empty after trimming: treat as None
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            
+            // Check max length
+            if trimmed.len() > 200 {
+                return Err(anyhow::anyhow!(
+                    "Title must be ≤ 200 characters, got {} characters",
+                    trimmed.len()
+                ));
+            }
+            
+            Ok(Some(trimmed))
+        }
+    }
+}
 
 // ── Batch merge operations ─────────────────────────────────────────────────
 
@@ -386,4 +428,69 @@ pub struct MergeLogEntry {
     pub reason: Option<String>,
     pub created_at: String,
     pub completed_at: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_title_none() {
+        let result = validate_title(None);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_validate_title_valid() {
+        let result = validate_title(Some("Quick summary".to_string()));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some("Quick summary".to_string()));
+    }
+
+    #[test]
+    fn test_validate_title_with_whitespace() {
+        let result = validate_title(Some("  spaces  ".to_string()));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some("spaces".to_string()));
+    }
+
+    #[test]
+    fn test_validate_title_empty_string() {
+        let result = validate_title(Some("".to_string()));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_validate_title_whitespace_only() {
+        let result = validate_title(Some("   ".to_string()));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_validate_title_max_length() {
+        let title = "a".repeat(200);
+        let result = validate_title(Some(title.clone()));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(title));
+    }
+
+    #[test]
+    fn test_validate_title_exceeds_max_length() {
+        let title = "a".repeat(201);
+        let result = validate_title(Some(title));
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("≤ 200 characters"));
+        assert!(err_msg.contains("201"));
+    }
+
+    #[test]
+    fn test_validate_title_boundary_201() {
+        let title = "a".repeat(201);
+        let result = validate_title(Some(title));
+        assert!(result.is_err());
+    }
 }

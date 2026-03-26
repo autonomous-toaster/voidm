@@ -35,4 +35,4 @@ pub use voidm_scoring as quality;
 pub use voidm_query_expansion as query_expansion;
 
 pub use crud::{resolve_id, resolve_id_sqlite};
-pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning, MemoryEdge, OntologyEdgeForMigration};
+pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning, MemoryEdge, OntologyEdgeForMigration, validate_title};

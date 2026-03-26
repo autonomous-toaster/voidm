@@ -311,6 +311,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
                             suggested_links: vec![],
                             duplicate_warning: None,
                             context: dup_mem.context,
+                            title: dup_mem.title,
                         });
                     }
                 }
@@ -372,6 +373,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         suggested_links,
         duplicate_warning,
         context: req.context,
+        title: req.title,
     })
 }
 
@@ -524,6 +526,7 @@ pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
                 updated_at,
                 quality_score,
                 context,
+                title: None,
             }))
         }
     }
@@ -591,6 +594,7 @@ pub async fn list_memories(
             updated_at,
             quality_score,
             context,
+            title: None,
         });
     }
     Ok(memories)

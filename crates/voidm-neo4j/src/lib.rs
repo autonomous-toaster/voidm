@@ -669,9 +669,12 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             .param("created_at", created_at.clone());
 
             graph
-                .run_on(&database, query)
+                .execute_on(&database, query)
                 .await
-                .context("Failed to create concept in Neo4j")?;
+                .map_err(|e| {
+                    tracing::error!("Neo4j add_concept error for '{}': {}", name, e);
+                    anyhow::anyhow!("Failed to create concept '{}' in Neo4j: {}", name, e)
+                })?;
 
             let response = ConceptWithSimilarityWarning {
                 id,
@@ -1309,6 +1312,28 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             }
 
             Ok(None)
+        })
+    }
+
+    fn clean_database(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+
+        Box::pin(async move {
+            // Delete all OntologyEdge relationships and their nodes
+            graph
+                .execute_on(&database, neo4rs::query("MATCH ()-[r:INSTANCE_OF|RELATES_TO|SUPPORTS|CONTRADICTS|PRECEDES|DERIVED_FROM|PART_OF|EXEMPLIFIES]-() DELETE r"))
+                .await
+                .ok();  // Ignore if no edges exist
+
+            // Delete all Concept nodes
+            graph
+                .execute_on(&database, neo4rs::query("MATCH (c:Concept) DELETE c"))
+                .await
+                .context("Failed to delete Concept nodes")?;
+
+            tracing::info!("Neo4j: Database cleaned (all Concept nodes and ontology edges removed)");
+            Ok(())
         })
     }
     

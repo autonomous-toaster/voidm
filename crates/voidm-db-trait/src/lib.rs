@@ -225,4 +225,12 @@ pub trait Database: Send + Sync {
         &self,
         configured_model: &str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<(String, String)>>> + Send + '_>>;
+
+    /// Clean the database by removing all Concept and OntologyEdge nodes
+    /// Only implemented for Neo4j. SQLite backends can safely ignore this.
+    /// Useful when re-running migrations to avoid constraint violations.
+    fn clean_database(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        // Default no-op implementation for SQLite and other backends
+        Box::pin(async { Ok(()) })
+    }
 }

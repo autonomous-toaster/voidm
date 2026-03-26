@@ -29,6 +29,11 @@ pub struct MigrateArgs {
     /// Useful when schema changes and you need to backfill new fields
     #[arg(long)]
     pub update_all: bool,
+
+    /// Clean target database before migration (DELETE all Concept and OntologyEdge nodes)
+    /// Only applies to Neo4j migrations. Use with caution!
+    #[arg(long)]
+    pub clean: bool,
 }
 
 pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<&str>, json: bool) -> Result<()> {
@@ -89,6 +94,17 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
     if !args.dry_run {
         source_db.ensure_schema().await?;
         dest_db.ensure_schema().await?;
+    }
+
+    // Clean target database if requested (Neo4j only)
+    if args.clean && !args.dry_run && to_backend == "neo4j" {
+        if !json {
+            println!("🧹 Cleaning target Neo4j database (removing all Concept and OntologyEdge nodes)...");
+        }
+        dest_db.clean_database().await?;
+        if !json {
+            println!("✓ Database cleaned");
+        }
     }
 
     // Migrate memories
@@ -205,6 +221,7 @@ async fn migrate_concepts(
 
     let mut migrated = 0;
     let mut skipped = 0;
+    let mut failed = 0;
 
     for concept in concepts {
         // Filter by scope if specified
@@ -223,16 +240,29 @@ async fn migrate_concepts(
             continue;
         }
 
-        let _ = dest.add_concept(&concept.name, concept.description.as_deref(), concept.scope.as_deref(), Some(&concept.id)).await?;
-        migrated += 1;
-
-        if !json && migrated % 100 == 0 {
-            println!("  Migrated {} concepts...", migrated);
+        match dest.add_concept(&concept.name, concept.description.as_deref(), concept.scope.as_deref(), Some(&concept.id)).await {
+            Ok(_) => {
+                migrated += 1;
+                if !json && migrated % 100 == 0 {
+                    println!("  Migrated {} concepts...", migrated);
+                }
+            }
+            Err(e) => {
+                if !json && failed < 5 {
+                    eprintln!("  Error migrating concept '{}' ({}): {}", concept.name, concept.id, e);
+                }
+                failed += 1;
+            }
         }
     }
 
     if !json {
-        println!("Concepts: {} migrated, {} skipped", migrated, skipped);
+        println!("Concepts: {} migrated, {} failed, {} skipped", migrated, failed, skipped);
+    }
+
+    // Return error only if ALL concepts failed
+    if failed > 0 && migrated == 0 {
+        anyhow::bail!("Failed to migrate any concepts (total failures: {})", failed);
     }
 
     Ok(())

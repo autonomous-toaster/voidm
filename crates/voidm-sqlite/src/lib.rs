@@ -154,6 +154,7 @@ impl Database for SqliteDatabase {
                 "created_at": resp.created_at,
                 "quality_score": resp.quality_score,
                 "context": resp.context,
+                "title": resp.title,
                 "suggested_links": resp.suggested_links,
                 "duplicate_warning": resp.duplicate_warning,
             }))

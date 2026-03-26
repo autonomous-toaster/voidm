@@ -212,6 +212,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                 suggested_links: vec![],
                 duplicate_warning: None,
                 context: req.context,
+                title: req.title,
             };
 
             serde_json::to_value(response).context("Failed to serialize AddMemoryResponse")
@@ -246,6 +247,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                     updated_at: node.get("updated_at").context("Missing updated_at")?,
                     quality_score: None,
                     context: node.get("context").ok(),
+                    title: node.get("title").ok(),
                 };
                 
                 Ok(Some(serde_json::to_value(memory).context("Failed to serialize Memory")?))
@@ -284,6 +286,7 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                     updated_at: node.get("updated_at").unwrap_or_default(),
                     quality_score: None,
                     context: node.get("context").ok(),
+                    title: node.get("title").ok(),
                 };
                 
                 let memory_json = serde_json::to_value(memory).context("Failed to serialize Memory")?;

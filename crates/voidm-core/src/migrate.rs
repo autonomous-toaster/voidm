@@ -15,6 +15,7 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
     }
     upgrade_add_quality_score(pool).await?;
     upgrade_add_context(pool).await?;
+    upgrade_add_title(pool).await?;
     Ok(())
 }
 
@@ -52,6 +53,28 @@ async fn upgrade_add_context(pool: &SqlitePool) -> Result<()> {
 
     if !column_exists.0 {
         sqlx::query("ALTER TABLE memories ADD COLUMN context TEXT")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Add title column to existing memories table
+/// Safe to run multiple times (idempotent via IF NOT EXISTS... / PRAGMA table_info)
+async fn upgrade_add_title(pool: &SqlitePool) -> Result<()> {
+    // Check if title column already exists
+    let column_exists: (bool,) = sqlx::query_as(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('memories') WHERE name = 'title'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !column_exists.0 {
+        sqlx::query("ALTER TABLE memories ADD COLUMN title TEXT")
+            .execute(pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_title ON memories(title)")
             .execute(pool)
             .await?;
     }

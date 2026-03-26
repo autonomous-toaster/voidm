@@ -35,6 +35,9 @@ pub struct SearchResult {
     /// Quality score (0.0-1.0) based on content genericity, abstraction, etc.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality_score: Option<f32>,
+    /// Optional title field for brief summary
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -94,6 +97,58 @@ pub struct SearchResponse {
     pub threshold_applied: Option<f32>,
     /// Best score seen before threshold filtering (None if no results at all).
     pub best_score: Option<f32>,
+}
+
+/// Calculate title relevance score for a query match
+/// 
+/// Scoring:
+/// - Exact title match: 2.0
+/// - Title starts with query: 1.5
+/// - Query substring in title: 1.0
+/// - No match: 0.0
+fn calculate_title_relevance(title: &Option<String>, query: &str) -> f32 {
+    match title {
+        None => 0.0,
+        Some(t) => {
+            let title_lower = t.to_lowercase();
+            let query_lower = query.to_lowercase();
+            
+            // Exact match
+            if title_lower == query_lower {
+                2.0
+            }
+            // Prefix match
+            else if title_lower.starts_with(&query_lower) {
+                1.5
+            }
+            // Substring match
+            else if title_lower.contains(&query_lower) {
+                1.0
+            }
+            // No match
+            else {
+                0.0
+            }
+        }
+    }
+}
+
+/// Rerank results by title relevance using weighted formula
+/// 
+/// Formula: (title_relevance * 0.3) + (existing_score * 0.7)
+/// This gives 30% weight to title matches, 70% to content relevance
+fn rerank_by_title_relevance(results: &mut Vec<SearchResult>, query: &str) {
+    for result in results.iter_mut() {
+        let title_score = calculate_title_relevance(&result.title, query);
+        // Combine with existing score: 30% title, 70% content
+        let new_score = (title_score * 0.3) + (result.score * 0.7);
+        result.score = new_score;
+    }
+    
+    // Re-sort by combined score
+    results.sort_by(|a, b| {
+        b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+    });
 }
 
 /// Full hybrid search pipeline.
@@ -296,6 +351,7 @@ pub async fn search(
                 hop_depth: None,
                 parent_id: None,
                 quality_score: m.quality_score,
+                title: m.title,
             });
 
             if results.len() >= rrf_limit {
@@ -352,6 +408,10 @@ pub async fn search(
         }
     }
 
+    // Apply title-based reranking to boost title matches
+    tracing::debug!("Search: Applying title-based reranking");
+    rerank_by_title_relevance(&mut results, &opts.query);
+    
     tracing::info!("Search: Returning {} results", results.len());
 
     Ok(SearchResponse {
@@ -392,6 +452,7 @@ async fn fetch_memories_newest(db: &dyn voidm_db_trait::Database, opts: &SearchO
             hop_depth: None,
             parent_id: None,
             quality_score: None,
+            title: memory.title,
         });
     }
     Ok(results)
@@ -652,5 +713,142 @@ pub async fn query_citation_count(
     // Optimization: Use batch query for multiple memories
     // Index available: idx_graph_edges_target
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_title_relevance_none() {
+        let result = calculate_title_relevance(&None, "test");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_calculate_title_relevance_exact_match() {
+        let result = calculate_title_relevance(&Some("Database Optimization".to_string()), "Database Optimization");
+        assert_eq!(result, 2.0);
+    }
+
+    #[test]
+    fn test_calculate_title_relevance_exact_match_case_insensitive() {
+        let result = calculate_title_relevance(&Some("Database Optimization".to_string()), "database optimization");
+        assert_eq!(result, 2.0);
+    }
+
+    #[test]
+    fn test_calculate_title_relevance_prefix_match() {
+        let result = calculate_title_relevance(&Some("Database Optimization Techniques".to_string()), "Database Optimization");
+        assert_eq!(result, 1.5);
+    }
+
+    #[test]
+    fn test_calculate_title_relevance_substring_match() {
+        let result = calculate_title_relevance(&Some("Advanced Database Optimization".to_string()), "Database");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_calculate_title_relevance_no_match() {
+        let result = calculate_title_relevance(&Some("Rust Programming".to_string()), "Python");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_rerank_by_title_relevance_exact_match_boosts() {
+        let mut results = vec![
+            SearchResult {
+                id: "1".to_string(),
+                score: 0.5,
+                memory_type: "semantic".to_string(),
+                content: "Some content".to_string(),
+                scopes: vec![],
+                tags: vec![],
+                importance: 5,
+                created_at: "2024-01-01".to_string(),
+                source: "search".to_string(),
+                rel_type: None,
+                direction: None,
+                hop_depth: None,
+                parent_id: None,
+                quality_score: None,
+                title: Some("Database".to_string()),
+            },
+            SearchResult {
+                id: "2".to_string(),
+                score: 0.7,
+                memory_type: "semantic".to_string(),
+                content: "Other content".to_string(),
+                scopes: vec![],
+                tags: vec![],
+                importance: 5,
+                created_at: "2024-01-02".to_string(),
+                source: "search".to_string(),
+                rel_type: None,
+                direction: None,
+                hop_depth: None,
+                parent_id: None,
+                quality_score: None,
+                title: None,
+            },
+        ];
+
+        rerank_by_title_relevance(&mut results, "Database");
+        
+        // Result 1 has exact title match: (2.0 * 0.3) + (0.5 * 0.7) = 0.6 + 0.35 = 0.95
+        // Result 2 has no title match: (0.0 * 0.3) + (0.7 * 0.7) = 0.0 + 0.49 = 0.49
+        // Result 1 should rank first
+        assert!(results[0].id == "1");
+        assert!(results[0].score > results[1].score);
+    }
+
+    #[test]
+    fn test_rerank_by_title_relevance_sorting() {
+        let mut results = vec![
+            SearchResult {
+                id: "a".to_string(),
+                score: 0.8,
+                memory_type: "semantic".to_string(),
+                content: "Content A".to_string(),
+                scopes: vec![],
+                tags: vec![],
+                importance: 5,
+                created_at: "2024-01-01".to_string(),
+                source: "search".to_string(),
+                rel_type: None,
+                direction: None,
+                hop_depth: None,
+                parent_id: None,
+                quality_score: None,
+                title: None,
+            },
+            SearchResult {
+                id: "b".to_string(),
+                score: 0.6,
+                memory_type: "semantic".to_string(),
+                content: "Content B".to_string(),
+                scopes: vec![],
+                tags: vec![],
+                importance: 5,
+                created_at: "2024-01-02".to_string(),
+                source: "search".to_string(),
+                rel_type: None,
+                direction: None,
+                hop_depth: None,
+                parent_id: None,
+                quality_score: None,
+                title: Some("Test".to_string()),
+            },
+        ];
+
+        rerank_by_title_relevance(&mut results, "Test");
+        
+        // Result b has exact match: (2.0 * 0.3) + (0.6 * 0.7) = 0.6 + 0.42 = 1.02
+        // Result a has no match: (0.0 * 0.3) + (0.8 * 0.7) = 0.0 + 0.56 = 0.56
+        // Result b should rank first despite lower original score
+        assert_eq!(results[0].id, "b");
+        assert_eq!(results[1].id, "a");
+    }
 }
 

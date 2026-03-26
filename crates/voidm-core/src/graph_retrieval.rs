@@ -192,6 +192,7 @@ pub async fn find_related_by_tags(
                     hop_depth: None,
                     parent_id: Some(direct_result.id.clone()),
                     quality_score: None,
+                    title: memory.title,
                 });
             }
         }

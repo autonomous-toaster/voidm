@@ -19,6 +19,9 @@ pub mod context_boosting;
 pub mod importance_boosting;
 pub mod quality_filtering;
 pub mod recency_boosting;
+pub mod migration_export;
+pub mod vector_format;
+pub mod db_migration;
 
 pub use config::Config;
 pub use config::config_path_display;
@@ -36,3 +39,4 @@ pub use voidm_query_expansion as query_expansion;
 
 pub use crud::{resolve_id, resolve_id_sqlite};
 pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning, MemoryEdge, OntologyEdgeForMigration, validate_title};
+pub use migration_export::{VectorBackup, MigrationCheckpoint};

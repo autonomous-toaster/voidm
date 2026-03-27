@@ -11,16 +11,26 @@ mod tests {
         let strategy = ChunkingStrategy::default();
         // Use content large enough to require multiple chunks
         let content = "First paragraph with more content to make it longer. This paragraph should be substantial enough to test chunking properly.\n\nSecond paragraph with more details and additional content. This should also be large enough to trigger chunking behavior.\n\nThird paragraph with additional information and context. Making sure it's long enough to push past the target size.\n\nFourth paragraph to ensure multiple chunks. More text here.";
-        let chunks = chunk_smart(content, &strategy).unwrap();
+        
+        // Use a test memory ID
+        let memory_id = "test-mem-123";
+        let chunks = chunk_smart(memory_id, content, &strategy).unwrap();
         
         println!("Content length: {} chars", content.len());
         println!("Chunks: {}", chunks.len());
         for chunk in &chunks {
-            println!("  - [{}] {} chars: {}", chunk.index, chunk.size, &chunk.content[..30.min(chunk.content.len())]);
+            println!("  - [{}] {} chars: {}", chunk.id, chunk.size, &chunk.content[..30.min(chunk.content.len())]);
         }
         
         assert!(chunks.len() >= 1, "Should have at least one chunk");
         assert!(chunks.iter().all(|c| c.size > 0), "All chunks should have content");
+        assert!(chunks.iter().all(|c| c.id.starts_with("mchk_")), "All chunk IDs should have mchk_ prefix");
+        
+        // Test determinism: same memory_id + content = same chunk IDs
+        let chunks2 = chunk_smart(memory_id, content, &strategy).unwrap();
+        for (c1, c2) in chunks.iter().zip(chunks2.iter()) {
+            assert_eq!(c1.id, c2.id, "Same input should produce same chunk ID");
+        }
     }
 
     #[test]
@@ -65,6 +75,7 @@ mod tests {
     fn test_phase_a_integration() {
         // Simulate Phase A flow
         let memory = "OAuth2 is an authorization protocol.\n\nIt uses bearer tokens.\n\nTokens are validated on each request.";
+        let memory_id = "oauth-doc-456";
         
         // 1. Validate length
         let validation = validate_memory_length(memory).unwrap();
@@ -73,13 +84,16 @@ mod tests {
         
         // 2. Chunk memory
         let strategy = ChunkingStrategy::default();
-        let chunks = chunk_smart(memory, &strategy).unwrap();
+        let chunks = chunk_smart(memory_id, memory, &strategy).unwrap();
         println!("✓ Chunked into {} chunks", chunks.len());
         
         // 3. Score each chunk
         for chunk in &chunks {
             let score = estimate_coherence(&chunk.content);
-            println!("  Chunk {}: {:.2} {}", chunk.index, score.final_score(), score.quality_level());
+            println!("  Chunk {}: {:.2} {}", chunk.id, score.final_score(), score.quality_level());
+            
+            // Verify chunk ID format
+            assert!(chunk.id.starts_with("mchk_"), "Chunk ID should start with mchk_");
         }
     }
 }

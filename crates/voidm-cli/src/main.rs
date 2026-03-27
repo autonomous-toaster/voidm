@@ -81,6 +81,8 @@ pub enum Commands {
     CheckUpdate(commands::update::CheckUpdateArgs),
     /// Consolidate: unified memory cleanup & concept management
     Consolidate(commands::consolidate::ConsolidateArgs),
+    /// Validate Phase A chunking algorithm on real data
+    Validate(commands::validate::ValidationArgs),
 }
 
 #[tokio::main]
@@ -224,6 +226,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Migrate(_) => unreachable!(),
                 Commands::CheckUpdate(_) => unreachable!(),
                 Commands::Consolidate(args) => commands::consolidate::run(args, &db, &dummy_pool, &config, cli.json).await,
+                Commands::Validate(_) => anyhow::bail!("Validate command is only available with SQLite backend"),
                 Commands::Stats(args) => commands::stats::run(args, &db, &dummy_pool, &config, cli.json).await,
                 Commands::Mcp(_) => anyhow::bail!("MCP server is only available with SQLite backend"),
             }
@@ -271,6 +274,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Migrate(_) => unreachable!(),
                 Commands::CheckUpdate(_) => unreachable!(),
                 Commands::Consolidate(args) => commands::consolidate::run(args, &db, &pool, &config, cli.json).await,
+                Commands::Validate(args) => commands::validate::run(args, &pool).await,
                 Commands::Stats(args) => commands::stats::run(args, &db, &pool, &config, cli.json).await,
                 Commands::Mcp(args) => commands::mcp::run(args, pool.clone(), config).await,
             };

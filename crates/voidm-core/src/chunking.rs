@@ -294,7 +294,7 @@ mod tests {
     fn test_chunk_by_paragraphs() {
         let strategy = ChunkingStrategy::default();
         let content = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
-        let chunks = chunk_smart(content, &strategy).unwrap();
+        let chunks = chunk_smart("test-mem", content, &strategy).unwrap();
         
         assert!(chunks.len() >= 2);
         assert_eq!(chunks[0].break_type, BreakType::Paragraph);
@@ -307,7 +307,7 @@ mod tests {
         strategy.target_size = 100;
         
         let content = "This is a very long paragraph that should be broken into smaller pieces. It contains many words and should be split at word boundaries to preserve readability.";
-        let chunks = chunk_smart(content, &strategy).unwrap();
+        let chunks = chunk_smart("test-mem", content, &strategy).unwrap();
         
         assert!(chunks.len() > 1);
         // Should use sentence or word breaks, not character
@@ -318,7 +318,7 @@ mod tests {
     fn test_chunk_respects_min_size() {
         let strategy = ChunkingStrategy::default();
         let content = "Short.\n\nAnother.";
-        let chunks = chunk_smart(content, &strategy).unwrap();
+        let chunks = chunk_smart("test-mem", content, &strategy).unwrap();
         
         // Very short content might not produce chunks if below min
         for chunk in chunks {
@@ -330,7 +330,7 @@ mod tests {
     fn test_chunk_respects_max_size() {
         let strategy = ChunkingStrategy::default();
         let content = "First.\n\nSecond.\n\nThird.";
-        let chunks = chunk_smart(content, &strategy).unwrap();
+        let chunks = chunk_smart("test-mem", content, &strategy).unwrap();
         
         for chunk in chunks {
             assert!(chunk.size <= strategy.max_chunk_size);
@@ -341,7 +341,7 @@ mod tests {
     fn test_chunk_code_block() {
         let strategy = ChunkingStrategy::default();
         let content = "def hello():\n    print('world')\n    return True";
-        let chunks = chunk_smart(content, &strategy).unwrap();
+        let chunks = chunk_smart("test-mem", content, &strategy).unwrap();
         
         assert!(!chunks.is_empty());
         // Should preserve code integrity
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn test_chunk_empty_content() {
         let strategy = ChunkingStrategy::default();
-        let chunks = chunk_smart("", &strategy).unwrap();
+        let chunks = chunk_smart("", "", &strategy).unwrap();
         assert_eq!(chunks.len(), 0);
     }
 
@@ -361,7 +361,7 @@ mod tests {
     fn test_chunk_single_paragraph() {
         let strategy = ChunkingStrategy::default();
         let content = "Single paragraph with just one section.";
-        let chunks = chunk_smart(content, &strategy).unwrap();
+        let chunks = chunk_smart("test-mem", content, &strategy).unwrap();
         
         assert!(chunks.len() >= 1);
         assert_eq!(chunks[0].content.trim(), content.trim());
@@ -373,7 +373,7 @@ mod tests {
         strategy.target_size = 50;
         
         let content = "First sentence. Second sentence. Third sentence.";
-        let chunks = chunk_smart(content, &strategy).unwrap();
+        let chunks = chunk_smart("test-mem", content, &strategy).unwrap();
         
         assert!(chunks.len() > 1);
         // Should use sentence breaks if paragraphs unavailable

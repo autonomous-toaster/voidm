@@ -28,6 +28,9 @@ pub mod coherence;
 
 pub use config::Config;
 pub use config::config_path_display;
+pub use validation::validate_memory_length;
+pub use chunking::{chunk_smart, ChunkingStrategy, Chunk};
+pub use coherence::estimate_coherence;
 
 // Re-export from separate crates
 #[cfg(feature = "ner")]

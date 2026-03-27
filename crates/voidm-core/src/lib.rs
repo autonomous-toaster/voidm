@@ -22,6 +22,9 @@ pub mod recency_boosting;
 pub mod migration_export;
 pub mod vector_format;
 pub mod db_migration;
+pub mod chunking;
+pub mod validation;
+pub mod coherence;
 
 pub use config::Config;
 pub use config::config_path_display;

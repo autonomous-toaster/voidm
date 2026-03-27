@@ -1,16 +1,22 @@
 /// Memory length validation with soft and hard limits.
 ///
 /// Constraints:
-/// - Soft limit: 10,000 chars (warning to user)
-/// - Hard limit: 50,000 chars (rejection with error)
-/// - Target: 3,000-8,000 chars (guidance)
+/// - Soft limit: 6,000 chars (warning, just above target)
+/// - Hard limit: 15,000 chars (absolute maximum)
+/// - Target: 3,000-8,000 chars (optimal range)
+///
+/// Rationale:
+/// - Phase A targets 350 chars per chunk
+/// - Memory > 8K creates 20+ chunks (coherence degrades)
+/// - Memory > 15K becomes unwieldy for embedding/NLI
+/// - Soft limit at 6K catches oversized memories early
 
 use anyhow::{anyhow, Result};
 
-pub const MEMORY_SOFT_LIMIT: usize = 10_000;
-pub const MEMORY_HARD_LIMIT: usize = 50_000;
-pub const MEMORY_TARGET_MIN: usize = 3_000;
-pub const MEMORY_TARGET_MAX: usize = 8_000;
+pub const MEMORY_SOFT_LIMIT: usize = 6_000;      // Just above target, catches oversized
+pub const MEMORY_HARD_LIMIT: usize = 15_000;     // Absolute max before embedding issues
+pub const MEMORY_TARGET_MIN: usize = 3_000;      // Minimum for meaningful content
+pub const MEMORY_TARGET_MAX: usize = 8_000;      // Maximum for good coherence
 
 #[derive(Debug, Clone)]
 pub struct MemoryLengthValidation {

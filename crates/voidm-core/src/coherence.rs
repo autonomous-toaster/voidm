@@ -65,11 +65,12 @@ impl CoherenceScore {
 /// Estimate coherence of a chunk based on heuristics.
 ///
 /// Heuristics:
-/// - Sentence count: Single sentence = lower coherence
-/// - Sentence length variation: Similar lengths = more coherent
-/// - Transition words: and, but, however, therefore = more coherent
+/// - Sentence count: More sentences = more complete
+/// - Connector words: and, but, however, therefore, because, also, additionally
+/// - Sentence transitions: Penalize abrupt topic shifts
+/// - Keyword overlap: Repeated terms indicate topical focus
+/// - Length penalty: Very short chunks = lower coherence potential
 /// - Capitalization: Multiple proper nouns = metadata score
-/// - Punctuation: Balanced = good coherence
 ///
 /// # Example
 /// ```
@@ -77,39 +78,112 @@ impl CoherenceScore {
 /// assert!(score.final_score() > 0.5);
 /// ```
 pub fn estimate_coherence(content: &str) -> CoherenceScore {
-    // Split into sentences
-    let sentences: Vec<&str> = content.split_terminator('.').collect();
+    // Split into sentences (better handling of abbreviations)
+    let sentences: Vec<&str> = content
+        .split(|c| c == '.' || c == '!' || c == '?')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    
     let sentence_count = sentences.len();
+    let word_count = content.split_whitespace().count();
 
-    // Estimate completeness: more sentences = more complete
-    let completeness = ((sentence_count as f32).min(5.0) / 5.0).min(1.0);
-
-    // Estimate coherence: presence of connectors
-    let has_connectors = content.contains(" and ")
-        || content.contains(" but ")
-        || content.contains(" however ")
-        || content.contains(" therefore ")
-        || content.contains(" because ");
-    let coherence = if has_connectors { 0.75 } else { 0.5 };
-
-    // Estimate relevance: avoid topic jumping (heuristic)
-    let relevance = if sentence_count <= 1 {
-        0.5 // Single sentence is less coherent
-    } else {
-        0.7
+    // COMPLETENESS: More sentences = more complete thought
+    // Scale: 1 sentence = 0.2, 2-3 = 0.5, 4+ = 0.9
+    let completeness = match sentence_count {
+        0 => 0.0,
+        1 => 0.3,
+        2 => 0.5,
+        3 => 0.65,
+        4 => 0.8,
+        5..=10 => 0.95,
+        _ => 1.0,
     };
 
-    // Estimate specificity: check for specific numbers, names
-    let has_specificity = content.chars().any(|c| c.is_numeric())
-        || content.chars().filter(|c| c.is_uppercase()).count() > 3;
-    let specificity = if has_specificity { 0.75 } else { 0.5 };
+    // COHERENCE: Presence of connector words + sentence transitions
+    let connector_words = vec![
+        " and ", " but ", " however ", " therefore ", " because ",
+        " also ", " additionally ", " furthermore ", " moreover ",
+        " likewise ", " conversely ", " instead ", " meanwhile ",
+    ];
+    let connector_count = connector_words
+        .iter()
+        .filter(|conn| content.contains(**conn))
+        .count();
+    
+    // Check for abrupt transitions (sentences with minimal word overlap)
+    let mut topic_shift_count = 0;
+    for i in 0..sentences.len().saturating_sub(1) {
+        let curr_words: Vec<_> = sentences[i]
+            .split_whitespace()
+            .map(|w| w.to_lowercase())
+            .collect();
+        let next_words: Vec<_> = sentences[i + 1]
+            .split_whitespace()
+            .map(|w| w.to_lowercase())
+            .collect();
+        
+        let overlap = curr_words.iter()
+            .filter(|w| next_words.contains(w))
+            .count();
+        
+        if overlap < 2 {
+            topic_shift_count += 1; // Abrupt transition
+        }
+    }
+    
+    // Coherence score: connectors + topic continuity
+    let coherence_base = if connector_count > 0 { 0.8 } else { 0.5 };
+    let topic_penalty = (topic_shift_count as f32) * 0.05; // -5% per abrupt shift
+    let coherence = (coherence_base - topic_penalty).max(0.2).min(1.0);
 
-    // Estimate metadata: proper nouns (capitalized words)
+    // RELEVANCE: Penalize if too many unique concepts (topic jumping)
+    let unique_words = content
+        .split_whitespace()
+        .map(|w| w.to_lowercase())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    
+    let word_uniqueness_ratio = unique_words as f32 / word_count.max(1) as f32;
+    // If >70% unique words, likely topic jumping
+    let relevance = if word_uniqueness_ratio > 0.7 {
+        0.4 // Low relevance: too many new concepts
+    } else if word_uniqueness_ratio > 0.5 {
+        0.6 // Medium: some repetition
+    } else {
+        0.85 // Good: focused topic
+    };
+
+    // SPECIFICITY: Numbers, dates, specific terms vs vague language
+    let has_numbers = content.chars().any(|c| c.is_numeric());
+    let vague_words = vec!["very", "quite", "some", "maybe", "probably", "possibly"];
+    let vague_count = vague_words
+        .iter()
+        .filter(|vague| content.contains(**vague))
+        .count();
+    
+    let specificity_base = if has_numbers { 0.8 } else { 0.6 };
+    let vague_penalty = (vague_count as f32) * 0.1; // -10% per vague word
+    let specificity = (specificity_base - vague_penalty).max(0.2).min(1.0);
+
+    // METADATA: Proper nouns (capitalized words, uppercase acronyms)
     let capitalized_words = content
         .split_whitespace()
-        .filter(|w| w.chars().next().map_or(false, |c| c.is_uppercase()))
+        .filter(|w| {
+            w.chars()
+                .next()
+                .map_or(false, |c| c.is_uppercase())
+        })
         .count();
-    let metadata = ((capitalized_words as f32) / 5.0).min(1.0);
+    
+    let all_caps_acronyms = content
+        .split_whitespace()
+        .filter(|w| w.len() >= 2 && w.chars().all(|c| c.is_uppercase()))
+        .count();
+    
+    let metadata = ((capitalized_words as f32 + all_caps_acronyms as f32 * 2.0) / 10.0)
+        .min(1.0)
+        .max(0.1);
 
     CoherenceScore {
         completeness,

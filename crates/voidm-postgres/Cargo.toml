@@ -17,3 +17,6 @@ strsim = { workspace = true }
 
 # Trait definition from voidm-db-trait
 voidm-db-trait = { path = "../voidm-db-trait" }
+
+# Core library for similarity metrics
+voidm-core = { path = "../voidm-core" }

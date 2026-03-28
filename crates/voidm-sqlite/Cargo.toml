@@ -14,6 +14,7 @@ chrono = { workspace = true }
 libsqlite3-sys = { workspace = true }
 sqlite-vec = { workspace = true }
 once_cell = { workspace = true }
+tracing = { workspace = true }
 
 # Trait definition
 voidm-db-trait = { path = "../voidm-db-trait" }

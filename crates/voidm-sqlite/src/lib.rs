@@ -19,6 +19,7 @@ use std::pin::Pin;
 use std::future::Future;
 use std::str::FromStr;
 use uuid::Uuid;
+use tracing;
 use voidm_db_trait::Database;
 use voidm_core::query::translator::QueryTranslator;
 use voidm_core::query::sqlite::SqliteTranslator;
@@ -813,14 +814,149 @@ impl Database for SqliteDatabase {
 
     fn store_chunk_embedding(
         &self,
-        _chunk_id: String,
+        chunk_id: String,
         _memory_id: String,
-        _embedding: Vec<f32>,
+        embedding: Vec<f32>,
     ) -> Pin<Box<dyn Future<Output = Result<(String, usize)>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let dim = embedding.len();
+
         Box::pin(async move {
-            // SQLite doesn't persist embeddings for chunks
-            // This is a no-op for SQLite, Neo4j will implement storage
-            Ok((_chunk_id, 0))
+            // SQLite with sqlite-vector extension
+            // Store embedding as f32 vector directly
+            let embedding_bytes: Vec<u8> = embedding
+                .iter()
+                .flat_map(|f| f.to_le_bytes().to_vec())
+                .collect();
+
+            let result = sqlx::query(
+                "UPDATE memory_chunks 
+                 SET embedding = ?1, embedding_dim = ?2 
+                 WHERE id = ?3"
+            )
+            .bind(&embedding_bytes)
+            .bind(dim as i32)
+            .bind(&chunk_id)
+            .execute(&pool)
+            .await;
+
+            match result {
+                Ok(_) => {
+                    tracing::debug!("SQLite: Stored {}D embedding for chunk {}", dim, chunk_id);
+                    Ok((chunk_id, dim))
+                }
+                Err(e) => {
+                    tracing::warn!("SQLite: Failed to store embedding: {}", e);
+                    Ok((chunk_id, 0))
+                }
+            }
+        })
+    }
+
+    fn get_chunk_embedding(
+        &self,
+        chunk_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<f32>>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let chunk_id = chunk_id.to_string();
+
+        Box::pin(async move {
+            let result: Option<(Vec<u8>, i32)> = sqlx::query_as(
+                "SELECT embedding, embedding_dim FROM memory_chunks WHERE id = ?1"
+            )
+            .bind(&chunk_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some((embedding_bytes, dim)) = result {
+                let dim = dim as usize;
+                let mut embedding = Vec::with_capacity(dim);
+                
+                for i in 0..dim {
+                    let start = i * 4;
+                    let end = start + 4;
+                    if end <= embedding_bytes.len() {
+                        let bytes = [
+                            embedding_bytes[start],
+                            embedding_bytes[start + 1],
+                            embedding_bytes[start + 2],
+                            embedding_bytes[start + 3],
+                        ];
+                        embedding.push(f32::from_le_bytes(bytes));
+                    }
+                }
+                
+                if embedding.len() == dim {
+                    return Ok(Some(embedding));
+                }
+            }
+
+            Ok(None)
+        })
+    }
+
+    fn search_by_embedding(
+        &self,
+        query_embedding: Vec<f32>,
+        limit: usize,
+        min_similarity: f32,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let dim = query_embedding.len();
+
+        Box::pin(async move {
+            // SQLite with sqlite-vector: use vector distance operations
+            // Fetch all chunks with embeddings
+            let chunks: Vec<(String, Vec<u8>, i32)> = sqlx::query_as(
+                "SELECT id, embedding, embedding_dim FROM memory_chunks 
+                 WHERE embedding IS NOT NULL AND embedding_dim = ?1
+                 LIMIT 10000"
+            )
+            .bind(dim as i32)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default();
+
+            let mut similarities = Vec::new();
+            
+            for (chunk_id, embedding_bytes, d) in chunks {
+                let d = d as usize;
+                if d != dim {
+                    continue;
+                }
+                
+                let mut embedding = Vec::with_capacity(dim);
+                for i in 0..dim {
+                    let start = i * 4;
+                    let end = start + 4;
+                    if end <= embedding_bytes.len() {
+                        let bytes = [
+                            embedding_bytes[start],
+                            embedding_bytes[start + 1],
+                            embedding_bytes[start + 2],
+                            embedding_bytes[start + 3],
+                        ];
+                        embedding.push(f32::from_le_bytes(bytes));
+                    }
+                }
+                
+                if embedding.len() == dim {
+                    if let Ok(similarity) = voidm_core::similarity::cosine_similarity(&query_embedding, &embedding) {
+                        if similarity >= min_similarity {
+                            similarities.push((chunk_id, similarity));
+                        }
+                    }
+                }
+            }
+
+            // Sort by similarity descending
+            similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            similarities.truncate(limit);
+
+            tracing::debug!("SQLite: Found {} similar chunks (cosine)", similarities.len());
+            Ok(similarities)
         })
     }
 }

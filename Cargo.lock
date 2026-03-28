@@ -4938,6 +4938,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "voidm-core",
  "voidm-db-trait",
 ]
 
@@ -5006,6 +5007,7 @@ dependencies = [
  "sqlite-vec",
  "sqlx",
  "tokio",
+ "tracing",
  "uuid",
  "voidm-core",
  "voidm-db-trait",

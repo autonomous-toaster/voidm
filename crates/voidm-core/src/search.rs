@@ -52,11 +52,11 @@ impl std::str::FromStr for SearchMode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             // All modes map to RRF (first-class, only method)
-            "hybrid" | "hybrid-rrf" | "rrf" | "semantic" | "keyword" | "fuzzy" | "bm25" => {
+            "hybrid" | "hybrid-rrf" | "rrf" | "semantic" | "keyword" | "fuzzy" | "bm25" | "vector" => {
                 Ok(SearchMode::Rrf)
             }
             other => Err(anyhow::anyhow!(
-                "Unknown search mode: '{}'. All modes map to RRF (Reciprocal Rank Fusion): hybrid, rrf, semantic, keyword, fuzzy, bm25",
+                "Unknown search mode: '{}'. All modes map to RRF (Reciprocal Rank Fusion): hybrid, rrf, semantic, keyword, fuzzy, bm25, vector",
                 other
             )),
         }

@@ -1481,6 +1481,130 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             Ok((chunk_id, dim))
         })
     }
+
+    fn get_chunk_embedding(
+        &self,
+        chunk_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<f32>>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let chunk_id = chunk_id.to_string();
+
+        Box::pin(async move {
+            let cypher = "MATCH (c:MemoryChunk {id: $id}) 
+                          RETURN c.embedding as embedding, c.embedding_dim as dim";
+            
+            let mut result = graph
+                .execute_on(&database, 
+                    neo4rs::query(cypher)
+                        .param("id", chunk_id.clone())
+                )
+                .await
+                .context("Failed to fetch chunk embedding")?;
+
+            if let Ok(Some(row)) = result.next().await {
+                if let (Ok(embedding_bytes), Ok(dim)) = (
+                    row.get::<Vec<u8>>("embedding"),
+                    row.get::<i64>("dim"),
+                ) {
+                    let dim = dim as usize;
+                    let mut embedding = Vec::with_capacity(dim);
+                    
+                    for i in 0..dim {
+                        let start = i * 4;
+                        let end = start + 4;
+                        if end <= embedding_bytes.len() {
+                            let bytes = [
+                                embedding_bytes[start],
+                                embedding_bytes[start + 1],
+                                embedding_bytes[start + 2],
+                                embedding_bytes[start + 3],
+                            ];
+                            embedding.push(f32::from_le_bytes(bytes));
+                        }
+                    }
+                    
+                    if embedding.len() == dim {
+                        return Ok(Some(embedding));
+                    }
+                }
+            }
+
+            Ok(None)
+        })
+    }
+
+    fn search_by_embedding(
+        &self,
+        query_embedding: Vec<f32>,
+        limit: usize,
+        min_similarity: f32,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let dim = query_embedding.len();
+
+        Box::pin(async move {
+            // Neo4j: Fetch all chunks with embeddings and compute similarity
+            let cypher = "MATCH (c:MemoryChunk) 
+                          WHERE c.embedding IS NOT NULL AND c.embedding_dim = $dim
+                          RETURN c.id as id, c.embedding as embedding, c.embedding_dim as dim
+                          LIMIT 10000";
+            
+            let mut result = graph
+                .execute_on(&database, 
+                    neo4rs::query(cypher)
+                        .param("dim", dim as i64)
+                )
+                .await
+                .context("Failed to fetch embeddings for search")?;
+
+            let mut similarities = Vec::new();
+            
+            while let Ok(Some(row)) = result.next().await {
+                if let (Ok(chunk_id), Ok(embedding_bytes), Ok(d)) = (
+                    row.get::<String>("id"),
+                    row.get::<Vec<u8>>("embedding"),
+                    row.get::<i64>("dim"),
+                ) {
+                    let d = d as usize;
+                    if d != dim {
+                        continue;
+                    }
+                    
+                    let mut embedding = Vec::with_capacity(dim);
+                    for i in 0..dim {
+                        let start = i * 4;
+                        let end = start + 4;
+                        if end <= embedding_bytes.len() {
+                            let bytes = [
+                                embedding_bytes[start],
+                                embedding_bytes[start + 1],
+                                embedding_bytes[start + 2],
+                                embedding_bytes[start + 3],
+                            ];
+                            embedding.push(f32::from_le_bytes(bytes));
+                        }
+                    }
+                    
+                    if embedding.len() == dim {
+                        if let Ok(similarity) = voidm_core::similarity::cosine_similarity(&query_embedding, &embedding) {
+                            if similarity >= min_similarity {
+                                similarities.push((chunk_id, similarity));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Sort by similarity descending
+            similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            similarities.truncate(limit);
+
+            tracing::debug!("Neo4j: Found {} similar chunks", similarities.len());
+            Ok(similarities)
+        })
+    }
     
 }
 #[cfg(test)]

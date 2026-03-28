@@ -25,6 +25,7 @@ pub mod db_migration;
 pub mod chunking;
 pub mod validation;
 pub mod coherence;
+pub mod similarity;
 pub mod neo4j_schema;
 pub mod neo4j_db;
 

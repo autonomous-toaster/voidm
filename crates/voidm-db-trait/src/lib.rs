@@ -268,4 +268,20 @@ pub trait Database: Send + Sync {
         memory_id: String,
         embedding: Vec<f32>,
     ) -> Pin<Box<dyn Future<Output = Result<(String, usize)>> + Send + '_>>;
+
+    /// Get embedding for a specific chunk
+    /// Returns: Option<embedding_vector>
+    fn get_chunk_embedding(
+        &self,
+        chunk_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<f32>>>> + Send + '_>>;
+
+    /// Search chunks by embedding similarity
+    /// Returns: Vec<(chunk_id, similarity_score)> ordered by score descending
+    fn search_by_embedding(
+        &self,
+        query_embedding: Vec<f32>,
+        limit: usize,
+        min_similarity: f32,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>>;
 }

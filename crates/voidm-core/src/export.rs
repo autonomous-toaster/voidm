@@ -25,12 +25,15 @@ pub enum ExportRecord {
 pub struct MemoryRecord {
     pub id: String,
     pub content: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "memory_type")]
     pub memory_type: String,
     pub created_at: String,
     pub updated_at: Option<String>,
+    pub title: Option<String>,
     pub scope: Option<String>,
+    pub scopes: Option<Vec<String>>,
     pub tags: Option<Vec<String>>,
+    pub metadata: Option<serde_json::Value>,
     pub provenance: Option<String>,
     pub context: Option<String>,
     pub importance: Option<u8>,
@@ -120,8 +123,11 @@ mod tests {
             memory_type: "semantic".to_string(),
             created_at: "2026-03-28T00:00:00Z".to_string(),
             updated_at: None,
+            title: Some("Test Title".to_string()),
             scope: Some("test".to_string()),
+            scopes: Some(vec!["test".to_string()]),
             tags: Some(vec!["tag1".to_string()]),
+            metadata: Some(serde_json::json!({"key": "value"})),
             provenance: Some("user".to_string()),
             context: Some("decision".to_string()),
             importance: Some(5),
@@ -132,12 +138,15 @@ mod tests {
         assert!(json.contains("\"type\":\"memory\""));
         assert!(json.contains("\"id\":\"test-id\""));
         assert!(json.contains("\"content\":\"test content\""));
+        assert!(json.contains("\"title\":\"Test Title\""));
 
         let parsed = jsonl_to_record(&json).unwrap();
         match parsed {
             ExportRecord::Memory(m) => {
                 assert_eq!(m.id, "test-id");
                 assert_eq!(m.content, "test content");
+                assert_eq!(m.title, Some("Test Title".to_string()));
+                assert!(m.metadata.is_some());
             }
             _ => panic!("Expected Memory record"),
         }

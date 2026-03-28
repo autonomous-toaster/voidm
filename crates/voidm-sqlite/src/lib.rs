@@ -970,25 +970,34 @@ impl Database for SqliteDatabase {
             let mut records = Vec::new();
             let limit_val = limit.unwrap_or(999999) as i64;
 
-            // Fetch all memories
-            let memories: Vec<(String, String, String, String, String)> = 
+            // Fetch all memories with all fields
+            let memories: Vec<(String, String, String, String, String, Option<String>, Option<String>, Option<String>)> = 
                 sqlx::query_as(
-                    "SELECT id, type, content, created_at, updated_at FROM memories LIMIT ?"
+                    "SELECT id, type, content, created_at, updated_at, title, metadata, scopes FROM memories LIMIT ?"
                 )
                 .bind(limit_val)
                 .fetch_all(&pool)
                 .await
                 .unwrap_or_default();
 
-            for (id, mem_type, content, created_at, updated_at) in memories {
+            for (id, mem_type, content, created_at, updated_at, title, metadata_str, scopes_str) in memories {
+                // Parse metadata from JSON string
+                let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+                
+                // Parse scopes from JSON string
+                let scopes = scopes_str.and_then(|s| serde_json::from_str(&s).ok());
+
                 let memory_record = voidm_core::export::MemoryRecord {
                     id: id.clone(),
                     content,
                     memory_type: mem_type,
                     created_at,
                     updated_at: Some(updated_at),
+                    title,
                     scope: None,
+                    scopes,
                     tags: None,
+                    metadata,
                     provenance: None,
                     context: None,
                     importance: None,
@@ -1024,16 +1033,27 @@ impl Database for SqliteDatabase {
 
                 match serde_json::from_str::<voidm_core::export::ExportRecord>(&line) {
                     Ok(voidm_core::export::ExportRecord::Memory(mem)) => {
-                        // Insert memory
+                        // Serialize metadata to JSON string
+                        let metadata_str = mem.metadata.as_ref()
+                            .and_then(|m| serde_json::to_string(m).ok());
+                        
+                        // Serialize scopes to JSON string
+                        let scopes_str = mem.scopes.as_ref()
+                            .and_then(|s| serde_json::to_string(s).ok());
+
+                        // Insert memory with all fields
                         let result = sqlx::query(
-                            "INSERT OR IGNORE INTO memories (id, type, content, created_at, updated_at) 
-                             VALUES (?, ?, ?, ?, ?)"
+                            "INSERT OR IGNORE INTO memories (id, type, content, created_at, updated_at, title, metadata, scopes) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
                         )
                         .bind(&mem.id)
                         .bind(&mem.memory_type)
                         .bind(&mem.content)
                         .bind(&mem.created_at)
                         .bind(mem.updated_at.as_deref().unwrap_or(&mem.created_at))
+                        .bind(&mem.title)
+                        .bind(metadata_str)
+                        .bind(scopes_str)
                         .execute(&pool)
                         .await;
 

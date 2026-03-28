@@ -1138,10 +1138,10 @@ impl Database for PostgresDatabase {
             let mut records = Vec::new();
             let limit_val = limit.unwrap_or(999999) as i64;
 
-            // Fetch all memories
-            let memories: Vec<(String, String, String, String, String)> = 
+            // Fetch all memories with all fields
+            let memories: Vec<(String, String, String, String, String, Option<String>, Option<String>, Option<String>)> = 
                 sqlx::query_as(
-                    "SELECT id::text, type, content, created_at::text, updated_at::text 
+                    "SELECT id::text, type, content, created_at::text, updated_at::text, title, metadata::text, scopes::text 
                      FROM memories LIMIT $1"
                 )
                 .bind(limit_val)
@@ -1149,15 +1149,24 @@ impl Database for PostgresDatabase {
                 .await
                 .unwrap_or_default();
 
-            for (id, mem_type, content, created_at, updated_at) in memories {
+            for (id, mem_type, content, created_at, updated_at, title, metadata_str, scopes_str) in memories {
+                // Parse metadata from JSON string
+                let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+                
+                // Parse scopes from JSON string
+                let scopes = scopes_str.and_then(|s| serde_json::from_str(&s).ok());
+
                 let memory_record = voidm_core::export::MemoryRecord {
                     id: id.clone(),
                     content,
                     memory_type: mem_type,
                     created_at,
                     updated_at: Some(updated_at),
+                    title,
                     scope: None,
+                    scopes,
                     tags: None,
+                    metadata,
                     provenance: None,
                     context: None,
                     importance: None,
@@ -1193,10 +1202,18 @@ impl Database for PostgresDatabase {
 
                 match serde_json::from_str::<voidm_core::export::ExportRecord>(&line) {
                     Ok(voidm_core::export::ExportRecord::Memory(mem)) => {
-                        // Insert memory (ON CONFLICT IGNORE)
+                        // Serialize metadata to JSON string
+                        let metadata_str = mem.metadata.as_ref()
+                            .and_then(|m| serde_json::to_string(m).ok());
+                        
+                        // Serialize scopes to JSON string
+                        let scopes_str = mem.scopes.as_ref()
+                            .and_then(|s| serde_json::to_string(s).ok());
+
+                        // Insert memory with all fields (ON CONFLICT IGNORE)
                         let result = sqlx::query(
-                            "INSERT INTO memories (id, type, content, created_at, updated_at) 
-                             VALUES ($1, $2, $3, $4, $5) 
+                            "INSERT INTO memories (id, type, content, created_at, updated_at, title, metadata, scopes) 
+                             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb) 
                              ON CONFLICT (id) DO NOTHING"
                         )
                         .bind(&mem.id)
@@ -1204,6 +1221,9 @@ impl Database for PostgresDatabase {
                         .bind(&mem.content)
                         .bind(&mem.created_at)
                         .bind(mem.updated_at.as_deref().unwrap_or(&mem.created_at))
+                        .bind(&mem.title)
+                        .bind(metadata_str)
+                        .bind(scopes_str)
                         .execute(&pool)
                         .await;
 

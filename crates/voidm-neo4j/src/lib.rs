@@ -1617,9 +1617,10 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             let mut records = Vec::new();
             let limit_val = limit.unwrap_or(999999) as i64;
 
-            // Fetch all Memory nodes
+            // Fetch all Memory nodes with all fields
             let cypher = "MATCH (m:Memory) RETURN m.id as id, m.type as type, m.content as content, 
-                          m.created_at as created_at, m.updated_at as updated_at LIMIT $limit";
+                          m.created_at as created_at, m.updated_at as updated_at, 
+                          m.title as title, m.metadata as metadata, m.scopes as scopes LIMIT $limit";
             
             let mut result = graph
                 .execute_on(&database, 
@@ -1637,6 +1638,9 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                     row.get::<String>("created_at"),
                 ) {
                     let updated_at = row.get::<String>("updated_at").ok();
+                    let title = row.get::<String>("title").ok();
+                    let metadata_raw = row.get::<serde_json::Value>("metadata").ok();
+                    let scopes_raw = row.get::<Vec<String>>("scopes").ok();
 
                     let memory_record = voidm_core::export::MemoryRecord {
                         id: id.clone(),
@@ -1644,8 +1648,11 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                         memory_type: mem_type,
                         created_at,
                         updated_at,
+                        title,
                         scope: None,
+                        scopes: scopes_raw,
                         tags: None,
+                        metadata: metadata_raw,
                         provenance: None,
                         context: None,
                         importance: None,
@@ -1683,12 +1690,19 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
                 match serde_json::from_str::<voidm_core::export::ExportRecord>(&line) {
                     Ok(voidm_core::export::ExportRecord::Memory(mem)) => {
-                        // Create Memory node in Neo4j
+                        // Create Memory node in Neo4j with all fields
                         let cypher = "MERGE (m:Memory {id: $id}) 
                                       SET m.type = $type, m.content = $content, 
-                                          m.created_at = $created_at, m.updated_at = $updated_at
+                                          m.created_at = $created_at, m.updated_at = $updated_at,
+                                          m.title = $title, m.metadata = $metadata, m.scopes = $scopes
                                       RETURN m.id";
                         
+                        // Serialize metadata and scopes to JSON strings for Neo4j
+                        let metadata_str = mem.metadata.as_ref()
+                            .and_then(|m| serde_json::to_string(m).ok());
+                        let scopes_str = mem.scopes.as_ref()
+                            .and_then(|s| serde_json::to_string(s).ok());
+
                         let result = graph
                             .execute_on(&database, 
                                 neo4rs::query(cypher)
@@ -1697,6 +1711,9 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                                     .param("content", mem.content.clone())
                                     .param("created_at", mem.created_at.clone())
                                     .param("updated_at", mem.updated_at.unwrap_or_else(|| mem.created_at.clone()))
+                                    .param("title", mem.title.clone())
+                                    .param("metadata", metadata_str)
+                                    .param("scopes", scopes_str)
                             )
                             .await;
 

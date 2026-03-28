@@ -25,6 +25,7 @@ pub mod db_migration;
 pub mod chunking;
 pub mod validation;
 pub mod coherence;
+pub mod neo4j_schema;
 
 pub use config::Config;
 pub use config::config_path_display;
@@ -46,3 +47,4 @@ pub use voidm_query_expansion as query_expansion;
 pub use crud::{resolve_id, resolve_id_sqlite};
 pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning, MemoryEdge, OntologyEdgeForMigration, validate_title};
 pub use migration_export::{VectorBackup, MigrationCheckpoint};
+pub use neo4j_schema::{MemoryChunkSchema, SchemaStats, CoherenceStats};

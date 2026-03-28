@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use clap::Args;
-use sqlx::SqlitePool;
+use voidm_db_trait::Database;
 use tracing::{info, warn, debug};
 use std::time::Instant;
 
@@ -41,21 +41,15 @@ pub struct ChunkArgs {
     pub skip_schema: bool,
 }
 
-pub async fn run(args: ChunkArgs, pool: &SqlitePool) -> Result<()> {
+pub async fn run(args: ChunkArgs, db: &std::sync::Arc<dyn Database>) -> Result<()> {
     info!("═══════════════════════════════════════════════════════════════════");
     info!("PHASE A PART D: Chunking Memories");
     info!("═══════════════════════════════════════════════════════════════════");
 
     // Step 1: Determine memory count
+    // Step 1: Determine memory count (all memories by default since DB abstracted)
     let total_memories = if args.all {
-        // Count all memories
-        let count_result = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM memories WHERE LENGTH(content) > ?"
-        )
-        .bind(args.min_length as i32)
-        .fetch_one(pool)
-        .await?;
-        count_result as usize
+        999999  // Use a large number, fetch_memories_for_chunking will respect actual count
     } else {
         args.limit
     };
@@ -63,18 +57,9 @@ pub async fn run(args: ChunkArgs, pool: &SqlitePool) -> Result<()> {
     info!("Total memories to chunk: {}", total_memories);
     info!("───────────────────────────────────────────────────────────────────");
 
-    // Step 2: Load memories from SQLite
-    info!("Loading memories from SQLite...");
-    let memories: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT id, content, created_at FROM memories \
-         WHERE LENGTH(content) > ? \
-         ORDER BY created_at DESC \
-         LIMIT ?"
-    )
-    .bind(args.min_length as i32)
-    .bind(total_memories as i32)
-    .fetch_all(pool)
-    .await?;
+    // Step 2: Load memories from database (backend-agnostic)
+    info!("Loading memories from backend...");
+    let memories = db.fetch_memories_for_chunking(total_memories).await?;
 
     info!("Loaded {} memories", memories.len());
     info!("───────────────────────────────────────────────────────────────────");

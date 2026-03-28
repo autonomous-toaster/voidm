@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Args;
-use sqlx::SqlitePool;
+use voidm_db_trait::Database;
 use voidm_core::chunking::{chunk_smart, ChunkingStrategy};
 use voidm_core::coherence::estimate_coherence;
 use std::time::Instant;
@@ -17,28 +17,20 @@ pub struct ValidationArgs {
     pub min_length: usize,
 }
 
-pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
+pub async fn run(args: ValidationArgs, db: &std::sync::Arc<dyn Database>) -> Result<()> {
     info!("═══════════════════════════════════════════════════════════════════");
     info!("PHASE A VALIDATION: Smart Chunking on Real Data");
     info!("═══════════════════════════════════════════════════════════════════");
 
-    // Load real memories
-    let memories: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT id, content, type, created_at FROM memories \
-         WHERE LENGTH(content) > ? \
-         ORDER BY RANDOM() LIMIT ?"
-    )
-    .bind(args.min_length as i32)
-    .bind(args.limit as i32)
-    .fetch_all(pool)
-    .await?;
+    // Load memories for validation
+    let memories_raw = db.fetch_memories_for_chunking(args.limit).await?;
 
-    if memories.is_empty() {
-        warn!("No memories found with content > {} chars", args.min_length);
+    if memories_raw.is_empty() {
+        warn!("No memories found to validate");
         return Ok(());
     }
 
-    info!("Loaded {} real memories from SQLite", memories.len());
+    info!("Loaded {} memories from backend", memories_raw.len());
     info!("───────────────────────────────────────────────────────────────────");
 
     let strategy = ChunkingStrategy::default();
@@ -47,9 +39,9 @@ pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
     let mut total_chunks = 0usize;
     let mut total_time = std::time::Duration::ZERO;
 
-    for (idx, (id, content, memory_type, created_at)) in memories.iter().enumerate() {
+    for (idx, (id, content, created_at)) in memories_raw.iter().enumerate() {
         let preview = content.chars().take(60).collect::<String>().replace('\n', " ");
-        debug!("[Memory {}] {} (Type: {}, Size: {} chars)", idx + 1, id, memory_type, content.len());
+        debug!("[Memory {}] {} (Size: {} chars)", idx + 1, id, content.len());
         debug!("  Preview: {}...", preview);
 
         // Smart chunking with timing

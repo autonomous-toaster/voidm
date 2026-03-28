@@ -149,6 +149,13 @@ pub trait Database: Send + Sync {
         limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String)>>> + Send + '_>>;
 
+    /// Fetch memories with timestamps for chunking
+    /// Returns: (id, content, created_at)
+    fn fetch_memories_for_chunking(
+        &self,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>>;
+
     // ===== Ontology Concepts =====
 
     /// Create a new concept
@@ -231,6 +238,12 @@ pub trait Database: Send + Sync {
     /// Useful when re-running migrations to avoid constraint violations.
     fn clean_database(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         // Default no-op implementation for SQLite and other backends
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Perform backend-specific shutdown operations (e.g., SQLite WAL checkpoints)
+    /// Default no-op for backends that don't need special shutdown handling
+    fn shutdown(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async { Ok(()) })
     }
 }

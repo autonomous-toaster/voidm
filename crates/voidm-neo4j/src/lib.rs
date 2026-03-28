@@ -1291,6 +1291,41 @@ impl voidm_db_trait::Database for Neo4jDatabase {
         })
     }
 
+    fn fetch_memories_for_chunking(
+        &self,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+
+        Box::pin(async move {
+            let cypher = "MATCH (m:Memory) RETURN m.id as id, m.content as content, m.created_at as created_at ORDER BY m.created_at DESC LIMIT $limit";
+            
+            let result = graph
+                .execute_on(&database, 
+                    neo4rs::query(cypher)
+                        .param("limit", limit as i64)
+                )
+                .await
+                .context("Failed to fetch memories for chunking from Neo4j")?;
+            
+            let mut result_handle = result;
+            let mut memories: Vec<(String, String, String)> = Vec::new();
+            
+            while let Ok(Some(row)) = result_handle.next().await {
+                if let (Ok(id), Ok(content), Ok(created_at)) = (
+                    row.get::<String>("id"),
+                    row.get::<String>("content"),
+                    row.get::<String>("created_at")
+                ) {
+                    memories.push((id, content, created_at));
+                }
+            }
+            
+            Ok(memories)
+        })
+    }
+
     fn check_model_mismatch(
         &self,
         configured_model: &str,

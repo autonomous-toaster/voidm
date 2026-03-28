@@ -554,6 +554,24 @@ impl Database for SqliteDatabase {
         })
     }
 
+    fn fetch_memories_for_chunking(
+        &self,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let memories: Vec<(String, String, String)> = sqlx::query_as(
+                "SELECT id, content, created_at FROM memories \
+                 ORDER BY created_at DESC \
+                 LIMIT ?"
+            )
+            .bind(limit as i32)
+            .fetch_all(&pool)
+            .await?;
+            Ok(memories)
+        })
+    }
+
     fn search_hybrid(
         &self,
         opts: Value,
@@ -753,6 +771,21 @@ impl Database for SqliteDatabase {
     fn check_model_mismatch(&self, _configured_model: &str) -> Pin<Box<dyn Future<Output = Result<Option<(String, String)>>> + Send + '_>> {
         Box::pin(async move {
             Ok(None)
+        })
+    }
+
+    fn shutdown(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            // Synchronous flush for SQLite
+            sqlx::query("PRAGMA synchronous = FULL")
+                .execute(&pool)
+                .await?;
+            // WAL checkpoint to ensure durability
+            sqlx::query("PRAGMA wal_checkpoint(RESTART)")
+                .execute(&pool)
+                .await?;
+            Ok(())
         })
     }
 }

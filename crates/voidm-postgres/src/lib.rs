@@ -632,6 +632,22 @@ impl Database for PostgresDatabase {
         })
     }
 
+    fn fetch_memories_for_chunking(
+        &self,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let results = sqlx::query_as::<_, (String, String, String)>(
+                "SELECT id::text, content, created_at::text FROM memories ORDER BY created_at DESC LIMIT $1"
+            )
+            .bind(limit as i64)
+            .fetch_all(&pool)
+            .await?;
+            Ok(results)
+        })
+    }
+
     // ===== Concepts =====
 
     fn add_concept(

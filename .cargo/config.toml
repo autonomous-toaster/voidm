@@ -5,3 +5,7 @@ lto = true
 
 [net]
 git-fetch-with-cli = true
+
+# ONNX Runtime environment setup for NER/NLI models
+[env]
+ORT_DYLIB_PATH = "/opt/homebrew/opt/onnxruntime/lib"

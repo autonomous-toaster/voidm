@@ -567,19 +567,15 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore] // NER model broken - requires ONNX Runtime fix
     async fn test_model_inputs() {
         ensure_ner_model().await.expect("model load");
         let wrapper = NER_MODEL.get().unwrap();
         let model = &wrapper.0;
-        let session = model.session.lock().unwrap();
-        // BROKEN: session.inputs() doesn't exist - this is dead code
-        // let input_names: Vec<&str> = session.inputs().iter().map(|i| i.name()).collect();
-        assert!(true); // Skip for now
+        // The model is loaded - we can verify the tokenizer exists
+        assert!(!model.tokenizer.get_vocab(true).is_empty(), "Tokenizer should have vocabulary");
     }
 
     #[tokio::test]
-    #[ignore] // NER model broken
     async fn test_extract_orgs_and_locs() {
         ensure_ner_model().await.expect("model load");
         let entities = extract_entities(

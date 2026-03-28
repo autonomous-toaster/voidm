@@ -4,6 +4,7 @@ use sqlx::SqlitePool;
 use voidm_core::chunking::{chunk_smart, ChunkingStrategy};
 use voidm_core::coherence::estimate_coherence;
 use std::time::Instant;
+use tracing::{info, warn, debug};
 
 #[derive(Args)]
 pub struct ValidationArgs {
@@ -17,9 +18,9 @@ pub struct ValidationArgs {
 }
 
 pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
-    println!("\n╔════════════════════════════════════════════════════════════════╗");
-    println!("║  PHASE A VALIDATION: Smart Chunking on Real Data               ║");
-    println!("╚════════════════════════════════════════════════════════════════╝\n");
+    info!("═══════════════════════════════════════════════════════════════════");
+    info!("PHASE A VALIDATION: Smart Chunking on Real Data");
+    info!("═══════════════════════════════════════════════════════════════════");
 
     // Load real memories
     let memories: Vec<(String, String, String)> = sqlx::query_as(
@@ -33,12 +34,12 @@ pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
     .await?;
 
     if memories.is_empty() {
-        println!("⚠️  No memories found with content > {} chars", args.min_length);
+        warn!("No memories found with content > {} chars", args.min_length);
         return Ok(());
     }
 
-    println!("Loaded {} real memories from SQLite", memories.len());
-    println!("{}\n", "=".repeat(70));
+    info!("Loaded {} real memories from SQLite", memories.len());
+    info!("───────────────────────────────────────────────────────────────────");
 
     let strategy = ChunkingStrategy::default();
     let mut smart_stats = Vec::new();
@@ -47,11 +48,9 @@ pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
     let mut total_time = std::time::Duration::ZERO;
 
     for (idx, (id, content, memory_type)) in memories.iter().enumerate() {
-        println!("\n[Memory {}] {}", idx + 1, id);
-        println!("  Type: {}", memory_type);
-        println!("  Size: {} chars", content.len());
-        println!("  Preview: {}...", 
-            &content[..60.min(content.len())].replace('\n', " "));
+        let preview = content.chars().take(60).collect::<String>().replace('\n', " ");
+        debug!("[Memory {}] {} (Type: {}, Size: {} chars)", idx + 1, id, memory_type, content.len());
+        debug!("  Preview: {}...", preview);
 
         // Smart chunking with timing
         let start = Instant::now();
@@ -60,7 +59,8 @@ pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
                 let elapsed = start.elapsed();
                 total_time += elapsed;
                 
-                println!("  ✅ Smart chunking: {} chunks ({:.1}ms)", chunks.len(), elapsed.as_secs_f32() * 1000.0);
+                info!("[Memory {}] Smart chunking: {} chunks ({:.1}ms)", 
+                    idx + 1, chunks.len(), elapsed.as_secs_f32() * 1000.0);
                 
                 let mut memory_coherence = 0.0;
 
@@ -70,7 +70,7 @@ pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
                     memory_coherence += final_score;
                     
                     let level = score.quality_level();
-                    println!("    Chunk {}: {} chars, coherence {:.2} {}", 
+                    debug!("  Chunk {}: {} chars, coherence {:.2} {}", 
                         chunk_idx, chunk.size, final_score, level);
                 }
 
@@ -80,25 +80,25 @@ pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
                     memory_coherence / chunks.len() as f32 
                 };
 
-                println!("  Avg coherence: {:.2}", avg_coherence);
+                info!("[Memory {}] Avg coherence: {:.2}", idx + 1, avg_coherence);
                 smart_stats.push((id.clone(), avg_coherence, chunks.len()));
                 total_smart_coherence += avg_coherence;
                 total_chunks += chunks.len();
 
                 // Alert if low coherence
                 if avg_coherence < 0.75 {
-                    println!("  ⚠️  WARNING: Low coherence (< 0.75)");
+                    warn!("[Memory {}] Low coherence (< 0.75)", idx + 1);
                 }
             }
             Err(e) => {
-                println!("  ❌ Smart chunking failed: {}", e);
+                warn!("[Memory {}] Smart chunking failed: {}", idx + 1, e);
             }
         }
     }
 
     // Summary
-    println!("\n{}", "=".repeat(70));
-    println!("\n📊 SUMMARY STATISTICS\n");
+    info!("───────────────────────────────────────────────────────────────────");
+    info!("SUMMARY STATISTICS");
 
     let avg_smart_coherence = if smart_stats.is_empty() { 
         0.0 
@@ -106,13 +106,13 @@ pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
         total_smart_coherence / smart_stats.len() as f32 
     };
 
-    println!("Total memories tested: {}", smart_stats.len());
-    println!("Total chunks created: {}", total_chunks);
-    println!("Avg chunks per memory: {:.1}", 
+    info!("Total memories tested: {}", smart_stats.len());
+    info!("Total chunks created: {}", total_chunks);
+    info!("Avg chunks per memory: {:.1}", 
         if smart_stats.is_empty() { 0.0 } else { total_chunks as f32 / smart_stats.len() as f32 });
-    println!("Average coherence: {:.2}", avg_smart_coherence);
-    println!("Total processing time: {:.1}ms", total_time.as_secs_f32() * 1000.0);
-    println!("Avg time per memory: {:.1}ms", 
+    info!("Average coherence: {:.2}", avg_smart_coherence);
+    info!("Total processing time: {:.1}ms", total_time.as_secs_f32() * 1000.0);
+    info!("Avg time per memory: {:.1}ms", 
         if smart_stats.is_empty() { 0.0 } else { total_time.as_secs_f32() * 1000.0 / smart_stats.len() as f32 });
 
     // Count by quality level
@@ -121,31 +121,31 @@ pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
     let fair = smart_stats.iter().filter(|(_, c, _)| *c >= 0.3 && *c < 0.6).count();
     let poor = smart_stats.iter().filter(|(_, c, _)| *c < 0.3).count();
 
-    println!("\nQuality distribution:");
-    println!("  🟣 EXCELLENT (0.80+): {} ({:.0}%)", excellent, excellent as f32 / smart_stats.len() as f32 * 100.0);
-    println!("  🟢 GOOD (0.60-0.79): {} ({:.0}%)", good, good as f32 / smart_stats.len() as f32 * 100.0);
-    println!("  🟡 FAIR (0.30-0.59): {} ({:.0}%)", fair, fair as f32 / smart_stats.len() as f32 * 100.0);
-    println!("  🔴 POOR (<0.30): {} ({:.0}%)", poor, poor as f32 / smart_stats.len() as f32 * 100.0);
+    info!("Quality distribution:");
+    info!("  EXCELLENT (0.80+): {} ({:.0}%)", excellent, excellent as f32 / smart_stats.len() as f32 * 100.0);
+    info!("  GOOD (0.60-0.79): {} ({:.0}%)", good, good as f32 / smart_stats.len() as f32 * 100.0);
+    info!("  FAIR (0.30-0.59): {} ({:.0}%)", fair, fair as f32 / smart_stats.len() as f32 * 100.0);
+    info!("  POOR (<0.30): {} ({:.0}%)", poor, poor as f32 / smart_stats.len() as f32 * 100.0);
 
-    println!("\n{}", "=".repeat(70));
+    info!("───────────────────────────────────────────────────────────────────");
 
     // Validation result
     if avg_smart_coherence >= 0.75 {
-        println!("\n✅ VALIDATION PASSED");
-        println!("Average coherence {:.2} meets target of 0.75+", avg_smart_coherence);
-        println!("Algorithm is ready for Part D (chunking 900 memories)");
+        info!("VALIDATION PASSED");
+        info!("Average coherence {:.2} meets target of 0.75+", avg_smart_coherence);
+        info!("Algorithm is ready for Part D (chunking 900 memories)");
     } else if avg_smart_coherence >= 0.60 {
-        println!("\n⚠️  VALIDATION MARGINAL");
-        println!("Average coherence {:.2} below target of 0.75", avg_smart_coherence);
-        println!("Algorithm works but quality is mediocre");
-        println!("Consider: adjust parameters or add special content handling");
+        warn!("VALIDATION MARGINAL");
+        warn!("Average coherence {:.2} below target of 0.75", avg_smart_coherence);
+        warn!("Algorithm works but quality is mediocre");
+        warn!("Consider: adjust parameters or add special content handling");
     } else {
-        println!("\n❌ VALIDATION FAILED");
-        println!("Average coherence {:.2} is too low", avg_smart_coherence);
-        println!("Algorithm needs improvement before Part D");
+        warn!("VALIDATION FAILED");
+        warn!("Average coherence {:.2} is too low", avg_smart_coherence);
+        warn!("Algorithm needs improvement before Part D");
     }
 
-    println!("\n{}", "=".repeat(70));
+    info!("───────────────────────────────────────────────────────────────────");
 
     Ok(())
 }

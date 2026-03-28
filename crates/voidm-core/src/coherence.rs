@@ -62,6 +62,64 @@ impl CoherenceScore {
     }
 }
 
+/// Detect if content looks like code or technical content.
+/// 
+/// Returns true if content contains patterns typical of code blocks:
+/// - Programming language keywords (fn, def, class, const, etc.)
+/// - Syntax symbols (=>, ->, :=, etc.)
+/// - Bracket/brace density (parentheses, brackets, braces)
+/// - Common technical markers (http://, localhost, /etc/, etc.)
+fn detect_code_like_content(content: &str) -> bool {
+    // Code keywords common across languages
+    let code_keywords = [
+        "fn ", "def ", "class ", "const ", "let ", "var ", "mut ",
+        "if ", "else ", "for ", "while ", "return ", "async ",
+        "await ", "try ", "catch ", "throw ", "new ", "this ",
+        "impl ", "trait ", "pub ", "use ", "import ", "from ",
+        "struct ", "enum ", "mod ", "crate ", "type ",
+    ];
+    
+    let has_code_keyword = code_keywords.iter().any(|kw| content.contains(kw));
+    
+    // Technical markers
+    let technical_markers = [
+        "://", "localhost", "/etc/", "/usr/", "/var/", "Path::",
+        "Result<", "Option<", "Vec<", "HashMap<", "&str", "String::",
+    ];
+    
+    let has_technical_marker = technical_markers.iter().any(|marker| content.contains(marker));
+    
+    // Bracket density: code has more special chars than prose
+    let bracket_count = content.chars()
+        .filter(|c| matches!(c, '(' | ')' | '[' | ']' | '{' | '}'))
+        .count();
+    let total_chars = content.len();
+    let bracket_density = if total_chars > 0 {
+        bracket_count as f32 / total_chars as f32
+    } else {
+        0.0
+    };
+    
+    // Code typically has 5-15% brackets, prose has <1%
+    let has_high_bracket_density = bracket_density > 0.02;
+    
+    // Syntax symbols common in code
+    let syntax_symbols = ["=>", "->", ":=", "==", "!=", "<=", ">="];
+    let has_syntax_symbols = syntax_symbols.iter().any(|sym| content.contains(sym));
+    
+    // Indentation patterns: code has indentation, prose doesn't
+    let has_indentation = content.lines().any(|line| {
+        line.starts_with(' ') || line.starts_with('\t')
+    });
+    
+    // If ANY of these indicators are present, treat as code-like
+    has_code_keyword 
+        || has_technical_marker 
+        || has_high_bracket_density 
+        || has_syntax_symbols
+        || has_indentation
+}
+
 /// Estimate coherence of a chunk based on heuristics.
 ///
 /// Heuristics:
@@ -71,6 +129,7 @@ impl CoherenceScore {
 /// - Keyword overlap: Repeated terms indicate topical focus
 /// - Length penalty: Very short chunks = lower coherence potential
 /// - Capitalization: Multiple proper nouns = metadata score
+/// - Code detection: Special handling for code blocks and technical content
 ///
 /// # Example
 /// ```
@@ -78,6 +137,9 @@ impl CoherenceScore {
 /// assert!(score.final_score() > 0.5);
 /// ```
 pub fn estimate_coherence(content: &str) -> CoherenceScore {
+    // DETECT CODE BLOCKS: If content has code patterns, use less stringent heuristics
+    let is_code_like = detect_code_like_content(content);
+    
     // Split into sentences (better handling of abbreviations)
     let sentences: Vec<&str> = content
         .split(|c| c == '.' || c == '!' || c == '?')
@@ -90,14 +152,26 @@ pub fn estimate_coherence(content: &str) -> CoherenceScore {
 
     // COMPLETENESS: More sentences = more complete thought
     // Scale: 1 sentence = 0.2, 2-3 = 0.5, 4+ = 0.9
-    let completeness = match sentence_count {
-        0 => 0.0,
-        1 => 0.3,
-        2 => 0.5,
-        3 => 0.65,
-        4 => 0.8,
-        5..=10 => 0.95,
-        _ => 1.0,
+    // For code, even 1 line counts as meaningful
+    let completeness = if is_code_like {
+        // Code blocks are complete if they have any content
+        match sentence_count {
+            0 => 0.3, // Even empty code is somewhat complete
+            1 => 0.6, // Single line of code is decent
+            2..=4 => 0.8,
+            _ => 1.0,
+        }
+    } else {
+        // For prose, be stricter
+        match sentence_count {
+            0 => 0.0,
+            1 => 0.3,
+            2 => 0.5,
+            3 => 0.65,
+            4 => 0.8,
+            5..=10 => 0.95,
+            _ => 1.0,
+        }
     };
 
     // COHERENCE: Presence of connector words + sentence transitions
@@ -133,7 +207,23 @@ pub fn estimate_coherence(content: &str) -> CoherenceScore {
     }
     
     // Coherence score: connectors + topic continuity
-    let coherence_base = if connector_count > 0 { 0.8 } else { 0.5 };
+    // TUNING: For code, don't penalize lack of connectors (0.65 base instead of 0.5)
+    let coherence_base = if is_code_like {
+        // Code is coherent by definition if it's valid syntax
+        if connector_count > 0 {
+            0.85
+        } else {
+            0.65 // Even without connectors, code is coherent
+        }
+    } else {
+        // For prose, require connectors for full score
+        if connector_count > 0 {
+            0.8
+        } else {
+            0.5
+        }
+    };
+    
     let topic_penalty = (topic_shift_count as f32) * 0.05; // -5% per abrupt shift
     let coherence = (coherence_base - topic_penalty).max(0.2).min(1.0);
 
@@ -145,13 +235,27 @@ pub fn estimate_coherence(content: &str) -> CoherenceScore {
         .len();
     
     let word_uniqueness_ratio = unique_words as f32 / word_count.max(1) as f32;
-    // If >70% unique words, likely topic jumping
-    let relevance = if word_uniqueness_ratio > 0.7 {
-        0.4 // Low relevance: too many new concepts
-    } else if word_uniqueness_ratio > 0.5 {
-        0.6 // Medium: some repetition
+    
+    // TUNING: Code blocks naturally have high unique word ratio; adjust threshold
+    let relevance = if is_code_like {
+        // For code, high uniqueness is normal (different variables, functions, etc.)
+        // Only penalize if EXTREMELY repetitive or random
+        if word_uniqueness_ratio > 0.95 {
+            0.5 // Suspiciously unique (might be random data)
+        } else if word_uniqueness_ratio > 0.80 {
+            0.75 // Normal for code
+        } else {
+            0.85 // Great for code (some patterns repeated)
+        }
     } else {
-        0.85 // Good: focused topic
+        // For prose, maintain original thresholds
+        if word_uniqueness_ratio > 0.7 {
+            0.4 // Low relevance: too many new concepts
+        } else if word_uniqueness_ratio > 0.5 {
+            0.6 // Medium: some repetition
+        } else {
+            0.85 // Good: focused topic
+        }
     };
 
     // SPECIFICITY: Numbers, dates, specific terms vs vague language
@@ -162,7 +266,15 @@ pub fn estimate_coherence(content: &str) -> CoherenceScore {
         .filter(|vague| content.contains(**vague))
         .count();
     
-    let specificity_base = if has_numbers { 0.8 } else { 0.6 };
+    // TUNING: Code is specific by definition (variable names, syntax, etc.)
+    let specificity_base = if is_code_like {
+        0.85 // Code is inherently specific
+    } else if has_numbers {
+        0.8
+    } else {
+        0.6
+    };
+    
     let vague_penalty = (vague_count as f32) * 0.1; // -10% per vague word
     let specificity = (specificity_base - vague_penalty).max(0.2).min(1.0);
 

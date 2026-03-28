@@ -1605,6 +1605,29 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             Ok(similarities)
         })
     }
+
+    fn export_to_jsonl(
+        &self,
+        _limit: Option<usize>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + '_>> {
+        Box::pin(async move {
+            // TODO: Implement JSONL export for Neo4j
+            // Would fetch memories, chunks, relationships and serialize
+            Ok(vec![])
+        })
+    }
+
+    fn import_from_jsonl(
+        &self,
+        _records: Vec<String>,
+    ) -> Pin<Box<dyn Future<Output = Result<(usize, usize, usize)>> + Send + '_>> {
+        Box::pin(async move {
+            // TODO: Implement JSONL import for Neo4j
+            // Would validate and insert records
+            // Returns (memories_imported, chunks_imported, relationships_imported)
+            Ok((0, 0, 0))
+        })
+    }
     
 }
 #[cfg(test)]

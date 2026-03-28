@@ -2,7 +2,7 @@
 Help AI assistant to store and search memories using cli.
 Memories are splitted into chunks before embeddings.
 Memories are auto tagged on add.
-Memories are auto linked on add.
+Memories are auto linked on add. 
 
 
 # voidm-cli
@@ -14,3 +14,12 @@ Cypher query is first class citizen.
 sqlite backend, with cyper to sql.
 support vector search with the help of [sqlite-vector](https://github.com/sqliteai/sqlite-vector)
 cypher to sql mus be the prefered interface when interactig with the backend.
+
+
+# vodm-neo4j
+neo4j backend.
+
+
+# voidm-mcp
+MCP server that expose stdio and stremable http.
+Expose a subset of the command for an ai assistant.

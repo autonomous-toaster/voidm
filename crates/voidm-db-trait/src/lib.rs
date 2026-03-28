@@ -284,4 +284,16 @@ pub trait Database: Send + Sync {
         limit: usize,
         min_similarity: f32,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>>;
+
+    /// Export all memories and chunks to JSONL format
+    fn export_to_jsonl(
+        &self,
+        limit: Option<usize>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + '_>>;
+
+    /// Import memories and chunks from JSONL format
+    fn import_from_jsonl(
+        &self,
+        records: Vec<String>,
+    ) -> Pin<Box<dyn Future<Output = Result<(usize, usize, usize)>> + Send + '_>>;
 }

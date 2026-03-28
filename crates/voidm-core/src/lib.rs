@@ -28,6 +28,8 @@ pub mod coherence;
 pub mod similarity;
 pub mod neo4j_schema;
 pub mod neo4j_db;
+pub mod export;
+pub mod import;
 
 pub use config::Config;
 pub use config::config_path_display;

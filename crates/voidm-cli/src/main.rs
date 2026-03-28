@@ -83,6 +83,8 @@ pub enum Commands {
     Consolidate(commands::consolidate::ConsolidateArgs),
     /// Validate Phase A chunking algorithm on real data
     Validate(commands::validate::ValidationArgs),
+    /// Part D: Chunk memories and store in Neo4j
+    Chunk(commands::chunk::ChunkArgs),
 }
 
 #[tokio::main]
@@ -227,6 +229,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::CheckUpdate(_) => unreachable!(),
                 Commands::Consolidate(args) => commands::consolidate::run(args, &db, &dummy_pool, &config, cli.json).await,
                 Commands::Validate(_) => anyhow::bail!("Validate command is only available with SQLite backend"),
+                Commands::Chunk(_) => anyhow::bail!("Chunk command is only available with SQLite backend"),
                 Commands::Stats(args) => commands::stats::run(args, &db, &dummy_pool, &config, cli.json).await,
                 Commands::Mcp(_) => anyhow::bail!("MCP server is only available with SQLite backend"),
             }
@@ -275,6 +278,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::CheckUpdate(_) => unreachable!(),
                 Commands::Consolidate(args) => commands::consolidate::run(args, &db, &pool, &config, cli.json).await,
                 Commands::Validate(args) => commands::validate::run(args, &pool).await,
+                Commands::Chunk(args) => commands::chunk::run(args, &pool).await,
                 Commands::Stats(args) => commands::stats::run(args, &db, &pool, &config, cli.json).await,
                 Commands::Mcp(args) => commands::mcp::run(args, pool.clone(), config).await,
             };

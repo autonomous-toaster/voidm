@@ -21,3 +21,4 @@ pub mod mcp;
 pub mod update;
 pub mod consolidate;
 pub mod validate;
+pub mod chunk;

@@ -90,7 +90,7 @@ mod tests {
                 &memory.content[..60.min(memory.content.len())].replace('\n', " "));
 
             // Smart chunking
-            match chunk_smart(&memory.id, &memory.content, &strategy) {
+            match chunk_smart(&memory.id, &memory.content, &strategy, &memory.created_at) {
                 Ok(chunks) => {
                     println!("  ✅ Smart chunking: {} chunks", chunks.len());
                     
@@ -210,7 +210,7 @@ mod tests {
             println!("\nMemory: {} ({} chars)", memory.id, memory.content.len());
 
             // Smart chunking
-            if let Ok(smart_chunks) = chunk_smart(&memory.id, &memory.content, &strategy) {
+            if let Ok(smart_chunks) = chunk_smart(&memory.id, &memory.content, &strategy, &memory.created_at) {
                 let smart_avg: f32 = smart_chunks.iter()
                     .map(|c| estimate_coherence(&c.content).final_score())
                     .sum::<f32>() / smart_chunks.len().max(1) as f32;

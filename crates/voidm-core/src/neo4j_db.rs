@@ -19,11 +19,11 @@ pub struct Neo4jDb {
 
 impl Neo4jDb {
     /// Create a new Neo4j database connection
-    pub async fn connect(url: &str, username: &str, password: &str) -> Result<Self> {
-        info!("Connecting to Neo4j: {}", url);
+    pub async fn connect(uri: &str, username: &str, password: &str) -> Result<Self> {
+        info!("Connecting to Neo4j: {}", uri);
 
         let graph = Arc::new(
-            Graph::new(url, username, password)
+            Graph::new(uri, username, password)
                 .await
                 .context("Failed to connect to Neo4j")?
         );
@@ -32,7 +32,7 @@ impl Neo4jDb {
 
         Ok(Neo4jDb {
             graph,
-            url: url.to_string(),
+            url: uri.to_string(),
         })
     }
 

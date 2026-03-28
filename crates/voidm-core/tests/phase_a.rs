@@ -14,7 +14,8 @@ mod tests {
         
         // Use a test memory ID
         let memory_id = "test-mem-123";
-        let chunks = chunk_smart(memory_id, content, &strategy).unwrap();
+        let created_at = "2026-03-28T00:00:00Z";
+        let chunks = chunk_smart(memory_id, content, &strategy, created_at).unwrap();
         
         println!("Content length: {} chars", content.len());
         println!("Chunks: {}", chunks.len());
@@ -27,7 +28,7 @@ mod tests {
         assert!(chunks.iter().all(|c| c.id.starts_with("mchk_")), "All chunk IDs should have mchk_ prefix");
         
         // Test determinism: same memory_id + content = same chunk IDs
-        let chunks2 = chunk_smart(memory_id, content, &strategy).unwrap();
+        let chunks2 = chunk_smart(memory_id, content, &strategy, created_at).unwrap();
         for (c1, c2) in chunks.iter().zip(chunks2.iter()) {
             assert_eq!(c1.id, c2.id, "Same input should produce same chunk ID");
         }
@@ -76,6 +77,7 @@ mod tests {
         // Simulate Phase A flow
         let memory = "OAuth2 is an authorization protocol.\n\nIt uses bearer tokens.\n\nTokens are validated on each request.";
         let memory_id = "oauth-doc-456";
+        let created_at = "2026-03-28T00:00:00Z";
         
         // 1. Validate length
         let validation = validate_memory_length(memory).unwrap();
@@ -84,7 +86,7 @@ mod tests {
         
         // 2. Chunk memory
         let strategy = ChunkingStrategy::default();
-        let chunks = chunk_smart(memory_id, memory, &strategy).unwrap();
+        let chunks = chunk_smart(memory_id, memory, &strategy, created_at).unwrap();
         println!("✓ Chunked into {} chunks", chunks.len());
         
         // 3. Score each chunk

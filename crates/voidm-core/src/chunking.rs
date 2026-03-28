@@ -36,11 +36,13 @@ impl Default for ChunkingStrategy {
 
 #[derive(Debug, Clone)]
 pub struct Chunk {
-    pub id: String,     // Unique chunk ID (mchk_<uuid>)
+    pub id: String,           // Unique chunk ID (mchk_<uuid>)
+    pub memory_id: String,    // Parent memory ID
     pub index: usize,
     pub content: String,
     pub size: usize,
     pub break_type: BreakType,
+    pub created_at: String,   // ISO8601 timestamp (snapshot time)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,15 +55,17 @@ pub enum BreakType {
 
 impl Chunk {
     /// Create a new chunk with generated UUID based on memory_id and index
-    pub fn new(memory_id: &str, index: usize, content: String, break_type: BreakType) -> Self {
+    pub fn new(memory_id: &str, index: usize, content: String, break_type: BreakType, created_at: String) -> Self {
         let id = generate_chunk_id(memory_id, index);
         let size = content.len();
         Self {
             id,
+            memory_id: memory_id.to_string(),
             index,
             content,
             size,
             break_type,
+            created_at,
         }
     }
 }
@@ -101,39 +105,39 @@ fn generate_chunk_id(memory_id: &str, index: usize) -> String {
 /// let chunks = chunk_smart("abc123", "Para 1.\n\nPara 2.", &strategy).unwrap();
 /// // chunks = [Chunk{id: "mchk_...", content: "Para 1.", ...}, ...]
 /// ```
-pub fn chunk_smart(memory_id: &str, content: &str, strategy: &ChunkingStrategy) -> Result<Vec<Chunk>> {
+pub fn chunk_smart(memory_id: &str, content: &str, strategy: &ChunkingStrategy, created_at: &str) -> Result<Vec<Chunk>> {
     if content.is_empty() {
         return Ok(vec![]);
     }
 
     if !strategy.smart_breaks {
         // Naive window-based chunking (not recommended)
-        return chunk_naive(memory_id, content, strategy);
+        return chunk_naive(memory_id, content, strategy, created_at);
     }
 
     // Try paragraph-based chunking first
-    if let Ok(chunks) = try_chunk_by_delim(memory_id, content, strategy, "\n\n", BreakType::Paragraph) {
+    if let Ok(chunks) = try_chunk_by_delim(memory_id, content, strategy, "\n\n", BreakType::Paragraph, created_at) {
         if is_valid_chunking(&chunks, strategy) {
             return Ok(chunks);
         }
     }
 
     // Fall back to sentence-based chunking
-    if let Ok(chunks) = try_chunk_by_delim(memory_id, content, strategy, ". ", BreakType::Sentence) {
+    if let Ok(chunks) = try_chunk_by_delim(memory_id, content, strategy, ". ", BreakType::Sentence, created_at) {
         if is_valid_chunking(&chunks, strategy) {
             return Ok(chunks);
         }
     }
 
     // Fall back to word-based chunking
-    if let Ok(chunks) = try_chunk_by_delim(memory_id, content, strategy, " ", BreakType::Word) {
+    if let Ok(chunks) = try_chunk_by_delim(memory_id, content, strategy, " ", BreakType::Word, created_at) {
         if is_valid_chunking(&chunks, strategy) {
             return Ok(chunks);
         }
     }
 
     // Final fallback: character-level (never split mid-word)
-    chunk_by_characters(memory_id, content, strategy)
+    chunk_by_characters(memory_id, content, strategy, created_at)
 }
 
 /// Try to chunk by a given delimiter, respecting size constraints.
@@ -143,6 +147,7 @@ fn try_chunk_by_delim(
     strategy: &ChunkingStrategy,
     delim: &str,
     break_type: BreakType,
+    created_at: &str,
 ) -> Result<Vec<Chunk>> {
     let parts: Vec<&str> = content.split(delim).collect();
     if parts.is_empty() {
@@ -169,7 +174,7 @@ fn try_chunk_by_delim(
         if part_with_delim.len() > strategy.target_size && !current_chunk.is_empty() {
             // Current chunk is full, save it
             if current_chunk.len() >= strategy.min_chunk_size {
-                chunks.push(Chunk::new(memory_id, chunk_index, current_chunk.clone(), break_type));
+                chunks.push(Chunk::new(memory_id, chunk_index, current_chunk.clone(), break_type, created_at.to_string()));
                 chunk_index += 1;
             }
             // Start new chunk with current part
@@ -188,7 +193,7 @@ fn try_chunk_by_delim(
 
     // Don't forget the last chunk
     if !current_chunk.is_empty() {
-        chunks.push(Chunk::new(memory_id, chunk_index, current_chunk, break_type));
+        chunks.push(Chunk::new(memory_id, chunk_index, current_chunk, break_type, created_at.to_string()));
     }
 
     if chunks.is_empty() {
@@ -203,6 +208,7 @@ fn chunk_by_characters(
     memory_id: &str,
     content: &str,
     strategy: &ChunkingStrategy,
+    created_at: &str,
 ) -> Result<Vec<Chunk>> {
     if content.is_empty() {
         return Ok(vec![]);
@@ -240,7 +246,7 @@ fn chunk_by_characters(
         let trimmed = chunk_str.trim().to_string();
 
         if trimmed.len() >= strategy.min_chunk_size {
-            chunks.push(Chunk::new(memory_id, chunk_index, trimmed, BreakType::Character));
+            chunks.push(Chunk::new(memory_id, chunk_index, trimmed, BreakType::Character, created_at.to_string()));
             chunk_index += 1;
         }
 
@@ -249,7 +255,7 @@ fn chunk_by_characters(
 
     if chunks.is_empty() {
         // Fallback: just return the whole content
-        chunks.push(Chunk::new(memory_id, 0, content.to_string(), BreakType::Character));
+        chunks.push(Chunk::new(memory_id, 0, content.to_string(), BreakType::Character, created_at.to_string()));
     }
 
     Ok(chunks)
@@ -263,7 +269,7 @@ fn is_valid_chunking(chunks: &[Chunk], strategy: &ChunkingStrategy) -> bool {
 }
 
 /// Naive fixed-window chunking (fallback if smart breaks fail).
-fn chunk_naive(memory_id: &str, content: &str, strategy: &ChunkingStrategy) -> Result<Vec<Chunk>> {
+fn chunk_naive(memory_id: &str, content: &str, strategy: &ChunkingStrategy, created_at: &str) -> Result<Vec<Chunk>> {
     let mut chunks = Vec::new();
     let target = strategy.target_size;
 
@@ -275,12 +281,12 @@ fn chunk_naive(memory_id: &str, content: &str, strategy: &ChunkingStrategy) -> R
         let chunk_str = String::from_utf8_lossy(chunk).to_string();
         let trimmed = chunk_str.trim().to_string();
         if !trimmed.is_empty() && trimmed.len() >= strategy.min_chunk_size {
-            chunks.push(Chunk::new(memory_id, i, trimmed, BreakType::Character));
+            chunks.push(Chunk::new(memory_id, i, trimmed, BreakType::Character, created_at.to_string()));
         }
     }
 
     if chunks.is_empty() {
-        chunks.push(Chunk::new(memory_id, 0, content.to_string(), BreakType::Character));
+        chunks.push(Chunk::new(memory_id, 0, content.to_string(), BreakType::Character, created_at.to_string()));
     }
 
     Ok(chunks)

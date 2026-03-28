@@ -23,8 +23,8 @@ pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
     info!("═══════════════════════════════════════════════════════════════════");
 
     // Load real memories
-    let memories: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT id, content, type FROM memories \
+    let memories: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT id, content, type, created_at FROM memories \
          WHERE LENGTH(content) > ? \
          ORDER BY RANDOM() LIMIT ?"
     )
@@ -47,14 +47,14 @@ pub async fn run(args: ValidationArgs, pool: &SqlitePool) -> Result<()> {
     let mut total_chunks = 0usize;
     let mut total_time = std::time::Duration::ZERO;
 
-    for (idx, (id, content, memory_type)) in memories.iter().enumerate() {
+    for (idx, (id, content, memory_type, created_at)) in memories.iter().enumerate() {
         let preview = content.chars().take(60).collect::<String>().replace('\n', " ");
         debug!("[Memory {}] {} (Type: {}, Size: {} chars)", idx + 1, id, memory_type, content.len());
         debug!("  Preview: {}...", preview);
 
         // Smart chunking with timing
         let start = Instant::now();
-        match chunk_smart(&id, &content, &strategy) {
+        match chunk_smart(&id, &content, &strategy, &created_at) {
             Ok(chunks) => {
                 let elapsed = start.elapsed();
                 total_time += elapsed;

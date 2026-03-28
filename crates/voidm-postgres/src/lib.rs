@@ -971,6 +971,55 @@ impl Database for PostgresDatabase {
             Ok(result.rows_affected() as usize)
         })
     }
+
+    fn fetch_chunks(
+        &self,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>> {
+        let pool = self.pool.clone();
+
+        Box::pin(async move {
+            let chunks = sqlx::query_as::<_, (String, String, String)>(
+                "SELECT id::text, content, created_at::text FROM memory_chunks LIMIT $1"
+            )
+            .bind(limit as i64)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default();
+
+            Ok(chunks)
+        })
+    }
+
+    fn store_chunk_embedding(
+        &self,
+        chunk_id: String,
+        _memory_id: String,
+        embedding: Vec<f32>,
+    ) -> Pin<Box<dyn Future<Output = Result<(String, usize)>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let dim = embedding.len();
+
+        Box::pin(async move {
+            // PostgreSQL: Store embedding as bytea
+            let embedding_bytes: Vec<u8> = embedding
+                .iter()
+                .flat_map(|f| f.to_le_bytes().to_vec())
+                .collect();
+
+            sqlx::query(
+                "UPDATE memory_chunks SET embedding = $1, embedding_dim = $2 WHERE id = $3"
+            )
+            .bind(&embedding_bytes)
+            .bind(dim as i32)
+            .bind(&chunk_id)
+            .execute(&pool)
+            .await
+            .ok();
+
+            Ok((chunk_id, dim))
+        })
+    }
 }
 
 // ============================================================================

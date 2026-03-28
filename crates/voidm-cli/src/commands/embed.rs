@@ -55,10 +55,17 @@ pub async fn run(args: EmbedArgs, db: &Arc<dyn Database>) -> Result<()> {
     info!("Total chunks to process: {}", total_chunks);
     info!("───────────────────────────────────────────────────────────────────");
 
-    // Load chunks (this would need to be implemented via dbtrait)
+    // Load chunks from backend
     info!("Loading chunks from backend...");
-    // NOTE: fetch_chunks() doesn't exist yet - would be added to dbtrait
-    // For now, we'll work with chunk_smart output
+    let chunks = db.fetch_chunks(total_chunks).await?;
+    
+    info!("Loaded {} chunks", chunks.len());
+    info!("───────────────────────────────────────────────────────────────────");
+
+    if chunks.is_empty() {
+        info!("No chunks to embed");
+        return Ok(());
+    }
 
     let start_time = Instant::now();
     let mut total_processed = 0;
@@ -66,15 +73,71 @@ pub async fn run(args: EmbedArgs, db: &Arc<dyn Database>) -> Result<()> {
     let mut embedding_batches = 0;
     let mut total_embedding_time = std::time::Duration::ZERO;
 
-    info!("Loaded 0 chunks (implementation pending)");
+    // Process chunks in batches
+    let chunk_batches: Vec<Vec<_>> = chunks
+        .chunks(args.batch_size)
+        .map(|batch| batch.to_vec())
+        .collect();
+
+    info!("Processing {} batches of max {} chunks", chunk_batches.len(), args.batch_size);
     info!("───────────────────────────────────────────────────────────────────");
 
+    for (batch_idx, batch) in chunk_batches.iter().enumerate() {
+        let batch_start = Instant::now();
+        
+        // Extract texts from chunk tuples
+        let texts: Vec<String> = batch.iter().map(|(_, content, _)| content.clone()).collect();
+        
+        debug!("[Batch {}/{}] Embedding {} chunks", 
+            batch_idx + 1, chunk_batches.len(), texts.len());
+
+        // Generate embeddings using fastembed
+        match voidm_core::embeddings::embed_batch(&args.model, &texts) {
+            Ok(embeddings) => {
+                // Store each embedding
+                for (chunk_tuple, embedding) in batch.iter().zip(embeddings.iter()) {
+                    let (chunk_id, _, _) = chunk_tuple;
+                    
+                    match db.store_chunk_embedding(chunk_id.clone(), chunk_id.clone(), embedding.clone()).await {
+                        Ok((stored_id, dim)) => {
+                            total_processed += 1;
+                            debug!("Stored {}D embedding for {}", dim, stored_id);
+                        }
+                        Err(e) => {
+                            debug!("Failed to store embedding for {}: {}", chunk_id, e);
+                            total_skipped += 1;
+                        }
+                    }
+                }
+                
+                embedding_batches += 1;
+                let batch_elapsed = batch_start.elapsed();
+                total_embedding_time += batch_elapsed;
+                
+                info!("[Batch {}/{}] Embedded {} chunks in {:.2}ms",
+                    batch_idx + 1,
+                    chunk_batches.len(),
+                    texts.len(),
+                    batch_elapsed.as_secs_f32() * 1000.0
+                );
+            }
+            Err(e) => {
+                info!("[Batch {}/{}] Embedding failed: {}", batch_idx + 1, chunk_batches.len(), e);
+                total_skipped += texts.len();
+            }
+        }
+    }
+
+    let total_elapsed = start_time.elapsed();
+
+    info!("═══════════════════════════════════════════════════════════════════");
     info!("EMBEDDING COMPLETE");
-    info!("───────────────────────────────────────────────────────────────────");
+    info!("═══════════════════════════════════════════════════════════════════");
     info!("Total chunks embedded: {}", total_processed);
     info!("Total chunks skipped: {}", total_skipped);
     info!("Batch count: {}", embedding_batches);
     info!("Total embedding time: {:.2}s", total_embedding_time.as_secs_f32());
+    info!("Total elapsed time: {:.2}s", total_elapsed.as_secs_f32());
     info!("Time per chunk: {:.3}ms", 
         if total_processed > 0 {
             total_embedding_time.as_secs_f32() * 1000.0 / total_processed as f32
@@ -83,7 +146,7 @@ pub async fn run(args: EmbedArgs, db: &Arc<dyn Database>) -> Result<()> {
         }
     );
     info!("───────────────────────────────────────────────────────────────────");
-    info!("✅ Embedding generation ready for vector search");
+    info!("✅ Embedding generation complete - {} chunks embedded", total_processed);
 
     Ok(())
 }

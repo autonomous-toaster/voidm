@@ -799,6 +799,30 @@ impl Database for SqliteDatabase {
             Ok(0)
         })
     }
+
+    fn fetch_chunks(
+        &self,
+        _limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>> {
+        Box::pin(async move {
+            // SQLite doesn't store chunks
+            // Chunks are computed on-demand from memories
+            Ok(vec![])
+        })
+    }
+
+    fn store_chunk_embedding(
+        &self,
+        _chunk_id: String,
+        _memory_id: String,
+        _embedding: Vec<f32>,
+    ) -> Pin<Box<dyn Future<Output = Result<(String, usize)>> + Send + '_>> {
+        Box::pin(async move {
+            // SQLite doesn't persist embeddings for chunks
+            // This is a no-op for SQLite, Neo4j will implement storage
+            Ok((_chunk_id, 0))
+        })
+    }
 }
 
 #[cfg(test)]

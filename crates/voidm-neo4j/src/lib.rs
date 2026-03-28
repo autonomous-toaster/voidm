@@ -1410,6 +1410,77 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             Ok(deleted_count)
         })
     }
+
+    fn fetch_chunks(
+        &self,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+
+        Box::pin(async move {
+            let cypher = "MATCH (m:Memory)-[r:CONTAINS]->(c:MemoryChunk) 
+                          RETURN c.id as chunk_id, c.content as content, c.created_at as created_at 
+                          LIMIT $limit";
+            
+            let mut result = graph
+                .execute_on(&database, 
+                    neo4rs::query(cypher)
+                        .param("limit", limit as i64)
+                )
+                .await
+                .context("Failed to fetch chunks")?;
+
+            let mut chunks = Vec::new();
+            while let Ok(Some(row)) = result.next().await {
+                if let (Ok(chunk_id), Ok(content), Ok(created_at)) = (
+                    row.get::<String>("chunk_id"),
+                    row.get::<String>("content"),
+                    row.get::<String>("created_at"),
+                ) {
+                    chunks.push((chunk_id, content, created_at));
+                }
+            }
+
+            Ok(chunks)
+        })
+    }
+
+    fn store_chunk_embedding(
+        &self,
+        chunk_id: String,
+        _memory_id: String,
+        embedding: Vec<f32>,
+    ) -> Pin<Box<dyn Future<Output = Result<(String, usize)>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let dim = embedding.len();
+
+        Box::pin(async move {
+            // Store embedding as a le_bytes property on MemoryChunk
+            let embedding_bytes: Vec<u8> = embedding
+                .iter()
+                .flat_map(|f| f.to_le_bytes().to_vec())
+                .collect();
+
+            let cypher = "MATCH (c:MemoryChunk {id: $id}) 
+                          SET c.embedding = $embedding, c.embedding_dim = $dim
+                          RETURN c.id as chunk_id";
+            
+            graph
+                .execute_on(&database, 
+                    neo4rs::query(cypher)
+                        .param("id", chunk_id.clone())
+                        .param("embedding", embedding_bytes)
+                        .param("dim", dim as i64)
+                )
+                .await
+                .context("Failed to store chunk embedding")?;
+
+            tracing::debug!("Neo4j: Stored {}D embedding for chunk {}", dim, chunk_id);
+            Ok((chunk_id, dim))
+        })
+    }
     
 }
 #[cfg(test)]

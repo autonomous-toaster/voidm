@@ -253,4 +253,19 @@ pub trait Database: Send + Sync {
         &self,
         memory_id: &str,
     ) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>>;
+
+    /// Fetch all chunks (or limited set) for embedding generation
+    fn fetch_chunks(
+        &self,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>>;
+
+    /// Store embedding for a chunk
+    /// Returns: (chunk_id, embedding_dimension)
+    fn store_chunk_embedding(
+        &self,
+        chunk_id: String,
+        memory_id: String,
+        embedding: Vec<f32>,
+    ) -> Pin<Box<dyn Future<Output = Result<(String, usize)>> + Send + '_>>;
 }

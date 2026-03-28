@@ -85,6 +85,8 @@ pub enum Commands {
     Validate(commands::validate::ValidationArgs),
     /// Part D: Chunk memories and store in Neo4j
     Chunk(commands::chunk::ChunkArgs),
+    /// Part E: Generate embeddings for all chunks
+    Embed(commands::embed::EmbedArgs),
 }
 
 #[tokio::main]
@@ -230,6 +232,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Consolidate(args) => commands::consolidate::run(args, &db, &dummy_pool, &config, cli.json).await,
                 Commands::Validate(args) => commands::validate::run(args, &db).await,
                 Commands::Chunk(args) => commands::chunk::run(args, &db).await,
+                Commands::Embed(args) => commands::embed::run(args, &db).await,
                 Commands::Stats(args) => commands::stats::run(args, &db, &dummy_pool, &config, cli.json).await,
                 Commands::Mcp(_) => anyhow::bail!("MCP server is only available with SQLite backend"),
             }
@@ -279,6 +282,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Consolidate(args) => commands::consolidate::run(args, &db, &pool, &config, cli.json).await,
                 Commands::Validate(args) => commands::validate::run(args, &db).await,
                 Commands::Chunk(args) => commands::chunk::run(args, &db).await,
+                Commands::Embed(args) => commands::embed::run(args, &db).await,
                 Commands::Stats(args) => commands::stats::run(args, &db, &pool, &config, cli.json).await,
                 Commands::Mcp(args) => commands::mcp::run(args, pool.clone(), config).await,
             };

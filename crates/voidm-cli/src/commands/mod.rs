@@ -22,3 +22,4 @@ pub mod update;
 pub mod consolidate;
 pub mod validate;
 pub mod chunk;
+pub mod embed;

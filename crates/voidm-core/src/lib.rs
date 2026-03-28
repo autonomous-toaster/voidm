@@ -26,12 +26,14 @@ pub mod chunking;
 pub mod validation;
 pub mod coherence;
 pub mod neo4j_schema;
+pub mod neo4j_db;
 
 pub use config::Config;
 pub use config::config_path_display;
 pub use validation::validate_memory_length;
-pub use chunking::{chunk_smart, ChunkingStrategy, Chunk};
+pub use chunking::{chunk_smart, ChunkingStrategy, Chunk, BreakType};
 pub use coherence::estimate_coherence;
+pub use neo4j_db::Neo4jDb;
 
 // Re-export from separate crates
 #[cfg(feature = "ner")]

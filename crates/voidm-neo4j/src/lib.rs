@@ -1374,6 +1374,42 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             Ok(())
         })
     }
+
+    fn delete_chunks_for_memory(
+        &self,
+        memory_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let memory_id = memory_id.to_string();
+
+        Box::pin(async move {
+            // Cypher: Delete all MemoryChunk nodes for a memory
+            // MATCH (m:Memory {id: $id})-[r:CONTAINS]->(c:MemoryChunk)
+            // DELETE r, c
+            // RETURN count(c) as deleted_count
+
+            let cypher = "MATCH (m:Memory {id: $id})-[r:CONTAINS]->(c:MemoryChunk) DELETE r, c RETURN count(c) as deleted_count";
+            
+            let mut result = graph
+                .execute_on(&database, 
+                    neo4rs::query(cypher)
+                        .param("id", memory_id.clone())
+                )
+                .await
+                .context("Failed to delete chunks for memory")?;
+
+            let mut deleted_count = 0usize;
+            if let Ok(Some(row)) = result.next().await {
+                if let Ok(count) = row.get::<i64>("deleted_count") {
+                    deleted_count = count as usize;
+                }
+            }
+
+            tracing::info!("Neo4j: Deleted {} chunks for memory {}", deleted_count, memory_id);
+            Ok(deleted_count)
+        })
+    }
     
 }
 #[cfg(test)]

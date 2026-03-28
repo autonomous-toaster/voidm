@@ -246,4 +246,11 @@ pub trait Database: Send + Sync {
     fn shutdown(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async { Ok(()) })
     }
+
+    /// Delete all chunks for a memory (used when memory content is updated)
+    /// Chunk immutability: old chunks are deleted, new ones recreated with new timestamp
+    fn delete_chunks_for_memory(
+        &self,
+        memory_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>>;
 }

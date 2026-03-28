@@ -788,6 +788,17 @@ impl Database for SqliteDatabase {
             Ok(())
         })
     }
+
+    fn delete_chunks_for_memory(
+        &self,
+        _memory_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
+        Box::pin(async move {
+            // SQLite doesn't store chunks (computed on-demand)
+            // This is a no-op for SQLite, Neo4j will implement chunk deletion
+            Ok(0)
+        })
+    }
 }
 
 #[cfg(test)]

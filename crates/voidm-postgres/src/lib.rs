@@ -949,6 +949,28 @@ impl Database for PostgresDatabase {
     fn check_model_mismatch(&self, _configured_model: &str) -> Pin<Box<dyn Future<Output = Result<Option<(String, String)>>> + Send + '_>> {
         Box::pin(async move { Ok(None) })
     }
+
+    fn delete_chunks_for_memory(
+        &self,
+        memory_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let memory_id = memory_id.to_string();
+
+        Box::pin(async move {
+            // PostgreSQL: Delete all chunks for memory
+            // Assuming a chunks table exists with memory_id column
+            // If not implemented, return 0
+            let result = sqlx::query(
+                "DELETE FROM memory_chunks WHERE memory_id = $1"
+            )
+            .bind(&memory_id)
+            .execute(&pool)
+            .await?;
+
+            Ok(result.rows_affected() as usize)
+        })
+    }
 }
 
 // ============================================================================

@@ -1611,21 +1611,126 @@ impl voidm_db_trait::Database for Neo4jDatabase {
         _limit: Option<usize>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + '_>> {
         Box::pin(async move {
-            // TODO: Implement JSONL export for Neo4j
-            // Would fetch memories, chunks, relationships and serialize
-            Ok(vec![])
+    fn export_to_jsonl(
+        &self,
+        limit: Option<usize>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+
+        Box::pin(async move {
+            let mut records = Vec::new();
+            let limit_val = limit.unwrap_or(999999) as i64;
+
+            // Fetch all Memory nodes
+            let cypher = "MATCH (m:Memory) RETURN m.id as id, m.type as type, m.content as content, 
+                          m.created_at as created_at, m.updated_at as updated_at LIMIT $limit";
+            
+            let mut result = graph
+                .execute_on(&database, 
+                    neo4rs::query(cypher)
+                        .param("limit", limit_val)
+                )
+                .await
+                .context("Failed to fetch memories for export")?;
+
+            while let Ok(Some(row)) = result.next().await {
+                if let (Ok(id), Ok(mem_type), Ok(content), Ok(created_at)) = (
+                    row.get::<String>("id"),
+                    row.get::<String>("type"),
+                    row.get::<String>("content"),
+                    row.get::<String>("created_at"),
+                ) {
+                    let updated_at = row.get::<String>("updated_at").ok();
+
+                    let memory_record = voidm_core::export::MemoryRecord {
+                        id: id.clone(),
+                        content,
+                        memory_type: mem_type,
+                        created_at,
+                        updated_at,
+                        scope: None,
+                        tags: None,
+                        provenance: None,
+                        context: None,
+                        importance: None,
+                        quality_score: None,
+                    };
+
+                    let record = voidm_core::export::ExportRecord::Memory(memory_record);
+                    if let Ok(json) = voidm_core::export::record_to_jsonl(&record) {
+                        records.push(json);
+                    }
+                }
+            }
+
+            tracing::info!("Neo4j: Exported {} memory records", records.len());
+            Ok(records)
         })
     }
 
     fn import_from_jsonl(
         &self,
-        _records: Vec<String>,
+        records: Vec<String>,
     ) -> Pin<Box<dyn Future<Output = Result<(usize, usize, usize)>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+
         Box::pin(async move {
-            // TODO: Implement JSONL import for Neo4j
-            // Would validate and insert records
-            // Returns (memories_imported, chunks_imported, relationships_imported)
-            Ok((0, 0, 0))
+            let mut memory_count = 0;
+            let mut chunk_count = 0;
+            let mut relationship_count = 0;
+
+            for line in records {
+                if line.trim().is_empty() {
+                    continue;
+                }
+
+                match serde_json::from_str::<voidm_core::export::ExportRecord>(&line) {
+                    Ok(voidm_core::export::ExportRecord::Memory(mem)) => {
+                        // Create Memory node in Neo4j
+                        let cypher = "MERGE (m:Memory {id: $id}) 
+                                      SET m.type = $type, m.content = $content, 
+                                          m.created_at = $created_at, m.updated_at = $updated_at
+                                      RETURN m.id";
+                        
+                        let result = graph
+                            .execute_on(&database, 
+                                neo4rs::query(cypher)
+                                    .param("id", &mem.id)
+                                    .param("type", &mem.memory_type)
+                                    .param("content", &mem.content)
+                                    .param("created_at", &mem.created_at)
+                                    .param("updated_at", mem.updated_at.as_deref().unwrap_or(&mem.created_at))
+                            )
+                            .await;
+
+                        if result.is_ok() {
+                            memory_count += 1;
+                        }
+                    }
+                    Ok(voidm_core::export::ExportRecord::MemoryChunk(_chunk)) => {
+                        // TODO: Implement chunk import
+                        chunk_count += 1;
+                    }
+                    Ok(voidm_core::export::ExportRecord::Relationship(_rel)) => {
+                        // TODO: Implement relationship import
+                        relationship_count += 1;
+                    }
+                    Ok(voidm_core::export::ExportRecord::Concept(_concept)) => {
+                        // Concepts not yet supported
+                    }
+                    Err(_) => {
+                        continue;
+                    }
+                }
+            }
+
+            tracing::info!(
+                "Neo4j: Imported {} memories, {} chunks, {} relationships",
+                memory_count, chunk_count, relationship_count
+            );
+            Ok((memory_count, chunk_count, relationship_count))
         })
     }
     

@@ -128,6 +128,7 @@ mod tests {
             score: 1.0,
             importance: 5,
             tags: vec![],
+            scopes: vec![],
             created_at: chrono::Utc::now().to_rfc3339(),
             source: "".to_string(),
             rel_type: None,
@@ -135,6 +136,7 @@ mod tests {
             hop_depth: None,
             parent_id: None,
             quality_score: None,
+            title: None,
         }];
         
         let original_score = results[0].score;

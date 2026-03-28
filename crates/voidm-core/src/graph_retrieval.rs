@@ -434,6 +434,7 @@ mod tests {
             hop_depth: None,
             parent_id: None,
             quality_score: None,
+            title: None,
         }
     }
 

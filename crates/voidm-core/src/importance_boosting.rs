@@ -100,6 +100,7 @@ mod tests {
                 score: 1.0,
                 importance: 10,
                 tags: vec![],
+                scopes: vec![],
                 created_at: "".to_string(),
                 source: "".to_string(),
                 rel_type: None,
@@ -107,6 +108,7 @@ mod tests {
                 hop_depth: None,
                 parent_id: None,
                 quality_score: None,
+                title: None,
             },
         ];
         let original_score = results[0].score;
@@ -131,6 +133,7 @@ mod tests {
                 score: 1.0,
                 importance: 9,
                 tags: vec![],
+                scopes: vec![],
                 created_at: "".to_string(),
                 source: "".to_string(),
                 rel_type: None,
@@ -138,6 +141,7 @@ mod tests {
                 hop_depth: None,
                 parent_id: None,
                 quality_score: None,
+                title: None,
             },
             SearchResult {
                 id: "low".to_string(),
@@ -146,6 +150,7 @@ mod tests {
                 score: 1.0,
                 importance: 5,
                 tags: vec![],
+                scopes: vec![],
                 created_at: "".to_string(),
                 source: "".to_string(),
                 rel_type: None,
@@ -153,6 +158,7 @@ mod tests {
                 hop_depth: None,
                 parent_id: None,
                 quality_score: None,
+                title: None,
             },
         ];
         

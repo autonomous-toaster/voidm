@@ -652,6 +652,9 @@ mod tests {
             importance: 5,
             created_at: "now".to_string(),
             quality_score: Some(0.4),
+            metadata: serde_json::json!({}),
+            context: None,
+            title: None,
             suggested_links: vec![],
             duplicate_warning: None,
         };

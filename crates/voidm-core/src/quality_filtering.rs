@@ -74,6 +74,7 @@ mod tests {
             score: 1.0,
             importance: 5,
             tags: vec![],
+            scopes: vec![],
             created_at: "".to_string(),
             source: "".to_string(),
             rel_type: None,
@@ -81,6 +82,7 @@ mod tests {
             hop_depth: None,
             parent_id: None,
             quality_score: quality,
+            title: None,
         }
     }
 

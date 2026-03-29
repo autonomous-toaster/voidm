@@ -25,6 +25,8 @@ use voidm_core::query::translator::QueryTranslator;
 use voidm_core::query::sqlite::SqliteTranslator;
 use voidm_core::query::cypher::CypherOperation;
 
+pub mod add_memory_backend;
+
 /// Load sqlite-vec at process level via sqlite3_auto_extension
 fn ensure_sqlite_vec_loaded() {
     static LOADED: OnceCell<()> = OnceCell::new();
@@ -394,8 +396,8 @@ impl Database for SqliteDatabase {
             let config: voidm_core::Config = serde_json::from_value(config_json)
                 .context("Failed to parse Config")?;
             
-            // Call the real implementation
-            let resp = voidm_core::crud::add_memory(&pool, req, &config).await?;
+            // Call the optimized backend-specific implementation
+            let resp = add_memory_backend::execute_add_memory_transaction_wrapper(&pool, req, &config).await?;
             
             // Serialize response with proper field name "type" (not "memory_type")
             Ok(serde_json::json!({

@@ -11,6 +11,12 @@ use voidm_core::models::{
 };
 use voidm_core::search::{SearchOptions, SearchResponse};
 
+pub mod neo4j_db;
+pub mod neo4j_schema;
+
+pub use neo4j_db::Neo4jDb;
+pub use neo4j_schema::{MemoryChunkSchema, SchemaStats, CoherenceStats};
+
 /// Neo4j implementation of the Database trait.
 /// Uses the neo4rs async driver with Bolt protocol.
 #[derive(Clone)]

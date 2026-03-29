@@ -26,8 +26,6 @@ pub mod chunking;
 pub mod validation;
 pub mod coherence;
 pub mod similarity;
-pub mod neo4j_schema;
-pub mod neo4j_db;
 pub mod export;
 pub mod import;
 pub mod chunk_nodes; // Phase 0.5.3: Generic node/edge storage for chunks
@@ -37,7 +35,6 @@ pub use config::config_path_display;
 pub use validation::validate_memory_length;
 pub use chunking::{chunk_smart, ChunkingStrategy, Chunk, BreakType};
 pub use coherence::estimate_coherence;
-pub use neo4j_db::Neo4jDb;
 
 // Re-export from separate crates
 #[cfg(feature = "ner")]
@@ -53,4 +50,3 @@ pub use voidm_query_expansion as query_expansion;
 pub use crud::{resolve_id, resolve_id_sqlite};
 pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning, MemoryEdge, validate_title};
 pub use migration_export::{VectorBackup, MigrationCheckpoint};
-pub use neo4j_schema::{MemoryChunkSchema, SchemaStats, CoherenceStats};

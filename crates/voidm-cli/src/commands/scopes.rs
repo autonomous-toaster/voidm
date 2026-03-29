@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Subcommand;
-use sqlx::SqlitePool;
 use std::sync::Arc;
-use voidm_core::{crud, crud_trait};
+use voidm_core::crud_trait;
+use voidm_db_trait::Database;
 
 #[derive(Subcommand)]
 pub enum ScopesCommands {
@@ -10,7 +10,7 @@ pub enum ScopesCommands {
     List,
 }
 
-pub async fn run(cmd: ScopesCommands, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, json: bool) -> Result<()> {
+pub async fn run(cmd: ScopesCommands, db: &std::sync::Arc<dyn Database>, json: bool) -> Result<()> {
     match cmd {
         ScopesCommands::List => {
             let scopes = crud_trait::list_scopes(db).await?;

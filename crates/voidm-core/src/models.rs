@@ -319,30 +319,12 @@ pub struct MemoryEdge {
     pub note: Option<String>,
 }
 
-/// Representation of an ontology edge (concept-concept, concept-memory, etc.) for migration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OntologyEdgeForMigration {
-    pub from_id: String,
-    pub from_type: String,  // "memory" or "concept"
-    pub to_id: String,
-    pub to_type: String,    // "memory" or "concept"
-    pub rel_type: String,
-    pub note: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkResponse {
     pub created: bool,
     pub from: String,
     pub rel: String,
     pub to: String,
-    pub conflict_warning: Option<ConflictWarning>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConflictWarning {
-    pub existing_rel: String,
-    pub message: String,
 }
 
 /// Hint logic for suggested links based on type pairs.

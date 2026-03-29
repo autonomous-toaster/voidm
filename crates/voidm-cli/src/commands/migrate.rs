@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::sync::Arc;
 use voidm_db_trait::Database;
+use std::io::Write;
 
 #[derive(Parser, Clone)]
 pub struct MigrateArgs {
@@ -30,10 +31,18 @@ pub struct MigrateArgs {
     #[arg(long)]
     pub update_all: bool,
 
-    /// Clean target database before migration (DELETE all Concept and OntologyEdge nodes)
-    /// Only applies to Neo4j migrations. Use with caution!
+    /// Clean target database before migration (DELETE all known nodes and edges)
+    /// Requires --confirm to actually delete (for safety)
     #[arg(long)]
     pub clean: bool,
+
+    /// Confirm deletion when using --clean (skips confirmation prompt)
+    #[arg(long)]
+    pub confirm: bool,
+
+    /// Skip validation after migration
+    #[arg(long)]
+    pub skip_validation: bool,
 }
 
 pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<&str>, json: bool) -> Result<()> {
@@ -96,35 +105,99 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
         dest_db.ensure_schema().await?;
     }
 
-    // Clean target database if requested (Neo4j only)
-    if args.clean && !args.dry_run && to_backend == "neo4j" {
+    // Clean target database if requested
+    if args.clean && !args.dry_run {
         if !json {
-            println!("🧹 Cleaning target Neo4j database (removing all Concept and OntologyEdge nodes)...");
+            println!("🧹 Preparing to clean target database...");
+            
+            // Get counts before deletion
+            let mem_count = dest_db.count_nodes("Memory").await.unwrap_or(0);
+            let chunk_count = dest_db.count_nodes("MemoryChunk").await.unwrap_or(0);
+            let tag_count = dest_db.count_nodes("Tag").await.unwrap_or(0);
+            let entity_count = dest_db.count_nodes("Entity").await.unwrap_or(0);
+            let edge_count = dest_db.count_edges(None).await.unwrap_or(0);
+
+            println!("\n⚠️  WARNING: This will DELETE all data in the target database!");
+            println!("\nWill delete:");
+            println!("  - {} Memory nodes", mem_count);
+            println!("  - {} MemoryChunk nodes", chunk_count);
+            println!("  - {} Tag nodes", tag_count);
+            println!("  - {} Entity nodes", entity_count);
+            println!("  - {} relationships/edges", edge_count);
+
+            if !args.confirm {
+                print!("\nContinue? [y/N]: ");
+                std::io::stdout().flush()?;
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+            }
         }
+
         dest_db.clean_database().await?;
         if !json {
             println!("✓ Database cleaned");
         }
     }
 
-    // Migrate memories
-    migrate_memories(source_db.as_ref(), dest_db.as_ref(), config, &args.scope_filter, &skip_ids, args.dry_run, args.update_all, json).await?;
+    if !json {
+        println!("\n📤 Exporting from {}...", from_backend);
+    }
 
-    // Migrate concepts
-    migrate_concepts(source_db.as_ref(), dest_db.as_ref(), &args.scope_filter, args.dry_run, json).await?;
+    // Migrate memories
+    let (mem_migrated, mem_skipped) = migrate_memories(source_db.as_ref(), dest_db.as_ref(), config, &args.scope_filter, &skip_ids, args.dry_run, args.update_all, json).await?;
+
+    // Migrate chunks
+    let (chunk_migrated, chunk_skipped) = migrate_chunks(source_db.as_ref(), dest_db.as_ref(), &skip_ids, args.dry_run, json).await?;
+
+    // Migrate tags
+    let (tag_migrated, tag_skipped) = migrate_tags(source_db.as_ref(), dest_db.as_ref(), args.dry_run, json).await?;
+
+    // Migrate entities
+    let (entity_migrated, entity_skipped) = migrate_entities(source_db.as_ref(), dest_db.as_ref(), args.dry_run, json).await?;
 
     // Migrate relationships (memory-to-memory edges)
-    migrate_relationships(source_db.as_ref(), dest_db.as_ref(), &skip_ids, args.dry_run, json).await?;
+    let (edge_migrated, edge_skipped) = migrate_relationships(source_db.as_ref(), dest_db.as_ref(), &skip_ids, args.dry_run, json).await?;
 
-    // Migrate ontology edges (concept-concept, concept-memory, etc.)
-    migrate_ontology_edges(source_db.as_ref(), dest_db.as_ref(), &skip_ids, args.dry_run, json).await?;
+    // Migrate tag edges
+    let (tag_edge_migrated, tag_edge_skipped) = migrate_tag_edges(source_db.as_ref(), dest_db.as_ref(), args.dry_run, json).await?;
+
+    // Migrate entity mention edges
+    let (entity_edge_migrated, entity_edge_skipped) = migrate_entity_edges(source_db.as_ref(), dest_db.as_ref(), args.dry_run, json).await?;
+
+    // Validation
+    if !args.skip_validation && !args.dry_run {
+        if !json {
+            println!("\n✓ Validating migration...");
+        }
+        validate_migration(source_db.as_ref(), dest_db.as_ref(), json).await?;
+    }
 
     if !json {
+        println!("\n📊 Migration Summary:");
+        println!("  Memories:       {} migrated, {} skipped", mem_migrated, mem_skipped);
+        println!("  Chunks:         {} migrated, {} skipped", chunk_migrated, chunk_skipped);
+        println!("  Tags:           {} migrated, {} skipped", tag_migrated, tag_skipped);
+        println!("  Entities:       {} migrated, {} skipped", entity_migrated, entity_skipped);
+        println!("  Edges:          {} migrated, {} skipped", edge_migrated, edge_skipped);
+        println!("  Tag Edges:      {} migrated, {} skipped", tag_edge_migrated, tag_edge_skipped);
+        println!("  Entity Edges:   {} migrated, {} skipped", entity_edge_migrated, entity_edge_skipped);
         println!("\n✓ Migration complete!");
     } else {
         println!("{}", serde_json::json!({
             "status": "success",
-            "message": "Migration complete"
+            "memories": {"migrated": mem_migrated, "skipped": mem_skipped},
+            "chunks": {"migrated": chunk_migrated, "skipped": chunk_skipped},
+            "tags": {"migrated": tag_migrated, "skipped": tag_skipped},
+            "entities": {"migrated": entity_migrated, "skipped": entity_skipped},
+            "edges": {"migrated": edge_migrated, "skipped": edge_skipped},
+            "tag_edges": {"migrated": tag_edge_migrated, "skipped": tag_edge_skipped},
+            "entity_edges": {"migrated": entity_edge_migrated, "skipped": entity_edge_skipped},
         }));
     }
 
@@ -140,7 +213,7 @@ async fn migrate_memories(
     dry_run: bool,
     update_all: bool,
     json: bool,
-) -> Result<()> {
+) -> Result<(u32, u32)> {
     let memories_json = source.list_memories(Some(10000)).await?;
     let mut memories = Vec::new();
     for mem_json in memories_json {
@@ -199,74 +272,50 @@ async fn migrate_memories(
     }
 
     if !json {
-        println!("Memories: {} migrated, {} skipped", migrated, skipped);
+        println!("✓ Memories: {} migrated, {} skipped", migrated, skipped);
     }
 
-    Ok(())
+    Ok((migrated, skipped))
 }
 
-async fn migrate_concepts(
+async fn migrate_chunks(
     source: &(impl Database + ?Sized),
     dest: &(impl Database + ?Sized),
-    scope_filter: &Option<String>,
+    skip_ids: &std::collections::HashSet<String>,
     dry_run: bool,
     json: bool,
-) -> Result<()> {
-    let concepts_json = source.list_concepts(None, 10000).await?;
-    let mut concepts = Vec::new();
-    for concept_json in concepts_json {
-        if let Ok(concept) = serde_json::from_value::<voidm_core::ontology::Concept>(concept_json) {
-            concepts.push(concept);
-        }
-    }
-
-    let mut migrated = 0;
-    let mut skipped = 0;
-    let mut failed = 0;
-
-    for concept in concepts {
-        // Filter by scope if specified
-        if let Some(filter) = scope_filter {
-            if !concept.scope.as_ref().map(|s| s.contains(filter)).unwrap_or(false) {
-                skipped += 1;
-                continue;
-            }
-        }
-
-        if dry_run {
-            migrated += 1;
-            if !json {
-                println!("  [DRY RUN] Would migrate concept: {} ({})", concept.id, concept.name);
-            }
-            continue;
-        }
-
-        match dest.add_concept(&concept.name, concept.description.as_deref(), concept.scope.as_deref(), Some(&concept.id)).await {
-            Ok(_) => {
-                migrated += 1;
-                if !json && migrated % 100 == 0 {
-                    println!("  Migrated {} concepts...", migrated);
-                }
-            }
-            Err(e) => {
-                if !json && failed < 5 {
-                    eprintln!("  Error migrating concept '{}' ({}): {}", concept.name, concept.id, e);
-                }
-                failed += 1;
-            }
-        }
-    }
-
+) -> Result<(u32, u32)> {
+    let (migrated, skipped) = voidm_core::migration::migrate_chunks(source, dest, skip_ids, dry_run).await?;
     if !json {
-        println!("Concepts: {} migrated, {} failed, {} skipped", migrated, failed, skipped);
+        println!("✓ Chunks: {} migrated, {} skipped", migrated, skipped);
     }
+    Ok((migrated, skipped))
+}
 
-    // Return error only if ALL concepts failed
-    if failed > 0 && migrated == 0 {
-        anyhow::bail!("Failed to migrate any concepts (total failures: {})", failed);
+async fn migrate_tags(
+    source: &(impl Database + ?Sized),
+    dest: &(impl Database + ?Sized),
+    dry_run: bool,
+    json: bool,
+) -> Result<(u32, u32)> {
+    let (migrated, skipped) = voidm_core::migration::migrate_tags(source, dest, dry_run).await?;
+    if !json {
+        println!("✓ Tags: {} migrated, {} skipped", migrated, skipped);
     }
+    Ok((migrated, skipped))
+}
 
-    Ok(())
+async fn migrate_entities(
+    source: &(impl Database + ?Sized),
+    dest: &(impl Database + ?Sized),
+    dry_run: bool,
+    json: bool,
+) -> Result<(u32, u32)> {
+    let (migrated, skipped) = voidm_core::migration::migrate_entities(source, dest, dry_run).await?;
+    if !json {
+        println!("✓ Entities: {} migrated, {} skipped", migrated, skipped);
+    }
+    Ok((migrated, skipped))
 }
 
 async fn migrate_relationships(
@@ -275,7 +324,7 @@ async fn migrate_relationships(
     skip_ids: &std::collections::HashSet<String>,
     dry_run: bool,
     json: bool,
-) -> Result<()> {
+) -> Result<(u32, u32)> {
     let edges_json = source.list_edges().await?;
     let mut edges = Vec::new();
     for edge_json in edges_json {
@@ -354,74 +403,124 @@ async fn migrate_relationships(
     }
 
     if !json {
-        println!("Edges: {} migrated, {} skipped", migrated, skipped);
+        println!("✓ Edges: {} migrated, {} skipped", migrated, skipped);
     }
 
-    Ok(())
+    Ok((migrated, skipped))
 }
 
-async fn migrate_ontology_edges(
+async fn migrate_tag_edges(
     source: &(impl Database + ?Sized),
     dest: &(impl Database + ?Sized),
-    skip_ids: &std::collections::HashSet<String>,
     dry_run: bool,
     json: bool,
-) -> Result<()> {
-    let edges_json = source.list_ontology_edges().await?;
-    let mut edges = Vec::new();
-    for edge_json in edges_json {
-        if let Ok(edge) = serde_json::from_value::<voidm_core::models::OntologyEdgeForMigration>(edge_json) {
-            edges.push(edge);
-        }
-    }
-
+) -> Result<(u32, u32)> {
+    let tag_edges = source.list_tag_edges().await?;
     let mut migrated = 0;
     let mut skipped = 0;
-    let mut failed = 0;
 
-    for edge in edges {
-        // Skip if either endpoint is in skip list
-        if skip_ids.contains(&edge.from_id) || skip_ids.contains(&edge.to_id) {
-            skipped += 1;
-            continue;
-        }
-
+    for edge_val in tag_edges {
         if dry_run {
             migrated += 1;
-            if !json {
-                println!("  [DRY RUN] Would migrate ontology edge: {} ({}) -> {} ({}) [{}]", 
-                    edge.from_id, edge.from_type, edge.to_id, edge.to_type, edge.rel_type);
-            }
             continue;
         }
 
-        // Try to create the ontology edge
-        match dest.create_ontology_edge(&edge.from_id, &edge.from_type, &edge.rel_type, &edge.to_id, &edge.to_type).await {
-            Ok(true) => {
-                migrated += 1;
-                if !json && migrated % 100 == 0 {
-                    println!("  Migrated {} ontology edges...", migrated);
-                }
+        if let (Some(tag_id), Some(mem_id)) = (
+            edge_val.get("from").and_then(|v| v.as_str()),
+            edge_val.get("to").and_then(|v| v.as_str()),
+        ) {
+            match dest.link_tag_to_memory(tag_id, mem_id).await {
+                Ok(true) => migrated += 1,
+                _ => skipped += 1,
             }
-            Ok(false) => {
-                if !json && failed < 5 {
-                    eprintln!("  Warning: Ontology edge not created: {} -> {}", edge.from_id, edge.to_id);
-                }
-                failed += 1;
-            }
-            Err(e) => {
-                if !json && failed < 5 {
-                    eprintln!("  Error: {} -> {}: {}", edge.from_id, edge.to_id, e);
-                }
-                failed += 1;
-            }
+        } else {
+            skipped += 1;
         }
     }
 
     if !json {
-        println!("Ontology Edges: {} migrated, {} failed, {} skipped", migrated, failed, skipped);
+        println!("✓ Tag Edges: {} migrated, {} skipped", migrated, skipped);
+    }
+
+    Ok((migrated, skipped))
+}
+
+async fn migrate_entity_edges(
+    source: &(impl Database + ?Sized),
+    dest: &(impl Database + ?Sized),
+    dry_run: bool,
+    json: bool,
+) -> Result<(u32, u32)> {
+    let mention_edges = source.list_entity_mention_edges().await?;
+    let mut migrated = 0;
+    let mut skipped = 0;
+
+    for edge_val in mention_edges {
+        if dry_run {
+            migrated += 1;
+            continue;
+        }
+
+        if let (Some(chunk_id), Some(entity_id)) = (
+            edge_val.get("from").and_then(|v| v.as_str()),
+            edge_val.get("to").and_then(|v| v.as_str()),
+        ) {
+            let confidence = edge_val.get("confidence")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.5) as f32;
+
+            match dest.link_chunk_to_entity(chunk_id, entity_id, confidence).await {
+                Ok(true) => migrated += 1,
+                _ => skipped += 1,
+            }
+        } else {
+            skipped += 1;
+        }
+    }
+
+    if !json {
+        println!("✓ Entity Edges: {} migrated, {} skipped", migrated, skipped);
+    }
+
+    Ok((migrated, skipped))
+}
+
+async fn validate_migration(
+    source: &(impl Database + ?Sized),
+    dest: &(impl Database + ?Sized),
+    json: bool,
+) -> Result<()> {
+    let src_mem = source.count_nodes("Memory").await.unwrap_or(0);
+    let dst_mem = dest.count_nodes("Memory").await.unwrap_or(0);
+    
+    let src_chunk = source.count_nodes("MemoryChunk").await.unwrap_or(0);
+    let dst_chunk = dest.count_nodes("MemoryChunk").await.unwrap_or(0);
+    
+    let src_tag = source.count_nodes("Tag").await.unwrap_or(0);
+    let dst_tag = dest.count_nodes("Tag").await.unwrap_or(0);
+    
+    let src_entity = source.count_nodes("Entity").await.unwrap_or(0);
+    let dst_entity = dest.count_nodes("Entity").await.unwrap_or(0);
+
+    let mut all_match = true;
+
+    if !json {
+        println!("  Memory:       {} → {} {}", src_mem, dst_mem, if src_mem == dst_mem { "✓" } else { "✗" });
+        println!("  Chunks:       {} → {} {}", src_chunk, dst_chunk, if src_chunk == dst_chunk { "✓" } else { "✗" });
+        println!("  Tags:         {} → {} {}", src_tag, dst_tag, if src_tag == dst_tag { "✓" } else { "✗" });
+        println!("  Entities:     {} → {} {}", src_entity, dst_entity, if src_entity == dst_entity { "✓" } else { "✗" });
+    }
+
+    if src_mem != dst_mem || src_chunk != dst_chunk || src_tag != dst_tag || src_entity != dst_entity {
+        all_match = false;
+        if !json {
+            println!("\n⚠️  Warning: Count mismatch detected!");
+        }
+    }
+
+    if all_match && !json {
+        println!("\n✓ All counts match!");
     }
 
     Ok(())
 }
-

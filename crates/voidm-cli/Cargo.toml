@@ -23,7 +23,6 @@ voidm-nli        = { path = "../voidm-nli", optional = true }
 voidm-redactor   = { path = "../voidm-redactor", optional = true }
 voidm-embeddings = { path = "../voidm-embeddings", optional = true }
 voidm-reranker   = { path = "../voidm-reranker", optional = true }
-voidm-postgres   = { path = "../voidm-postgres", optional = true }
 sqlx             = { workspace = true }
 clap             = { workspace = true }
 comfy-table      = { workspace = true }
@@ -56,12 +55,12 @@ minimal = ["database-sqlite"]
 # STANDARD (100MB): Core + auto-tagging [DEFAULT]
 # Use: CLI, personal use, everything by default (RECOMMENDED)
 # Build: cargo build --release (default)
-standard = ["embeddings", "query-expansion", "nli", "ner", "reranker", "tinyllama", "redactor", "database-postgres"]
+standard = ["embeddings", "query-expansion", "nli", "ner", "reranker", "tinyllama", "redactor", "database-sqlite"]
 
 # ENHANCED (150MB): Reduced ML features + vector search
 # Use: knowledge work, faster builds, fewer dependencies
 # Build: cargo build --release --no-default-features --features enhanced
-enhanced = ["database-sqlite", "database-postgres", "embeddings", "vector-search", "query-expansion", "tinyllama"]
+enhanced = ["database-sqlite", "embeddings", "vector-search", "query-expansion", "tinyllama"]
 
 # SMART (220MB): All ML features + all backends
 # Use: research, production, full capabilities
@@ -79,7 +78,6 @@ full = ["smart"]
 
 # ─ Storage Backends ────────────────────────────────────────────────────────
 database-sqlite = []
-database-postgres = ["voidm-postgres"]
 database-neo4j  = []
 
 # ─ Embeddings & Vector Search ─────────────────────────────────────────────

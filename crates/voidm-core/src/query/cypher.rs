@@ -55,52 +55,6 @@ pub enum CypherOperation {
     },
     ListMemoryEdges,
 
-    // Ontology Concepts
-    ConceptCreate {
-        id: String,
-        name: String,
-        description: Option<String>,
-        scope: Option<String>,
-        created_at: String,
-    },
-    ConceptGet {
-        id: String,
-    },
-    ConceptList {
-        scope: Option<String>,
-        limit: usize,
-    },
-    ConceptDelete {
-        id: String,
-    },
-    ConceptResolveId {
-        prefix: String,
-    },
-    ConceptSearch {
-        query: String,
-        scope: Option<String>,
-        limit: usize,
-    },
-    ConceptGetWithInstances {
-        id: String,
-    },
-
-    // Ontology Edges
-    OntologyEdgeCreate {
-        from_id: String,
-        from_type: String,
-        rel_type: String,
-        to_id: String,
-        to_type: String,
-        note: Option<String>,
-    },
-    OntologyEdgeDelete {
-        from_id: String,
-        rel_type: String,
-        to_id: String,
-    },
-    ListOntologyEdges,
-
     // Search
     SearchHybrid {
         query: String,
@@ -218,90 +172,6 @@ impl CypherOperation {
                 RETURN from.id, r.rel_type, to.id, r.note, r.created_at
                 "#.to_string()
             }
-            Self::ConceptCreate { .. } => {
-                r#"
-                CREATE (c:Concept {
-                  id: $id,
-                  name: $name,
-                  description: $description,
-                  scope: $scope,
-                  created_at: $created_at
-                })
-                RETURN c
-                "#.to_string()
-            }
-            Self::ConceptGet { .. } => {
-                r#"
-                MATCH (c:Concept {id: $id})
-                RETURN c
-                "#.to_string()
-            }
-            Self::ConceptList { .. } => {
-                r#"
-                MATCH (c:Concept)
-                WHERE c.scope = $scope OR $scope IS NULL
-                RETURN c
-                LIMIT $limit
-                "#.to_string()
-            }
-            Self::ConceptDelete { .. } => {
-                r#"
-                MATCH (c:Concept {id: $id})
-                DELETE c
-                RETURN true as deleted
-                "#.to_string()
-            }
-            Self::ConceptResolveId { .. } => {
-                r#"
-                MATCH (c:Concept)
-                WHERE c.id STARTS WITH $prefix
-                RETURN c.id
-                LIMIT 1
-                "#.to_string()
-            }
-            Self::ConceptSearch { .. } => {
-                r#"
-                MATCH (c:Concept)
-                WHERE (c.name CONTAINS $query OR c.description CONTAINS $query)
-                  AND (c.scope = $scope OR $scope IS NULL)
-                RETURN c
-                LIMIT $limit
-                "#.to_string()
-            }
-            Self::ConceptGetWithInstances { .. } => {
-                r#"
-                MATCH (c:Concept {id: $id})
-                OPTIONAL MATCH (c)-[r]->(related)
-                RETURN c, collect({rel_type: type(r), node: related}) as relations
-                "#.to_string()
-            }
-            Self::OntologyEdgeCreate { .. } => {
-                r#"
-                MATCH (from {id: $from_id}), (to {id: $to_id})
-                CREATE (from)-[r {
-                  rel_type: $rel_type,
-                  from_type: $from_type,
-                  to_type: $to_type,
-                  note: $note
-                }]->(to)
-                RETURN r
-                "#.to_string()
-            }
-            Self::OntologyEdgeDelete { .. } => {
-                r#"
-                MATCH ()-[r]-()
-                WHERE r.from_id = $from_id AND r.rel_type = $rel_type AND r.to_id = $to_id
-                DELETE r
-                RETURN true as deleted
-                "#.to_string()
-            }
-            Self::ListOntologyEdges => {
-                r#"
-                MATCH (from)-[r]->(to)
-                WHERE r.from_type IS NOT NULL
-                RETURN r.from_id, r.from_type, r.to_id, r.to_type, r.rel_type, r.note
-                "#.to_string()
-            }
             Self::SearchHybrid { .. } => {
                 r#"
                 // Vector search
@@ -388,16 +258,6 @@ impl CypherOperation {
             Self::LinkMemories { .. } => "LinkMemories",
             Self::UnlinkMemories { .. } => "UnlinkMemories",
             Self::ListMemoryEdges => "ListMemoryEdges",
-            Self::ConceptCreate { .. } => "ConceptCreate",
-            Self::ConceptGet { .. } => "ConceptGet",
-            Self::ConceptList { .. } => "ConceptList",
-            Self::ConceptDelete { .. } => "ConceptDelete",
-            Self::ConceptResolveId { .. } => "ConceptResolveId",
-            Self::ConceptSearch { .. } => "ConceptSearch",
-            Self::ConceptGetWithInstances { .. } => "ConceptGetWithInstances",
-            Self::OntologyEdgeCreate { .. } => "OntologyEdgeCreate",
-            Self::OntologyEdgeDelete { .. } => "OntologyEdgeDelete",
-            Self::ListOntologyEdges => "ListOntologyEdges",
             Self::SearchHybrid { .. } => "SearchHybrid",
             Self::SearchHybridRRF { .. } => "SearchHybridRRF",
             Self::QueryCypher { .. } => "QueryCypher",

@@ -508,6 +508,35 @@ impl Config {
         Config::default()
     }
 
+    /// Load config from explicit path (for --config flag) or fall back to default locations
+    /// If explicit_path provided: use that
+    /// Otherwise: use default config_path() logic (respects VOIDM_CONFIG env var)
+    pub fn load_from(explicit_path: Option<&str>) -> Self {
+        let path = if let Some(p) = explicit_path {
+            std::path::PathBuf::from(p)
+        } else {
+            config_path().unwrap_or_else(|| {
+                std::path::PathBuf::from(".voidm/config.toml")
+            })
+        };
+
+        if path.exists() {
+            match std::fs::read_to_string(&path) {
+                Ok(s) => match toml::from_str::<Config>(&s) {
+                    Ok(c) => {
+                        tracing::info!("Loaded config from: {}", path.display());
+                        return c;
+                    },
+                    Err(e) => tracing::warn!("Failed to parse config {}: {}", path.display(), e),
+                },
+                Err(e) => tracing::warn!("Failed to read config {}: {}", path.display(), e),
+            }
+        } else if explicit_path.is_some() {
+            tracing::warn!("Config file not found: {}", path.display());
+        }
+        Config::default()
+    }
+
     /// Resolve the DB path: --db flag > $VOIDM_DB > config > XDG > ~/.local/share > ~/.voidm
     pub fn db_path(&self, override_path: Option<&str>) -> PathBuf {
         if let Some(p) = override_path {

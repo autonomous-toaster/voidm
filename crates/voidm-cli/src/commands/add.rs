@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Args;
-use sqlx::SqlitePool;
 use std::sync::Arc;
 use voidm_core::{Config, crud_trait, models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType}, validation::validate_memory_length};
 use voidm_db_trait::Database;
@@ -48,7 +47,7 @@ pub struct AddArgs {
     pub links: Vec<String>,
 }
 
-pub async fn run(args: AddArgs, db: &Arc<dyn Database>, pool: &SqlitePool, config: &Config, json: bool) -> Result<()> {
+pub async fn run(args: AddArgs, db: &Arc<dyn Database>, config: &Config, json: bool) -> Result<()> {
     let memory_type: MemoryType = args.r#type.parse()?;
 
     // Validate memory length (soft limit = warning, hard limit = error)

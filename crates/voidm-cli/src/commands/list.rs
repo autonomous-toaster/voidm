@@ -1,8 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use clap::Args;
-use sqlx::SqlitePool;
-use voidm_core::{Config, crud, crud_trait};
+use voidm_core::{Config, crud_trait};
 use voidm_db_trait::Database;
 
 #[derive(Args)]
@@ -20,7 +19,7 @@ pub struct ListArgs {
     pub limit: usize,
 }
 
-pub async fn run(args: ListArgs, db: &Arc<dyn Database>, pool: &SqlitePool, _config: &Config, json: bool) -> Result<()> {
+pub async fn run(args: ListArgs, db: &Arc<dyn Database>, _config: &Config, json: bool) -> Result<()> {
     let memories = crud_trait::list_memories_filtered(
         db,
         args.scope.as_deref(),

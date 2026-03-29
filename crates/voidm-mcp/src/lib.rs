@@ -16,12 +16,11 @@ use rmcp::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
 use sqlx::SqlitePool;
 use voidm_core::{
     Config, crud,
-    models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType},
-    ontology::{self, NodeKind, OntologyRelType},
-    resolve_id_sqlite,
+    models::{AddMemoryRequest, EdgeType, MemoryType},
     search::{SearchMode, SearchOptions, search},
 };
 use voidm_db_trait::Database;
@@ -33,7 +32,8 @@ pub struct McpServerConfig {
 }
 
 pub async fn run_server( pool: SqlitePool, config: Config) -> Result<()> {
-    let server = VoidmMcpServer::new(pool, config);
+    let db = Arc::new(SqliteDatabase::new(pool.clone()));
+    let server = VoidmMcpServer::new(pool, db, config);
     let running = server.serve(rmcp::transport::stdio()).await?;
     running.waiting().await?;
     Ok(())
@@ -41,15 +41,17 @@ pub async fn run_server( pool: SqlitePool, config: Config) -> Result<()> {
 
 #[derive(Debug, Clone)]
 pub struct VoidmMcpServer {
-    pool: SqlitePool,
+    pool: SqlitePool, // Keep for add_memory until it's refactored (Phase 1.5)
+    db: Arc<dyn Database>,
     config: Config,
     tool_router: ToolRouter<Self>,
 }
 
 impl VoidmMcpServer {
-    pub fn new(pool: SqlitePool, config: Config) -> Self {
+    pub fn new(pool: SqlitePool, db: Arc<dyn Database>, config: Config) -> Self {
         Self {
             pool,
+            db,
             config,
             tool_router: Self::tool_router(),
         }
@@ -100,10 +102,7 @@ impl ServerHandler for VoidmMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<ListResourcesResult, rmcp::ErrorData> {
-        let memories = crud::list_memories(&self.pool, None, None, 20)
-            .await
-            .map_err(mcp_err)?;
-        let concepts = ontology::list_concepts(&self.pool, None, 20)
+        let memories = crud::list_memories(self.db.as_ref(), Some(20))
             .await
             .map_err(mcp_err)?;
 
@@ -114,12 +113,6 @@ impl ServerHandler for VoidmMcpServer {
                 "Recent memory records",
             )
             .no_annotation(),
-            Self::raw_resource(
-                "voidm://concepts".to_string(),
-                "concepts".to_string(),
-                "Recent concept records",
-            )
-            .no_annotation(),
         ];
 
         resources.extend(memories.into_iter().map(|m| {
@@ -127,14 +120,6 @@ impl ServerHandler for VoidmMcpServer {
                 format!("voidm://memory/{}", m.id),
                 format!("memory/{}", m.id),
                 "Voidm memory record",
-            )
-            .no_annotation()
-        }));
-        resources.extend(concepts.into_iter().map(|c| {
-            Self::raw_resource(
-                format!("voidm://concept/{}", c.id),
-                format!("concept/{}", c.id),
-                "Voidm concept record",
             )
             .no_annotation()
         }));
@@ -154,7 +139,6 @@ impl ServerHandler for VoidmMcpServer {
         Ok(ListResourceTemplatesResult {
             resource_templates: vec![
                 Self::raw_template("voidm://memory/{id}", "memory", "Fetch a memory as JSON").no_annotation(),
-                Self::raw_template("voidm://concept/{id}", "concept", "Fetch a concept as JSON").no_annotation(),
             ],
             next_cursor: None,
             meta: None,
@@ -168,19 +152,14 @@ impl ServerHandler for VoidmMcpServer {
     ) -> std::result::Result<ReadResourceResult, rmcp::ErrorData> {
         let uri = request.uri;
         let value = if uri == "voidm://memories/recent" {
-            json!(crud::list_memories(&self.pool, None, None, 20).await.map_err(mcp_err)?)
-        } else if uri == "voidm://concepts" {
-            json!(ontology::list_concepts(&self.pool, None, 20).await.map_err(mcp_err)?)
+            json!(crud::list_memories(self.db.as_ref(), Some(20)).await.map_err(mcp_err)?)
         } else if let Some(id) = uri.strip_prefix("voidm://memory/") {
-            let id = resolve_id_sqlite(&self.pool, id).await.map_err(mcp_err)?;
-            let memory = crud::get_memory(&self.pool, &id)
+            let id = crud::resolve_id(self.db.as_ref(), id).await.map_err(mcp_err)?;
+            let memory = crud::get_memory(self.db.as_ref(), &id)
                 .await
                 .map_err(mcp_err)?
                 .ok_or_else(|| mcp_err(anyhow!("Memory not found: {id}")))?;
             json!(memory)
-        } else if let Some(id) = uri.strip_prefix("voidm://concept/") {
-            let concept = ontology::get_concept_with_instances(&self.pool, id).await.map_err(mcp_err)?;
-            json!(concept)
         } else {
             return Err(mcp_err(anyhow!("Unknown resource URI: {uri}")));
         };
@@ -220,7 +199,7 @@ impl VoidmMcpServer {
 
         let db = SqliteDatabase::new(self.pool.clone());
         let resp = search(
-            &db,
+            self.db.as_ref(),
             &opts,
             &self.config.embeddings.model,
             self.config.embeddings.enabled,
@@ -300,10 +279,10 @@ impl VoidmMcpServer {
         &self,
         Parameters(params): Parameters<DeleteMemoryParams>,
     ) -> std::result::Result<Json<Map<String, Value>>, String> {
-        let id = resolve_id_sqlite(&self.pool, &params.memory_id)
+        let id = crud::resolve_id(self.db.as_ref(), &params.memory_id)
             .await
             .map_err(|e| e.to_string())?;
-        let deleted = crud::delete_memory(&self.pool, &id)
+        let deleted = crud::delete_memory(self.db.as_ref(), &id)
             .await
             .map_err(|e| e.to_string())?;
         let mut out = Map::new();
@@ -312,15 +291,16 @@ impl VoidmMcpServer {
         Ok(Json(out))
     }
 
-    #[tool(name = "link_memories", description = "Create a relation between two memories")]
+    #[tool(name = "link_memories", description = "Create a simple link between two memories")]
     async fn link_memories(
         &self,
         Parameters(params): Parameters<LinkMemoriesParams>,
     ) -> std::result::Result<Json<Map<String, Value>>, String> {
         let rel: EdgeType = params.rel.parse().map_err(|e: anyhow::Error| e.to_string())?;
-        let from = resolve_id_sqlite(&self.pool, &params.from).await.map_err(|e| e.to_string())?;
-        let to = resolve_id_sqlite(&self.pool, &params.to).await.map_err(|e| e.to_string())?;
-        let resp = crud::link_memories(&self.pool, &from, &rel, &to, params.note.as_deref())
+        let from = crud::resolve_id(self.db.as_ref(), &params.from).await.map_err(|e| e.to_string())?;
+        let to = crud::resolve_id(self.db.as_ref(), &params.to).await.map_err(|e| e.to_string())?;
+        // Use trait-based link_memories (no conflict checking - that feature is dropped)
+        let resp = crud::link_memories(self.db.as_ref(), &from, &rel, &to, params.note.as_deref())
             .await
             .map_err(|e| e.to_string())?;
         let value = serde_json::to_value(resp).map_err(|e| e.to_string())?;
@@ -330,130 +310,6 @@ impl VoidmMcpServer {
         }
     }
 
-    #[tool(name = "search_concepts", description = "Search concepts by name and description")]
-    async fn search_concepts(
-        &self,
-        Parameters(params): Parameters<SearchConceptsParams>,
-    ) -> std::result::Result<Json<Map<String, Value>>, String> {
-        let results = ontology::search_concepts(
-            &self.pool,
-            &params.query,
-            params.scope.as_deref(),
-            params.limit,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        let mut out = Map::new();
-        out.insert("results".to_string(), json!(results));
-        Ok(Json(out))
-    }
-
-    #[tool(name = "list_concepts", description = "List concepts with optional scope filter")]
-    async fn list_concepts(
-        &self,
-        Parameters(params): Parameters<ListConceptsParams>,
-    ) -> std::result::Result<Json<Map<String, Value>>, String> {
-        let results = ontology::list_concepts(&self.pool, params.scope.as_deref(), params.limit)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut out = Map::new();
-        out.insert("results".to_string(), json!(results));
-        Ok(Json(out))
-    }
-
-    #[tool(name = "get_concept", description = "Get a concept with instances, subclasses and superclasses")]
-    async fn get_concept(
-        &self,
-        Parameters(params): Parameters<GetConceptParams>,
-    ) -> std::result::Result<Json<Map<String, Value>>, String> {
-        let concept = ontology::get_concept_with_instances(&self.pool, &params.id)
-            .await
-            .map_err(|e| e.to_string())?;
-        let value = serde_json::to_value(concept).map_err(|e| e.to_string())?;
-        match value {
-            Value::Object(map) => Ok(Json(map)),
-            _ => Err("internal error: non-object concept response".to_string()),
-        }
-    }
-
-    #[tool(name = "create_concept", description = "Create a concept")]
-    async fn create_concept(
-        &self,
-        Parameters(params): Parameters<CreateConceptParams>,
-    ) -> std::result::Result<Json<Map<String, Value>>, String> {
-        let concept = ontology::add_concept(
-            &self.pool,
-            &params.name,
-            params.description.as_deref(),
-            params.scope.as_deref(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        let value = serde_json::to_value(concept).map_err(|e| e.to_string())?;
-        match value {
-            Value::Object(map) => Ok(Json(map)),
-            _ => Err("internal error: non-object concept response".to_string()),
-        }
-    }
-
-    #[tool(name = "link_memory_to_concept", description = "Link a memory to a concept with INSTANCE_OF")]
-    async fn link_memory_to_concept(
-        &self,
-        Parameters(params): Parameters<LinkMemoryToConceptParams>,
-    ) -> std::result::Result<Json<Map<String, Value>>, String> {
-        let from_id = resolve_node_id(&self.pool, &params.memory_id, NodeKind::Memory)
-            .await
-            .map_err(|e| e.to_string())?;
-        let to_id = resolve_node_id(&self.pool, &params.concept_id, NodeKind::Concept)
-            .await
-            .map_err(|e| e.to_string())?;
-        let edge = ontology::add_ontology_edge(
-            &self.pool,
-            &from_id,
-            NodeKind::Memory,
-            &OntologyRelType::InstanceOf,
-            &to_id,
-            NodeKind::Concept,
-            params.note.as_deref(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        let value = serde_json::to_value(edge).map_err(|e| e.to_string())?;
-        match value {
-            Value::Object(map) => Ok(Json(map)),
-            _ => Err("internal error: non-object edge response".to_string()),
-        }
-    }
-
-    #[tool(name = "link_concepts", description = "Link two concepts with IS_A or another ontology relation")]
-    async fn link_concepts(
-        &self,
-        Parameters(params): Parameters<LinkConceptsParams>,
-    ) -> std::result::Result<Json<Map<String, Value>>, String> {
-        let rel: OntologyRelType = params.rel.parse().map_err(|e: anyhow::Error| e.to_string())?;
-        let from_id = resolve_node_id(&self.pool, &params.from, NodeKind::Concept)
-            .await
-            .map_err(|e| e.to_string())?;
-        let to_id = resolve_node_id(&self.pool, &params.to, NodeKind::Concept)
-            .await
-            .map_err(|e| e.to_string())?;
-        let edge = ontology::add_ontology_edge(
-            &self.pool,
-            &from_id,
-            NodeKind::Concept,
-            &rel,
-            &to_id,
-            NodeKind::Concept,
-            params.note.as_deref(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        let value = serde_json::to_value(edge).map_err(|e| e.to_string())?;
-        match value {
-            Value::Object(map) => Ok(Json(map)),
-            _ => Err("internal error: non-object edge response".to_string()),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

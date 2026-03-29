@@ -13,6 +13,10 @@ use voidm_sqlite::open_pool;
 #[derive(Parser)]
 #[command(name = "voidm", about = "Local-first memory tool for LLM agents", version)]
 pub struct Cli {
+    /// Path to config file [env: VOIDM_CONFIG]
+    #[arg(long, global = true, env = "VOIDM_CONFIG")]
+    pub config: Option<String>,
+
     /// Override database path [env: VOIDM_DB]
     #[arg(long, global = true, env = "VOIDM_DB")]
     pub db: Option<String>,
@@ -50,12 +54,6 @@ pub enum Commands {
     /// Graph operations
     #[command(subcommand)]
     Graph(commands::graph::GraphCommands),
-    /// Ontology operations (concepts, hierarchy, instances)
-    #[command(subcommand)]
-    Ontology(commands::ontology::OntologyCommands),
-    /// Review and resolve ontology conflicts (CONTRADICTS edges)
-    #[command(subcommand)]
-    Conflicts(commands::conflicts::ConflictsCommands),
     /// List all known scope strings
     #[command(subcommand)]
     Scopes(commands::scopes::ScopesCommands),
@@ -73,14 +71,10 @@ pub enum Commands {
     Info(commands::info::InfoArgs),
     /// Show memory and graph statistics
     Stats(commands::stats::StatsArgs),
-    /// Run an assistant-friendly MCP server
-    Mcp(commands::mcp::McpArgs),
     /// Migrate data between backends (sqlite ↔ neo4j)
     Migrate(commands::migrate::MigrateArgs),
     /// Check for new releases on GitHub
     CheckUpdate(commands::update::CheckUpdateArgs),
-    /// Consolidate: unified memory cleanup & concept management
-    Consolidate(commands::consolidate::ConsolidateArgs),
     /// Validate Phase A chunking algorithm on real data
     Validate(commands::validate::ValidationArgs),
     /// Part D: Chunk memories and store in Neo4j
@@ -166,14 +160,14 @@ async fn run(cli: Cli) -> Result<()> {
             return commands::config::run(cmd, cli.json).await;
         }
         Commands::Info(args) => {
-            let config = Config::load();
+            let config = Config::load_from(cli.config.as_deref());
             return commands::info::run(args.clone(), &config, cli.db.as_deref(), cli.json);
         }
         Commands::Init(args) => {
             return commands::init::run(args.clone()).await;
         }
         Commands::Migrate(args) => {
-            let config = Config::load();
+            let config = Config::load_from(cli.config.as_deref());
             return commands::migrate::run(args.clone(), &config, cli.db.as_deref(), cli.json).await;
         }
         Commands::CheckUpdate(args) => {
@@ -188,7 +182,7 @@ async fn run(cli: Cli) -> Result<()> {
     }
 
     // Load config
-    let config = Config::load();
+    let config = Config::load_from(cli.config.as_deref());
     
     // Route to appropriate backend - independent paths, no pool mixing
     match config.database.backend.as_str() {
@@ -206,35 +200,28 @@ async fn run(cli: Cli) -> Result<()> {
             
             db.ensure_schema().await?;
 
-            // Dummy pool for command compatibility (Neo4j doesn't use it)
-            let dummy_pool = open_pool(std::path::Path::new(":memory:")).await?;
-
             match cli.command {
-                Commands::Add(args) => commands::add::run(args, &db, &dummy_pool, &config, cli.json).await,
-                Commands::Get(args) => commands::get::run(args, &db, &dummy_pool, cli.json).await,
-                Commands::Search(args) => commands::search::run(args, &db, &dummy_pool, &config, cli.json).await,
-                Commands::List(args) => commands::list::run(args, &db, &dummy_pool, &config, cli.json).await,
-                Commands::Delete(args) => commands::delete::run(args, &db, &dummy_pool, cli.json).await,
-                Commands::Link(args) => commands::link::run(args, &db, &dummy_pool, cli.json).await,
-                Commands::Unlink(args) => commands::unlink::run(args, &db, &dummy_pool, cli.json).await,
-                Commands::Graph(cmd) => commands::graph::run(cmd, &db, &dummy_pool, cli.json).await,
-                Commands::Ontology(cmd) => commands::ontology::run(cmd, &db, &dummy_pool, &config, cli.json).await,
-                Commands::Conflicts(cmd) => commands::conflicts::run(cmd, &db, &dummy_pool, cli.json).await,
-                Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, &dummy_pool, cli.json).await,
-                Commands::Export(args) => commands::export::run(args, &db, &dummy_pool, &config, cli.json).await,
+                Commands::Add(args) => commands::add::run(args, &db, &config, cli.json).await,
+                Commands::Get(args) => commands::get::run(args, &db, cli.json).await,
+                Commands::Search(args) => commands::search::run(args, &db, &config, cli.json).await,
+                Commands::List(args) => commands::list::run(args, &db, &config, cli.json).await,
+                Commands::Delete(args) => commands::delete::run(args, &db, cli.json).await,
+                Commands::Link(args) => commands::link::run(args, &db, cli.json).await,
+                Commands::Unlink(args) => commands::unlink::run(args, &db, cli.json).await,
+                Commands::Graph(_) => Err(anyhow::anyhow!("Graph commands require Phase 1.3 implementation (voidm-graph backend abstraction)")),
+                Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, cli.json).await,
+                Commands::Export(args) => commands::export::run(args, &db, &config, cli.json).await,
                 Commands::Config(_) => unreachable!(),
-                Commands::Models(cmd) => commands::models::run(cmd, &db, &dummy_pool, &config, cli.json).await,
+                Commands::Models(cmd) => commands::models::run(cmd, &db, &config, cli.json).await,
                 Commands::Instructions(_) => unreachable!(),
                 Commands::Info(_) => unreachable!(),
                 Commands::Init(_) => unreachable!(),
                 Commands::Migrate(_) => unreachable!(),
                 Commands::CheckUpdate(_) => unreachable!(),
-                Commands::Consolidate(args) => commands::consolidate::run(args, &db, &dummy_pool, &config, cli.json).await,
                 Commands::Validate(args) => commands::validate::run(args, &db).await,
                 Commands::Chunk(args) => commands::chunk::run(args, &db).await,
                 Commands::Embed(args) => commands::embed::run(args, &db).await,
-                Commands::Stats(args) => commands::stats::run(args, &db, &dummy_pool, &config, cli.json).await,
-                Commands::Mcp(_) => anyhow::bail!("MCP server is only available with SQLite backend"),
+                Commands::Stats(_) => Err(anyhow::anyhow!("Stats require Phase 1.3 implementation (backend trait methods)")),
             }
         }
         "sqlite" | _ => {
@@ -260,31 +247,27 @@ async fn run(cli: Cli) -> Result<()> {
             }
 
             let result = match cli.command {
-                Commands::Add(args) => commands::add::run(args, &db, &pool, &config, cli.json).await,
-                Commands::Get(args) => commands::get::run(args, &db, &pool, cli.json).await,
-                Commands::Search(args) => commands::search::run(args, &db, &pool, &config, cli.json).await,
-                Commands::List(args) => commands::list::run(args, &db, &pool, &config, cli.json).await,
-                Commands::Delete(args) => commands::delete::run(args, &db, &pool, cli.json).await,
-                Commands::Link(args) => commands::link::run(args, &db, &pool, cli.json).await,
-                Commands::Unlink(args) => commands::unlink::run(args, &db, &pool, cli.json).await,
+                Commands::Add(args) => commands::add::run(args, &db, &config, cli.json).await,
+                Commands::Get(args) => commands::get::run(args, &db, cli.json).await,
+                Commands::Search(args) => commands::search::run(args, &db, &config, cli.json).await,
+                Commands::List(args) => commands::list::run(args, &db, &config, cli.json).await,
+                Commands::Delete(args) => commands::delete::run(args, &db, cli.json).await,
+                Commands::Link(args) => commands::link::run(args, &db, cli.json).await,
+                Commands::Unlink(args) => commands::unlink::run(args, &db, cli.json).await,
                 Commands::Graph(cmd) => commands::graph::run(cmd, &db, &pool, cli.json).await,
-                Commands::Ontology(cmd) => commands::ontology::run(cmd, &db, &pool, &config, cli.json).await,
-                Commands::Conflicts(cmd) => commands::conflicts::run(cmd, &db, &pool, cli.json).await,
-                Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, &pool, cli.json).await,
-                Commands::Export(args) => commands::export::run(args, &db, &pool, &config, cli.json).await,
+                Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, cli.json).await,
+                Commands::Export(args) => commands::export::run(args, &db, &config, cli.json).await,
                 Commands::Config(_) => unreachable!(),
-                Commands::Models(cmd) => commands::models::run(cmd, &db, &pool, &config, cli.json).await,
+                Commands::Models(cmd) => commands::models::run(cmd, &db, &config, cli.json).await,
                 Commands::Instructions(_) => unreachable!(),
                 Commands::Info(_) => unreachable!(),
                 Commands::Init(_) => unreachable!(),
                 Commands::Migrate(_) => unreachable!(),
                 Commands::CheckUpdate(_) => unreachable!(),
-                Commands::Consolidate(args) => commands::consolidate::run(args, &db, &pool, &config, cli.json).await,
                 Commands::Validate(args) => commands::validate::run(args, &db).await,
                 Commands::Chunk(args) => commands::chunk::run(args, &db).await,
                 Commands::Embed(args) => commands::embed::run(args, &db).await,
                 Commands::Stats(args) => commands::stats::run(args, &db, &pool, &config, cli.json).await,
-                Commands::Mcp(args) => commands::mcp::run(args, pool.clone(), config).await,
             };
 
             // Perform backend-specific shutdown (SQLite: WAL checkpoint, etc.)

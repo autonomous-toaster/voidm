@@ -507,7 +507,7 @@ pub async fn build_suggested_links(
 ) -> Result<Vec<SuggestedLink>> {
     let mut links = Vec::new();
     for (id, score) in similar {
-        if let Some(m) = crate::crud::get_memory(pool, &id).await? {
+        if let Some(m) = crate::crud::get_memory_sqlite(pool, &id).await? {
             let content_truncated = if m.content.len() > 120 {
                 format!("{}...", safe_truncate(&m.content, 120))
             } else {

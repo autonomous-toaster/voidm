@@ -85,19 +85,6 @@ pub trait Database: Send + Sync {
     /// List all memory-to-memory edges (for migration)
     fn list_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
 
-    /// List all ontology edges (concept-to-concept, concept-to-memory, etc.)
-    fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
-
-    /// Create an ontology edge (for migration)
-    fn create_ontology_edge(
-        &self,
-        from_id: &str,
-        from_type: &str,
-        rel_type: &str,
-        to_id: &str,
-        to_type: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
-
     // ===== Search =====
 
     /// Hybrid search (vector + BM25 + fuzzy)
@@ -156,63 +143,6 @@ pub trait Database: Send + Sync {
         limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>>;
 
-    // ===== Ontology Concepts =====
-
-    /// Create a new concept
-    fn add_concept(
-        &self,
-        name: &str,
-        description: Option<&str>,
-        scope: Option<&str>,
-        id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>>;
-
-    /// Get a concept by ID
-    fn get_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>>;
-
-    /// Get a concept with its instances, subclasses, and superclasses
-    fn get_concept_with_instances(
-        &self,
-        id: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>>;
-
-    /// List concepts with optional scope filter
-    fn list_concepts(
-        &self,
-        scope: Option<&str>,
-        limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
-
-    /// Delete a concept
-    fn delete_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
-
-    /// Resolve a concept ID (from short prefix or full UUID)
-    fn resolve_concept_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>>;
-
-    /// Search for concepts by name and description
-    fn search_concepts(
-        &self,
-        query: &str,
-        scope: Option<&str>,
-        limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
-
-    // ===== Ontology Edges =====
-
-    /// Create an ontology edge
-    fn add_ontology_edge(
-        &self,
-        from_id: &str,
-        from_kind: &str,
-        rel: &str,
-        to_id: &str,
-        to_kind: &str,
-        note: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>>;
-
-    /// Delete an ontology edge by ID
-    fn delete_ontology_edge(&self, edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
-
     // ===== Graph Operations =====
 
     /// Execute a Cypher query (read-only)
@@ -233,12 +163,13 @@ pub trait Database: Send + Sync {
         configured_model: &str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<(String, String)>>> + Send + '_>>;
 
-    /// Clean the database by removing all Concept and OntologyEdge nodes
+    /// Clean the database by removing all known node types and edges
     /// Only implemented for Neo4j. SQLite backends can safely ignore this.
     /// Useful when re-running migrations to avoid constraint violations.
-    fn clean_database(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+    /// Returns: count of deleted items
+    fn clean_database(&self) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
         // Default no-op implementation for SQLite and other backends
-        Box::pin(async { Ok(()) })
+        Box::pin(async { Ok(0) })
     }
 
     /// Perform backend-specific shutdown operations (e.g., SQLite WAL checkpoints)
@@ -296,4 +227,109 @@ pub trait Database: Send + Sync {
         &self,
         records: Vec<String>,
     ) -> Pin<Box<dyn Future<Output = Result<(usize, usize, usize)>> + Send + '_>>;
+
+    // ===== Tags (NEW - for migration) =====
+
+    /// List all tags (with their properties)
+    fn list_tags(&self) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
+
+    /// Create a tag (idempotent - returns existing if already present)
+    /// Returns: (tag_id, created: bool)
+    fn create_tag(&self, name: &str) -> Pin<Box<dyn Future<Output = Result<(String, bool)>> + Send + '_>>;
+
+    /// Link a memory to a tag
+    fn link_tag_to_memory(&self, tag_id: &str, memory_id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
+
+    /// List all tag-memory edges (for migration)
+    fn list_tag_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
+
+    // ===== Chunks (NEW - for migration) =====
+
+    /// List all chunks with full details (for migration)
+    fn list_chunks(&self) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
+
+    /// Get a specific chunk by ID (for migration)
+    fn get_chunk(&self, chunk_id: &str) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>>> + Send + '_>>;
+
+    /// List all chunk-memory BELONGS_TO edges (for migration)
+    fn list_chunk_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
+
+    // ===== Entities (NEW - for migration) =====
+
+    /// List all entities (for migration)
+    fn list_entities(&self) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
+
+    /// Create an entity node (idempotent - returns existing if already present)
+    /// Returns: (entity_id, created: bool)
+    fn get_or_create_entity(&self, name: &str, entity_type: &str) -> Pin<Box<dyn Future<Output = Result<(String, bool)>> + Send + '_>>;
+
+    /// Link a chunk to an entity with confidence score
+    fn link_chunk_to_entity(
+        &self,
+        chunk_id: &str,
+        entity_id: &str,
+        confidence: f32,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
+
+    /// List all chunk-entity MENTIONS edges (for migration)
+    fn list_entity_mention_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
+
+    /// Count of a specific node type (for validation)
+    /// Node types: Memory, MemoryChunk, Tag, Entity, Concept
+    fn count_nodes(&self, node_type: &str) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>>;
+
+    /// Count of a specific edge type (for validation)
+    /// Edge types: BELONGS_TO, HAS_TAG, MENTIONS, all types
+    fn count_edges(&self, edge_type: Option<&str>) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>>;
+
+    // ===== Generic Node/Edge API (Phase 0) =====
+
+    /// Create a node in generic format (id, type, properties JSON)
+    fn create_node(
+        &self,
+        id: &str,
+        node_type: &str,
+        properties: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+
+    /// Get a node by ID
+    fn get_node(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>>> + Send + '_>>;
+
+    /// Delete a node by ID
+    fn delete_node(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
+
+    /// List all nodes of a specific type
+    fn list_nodes(&self, node_type: &str) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
+
+    /// Create an edge (from_id, edge_type, to_id, properties JSON)
+    fn create_edge(
+        &self,
+        from_id: &str,
+        edge_type: &str,
+        to_id: &str,
+        properties: Option<serde_json::Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+
+    /// Get an edge (returns full edge object with id, from_id, edge_type, to_id, properties)
+    fn get_edge(
+        &self,
+        from_id: &str,
+        edge_type: &str,
+        to_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>>> + Send + '_>>;
+
+    /// Delete an edge
+    fn delete_edge(
+        &self,
+        from_id: &str,
+        edge_type: &str,
+        to_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
+
+    /// Get all edges from a node, optionally filtered by edge_type
+    fn get_node_edges(
+        &self,
+        node_id: &str,
+        edge_type: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
 }

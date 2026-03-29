@@ -1,8 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
-use voidm_core::{Config, crud, crud_trait, models::MemoryEdge, ontology::Concept};
+use voidm_core::{Config, crud_trait, models::MemoryEdge};
 use std::sync::Arc;
 
 #[derive(Args)]
@@ -22,13 +21,9 @@ pub struct ExportArgs {
     #[arg(long, default_value = "1000")]
     pub limit: usize,
 
-    /// Include all relationships and concepts
+    /// Include all relationships
     #[arg(long)]
     pub with_edges: bool,
-
-    /// Include ontology concepts
-    #[arg(long)]
-    pub with_concepts: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,10 +31,6 @@ pub struct ExportData {
     pub memories: Vec<voidm_core::models::Memory>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub edges: Vec<MemoryEdge>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub concepts: Vec<Concept>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub ontology_edges: Vec<voidm_core::models::OntologyEdgeForMigration>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<ExportMetadata>,
 }
@@ -48,18 +39,14 @@ pub struct ExportData {
 pub struct ExportMetadata {
     pub total_memories: usize,
     pub total_edges: usize,
-    pub total_concepts: usize,
-    pub total_ontology_edges: usize,
     pub exported_at: String,
     pub scopes_included: Vec<String>,
 }
 
-pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, _config: &Config, _json: bool) -> Result<()> {
+pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db_trait::Database>, _config: &Config, _json: bool) -> Result<()> {
     
     let memories = crud_trait::list_memories_filtered(db, args.scope.as_deref(), None, Some(args.limit)).await?;
     let mut edges = Vec::new();
-    let mut concepts = Vec::new();
-    let mut ontology_edges = Vec::new();
 
     // Get edges if requested or format is "full"
     if args.with_edges || args.format == "full" {
@@ -67,23 +54,6 @@ pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db_trait::Datab
         for edge_json in edges_json {
             if let Ok(edge) = serde_json::from_value::<voidm_core::models::MemoryEdge>(edge_json) {
                 edges.push(edge);
-            }
-        }
-    }
-
-    // Get concepts if requested or format is "full"
-    if args.with_concepts || args.format == "full" {
-        let concepts_json = db.list_concepts(args.scope.as_deref(), args.limit).await.unwrap_or_default();
-        for concept_json in concepts_json {
-            if let Ok(concept) = serde_json::from_value::<voidm_core::ontology::Concept>(concept_json) {
-                concepts.push(concept);
-            }
-        }
-        
-        let onto_edges_json = db.list_ontology_edges().await.unwrap_or_default();
-        for edge_json in onto_edges_json {
-            if let Ok(edge) = serde_json::from_value::<voidm_core::models::OntologyEdgeForMigration>(edge_json) {
-                ontology_edges.push(edge);
             }
         }
     }
@@ -99,13 +69,9 @@ pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db_trait::Datab
             let export_data = ExportData {
                 memories: memories.clone(),
                 edges: edges.clone(),
-                concepts: concepts.clone(),
-                ontology_edges: ontology_edges.clone(),
                 metadata: Some(ExportMetadata {
                     total_memories: memories.len(),
                     total_edges: edges.len(),
-                    total_concepts: concepts.len(),
-                    total_ontology_edges: ontology_edges.len(),
                     exported_at: chrono::Utc::now().to_rfc3339(),
                     scopes_included: scopes,
                 }),
@@ -122,10 +88,6 @@ pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db_trait::Datab
                 md.push_str(&format!("**Memories**: {}\n", memories.len()));
                 if args.with_edges || args.format == "full" {
                     md.push_str(&format!("**Edges**: {}\n", edges.len()));
-                }
-                if args.with_concepts || args.format == "full" {
-                    md.push_str(&format!("**Concepts**: {}\n", concepts.len()));
-                    md.push_str(&format!("**Ontology Edges**: {}\n", ontology_edges.len()));
                 }
                 md.push_str("\n---\n\n");
             }
@@ -161,29 +123,6 @@ pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db_trait::Datab
                 md.push_str("\n");
             }
 
-            // Export concepts if included
-            if (args.with_concepts || args.format == "full") && !concepts.is_empty() {
-                md.push_str("## Concepts\n\n");
-                for concept in &concepts {
-                    md.push_str(&format!("### {} ({})\n\n", concept.name, concept.id));
-                    if let Some(desc) = &concept.description {
-                        md.push_str(&format!("{}\n\n", desc));
-                    }
-                    if let Some(scope) = &concept.scope {
-                        md.push_str(&format!("**Scope**: {}\n\n", scope));
-                    }
-                }
-            }
-
-            // Export ontology edges if included
-            if (args.with_concepts || args.format == "full") && !ontology_edges.is_empty() {
-                md.push_str("## Ontology Relationships\n\n");
-                for edge in &ontology_edges {
-                    md.push_str(&format!("- `{}` ({}) **[{}]** → `{}` ({})\n", 
-                        edge.from_id, edge.from_type, edge.rel_type, edge.to_id, edge.to_type));
-                }
-            }
-
             md
         }
         other => anyhow::bail!("Unknown export format: '{}'. Valid: json, markdown, full", other),
@@ -191,9 +130,9 @@ pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db_trait::Datab
 
     if let Some(path) = args.output {
         std::fs::write(&path, &content)?;
-        let msg = if args.with_edges || args.with_concepts {
-            format!("Exported {} memories + {} edges + {} concepts to {}", 
-                memories.len(), edges.len(), concepts.len(), path)
+        let msg = if args.with_edges {
+            format!("Exported {} memories + {} edges to {}", 
+                memories.len(), edges.len(), path)
         } else {
             format!("Exported {} memories to {}", memories.len(), path)
         };

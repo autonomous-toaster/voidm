@@ -3,11 +3,12 @@ use std::pin::Pin;
 use std::future::Future;
 use neo4rs::Graph;
 use voidm_db_trait::Database;
+use serde_json::{Value, json};
+use uuid::Uuid;
 
 use voidm_core::models::{
     AddMemoryRequest, AddMemoryResponse, Memory, EdgeType, LinkResponse,
 };
-use voidm_core::ontology::{Concept, ConceptWithInstances, OntologyEdge, ConceptWithSimilarityWarning, ConceptSearchResult};
 use voidm_core::search::{SearchOptions, SearchResponse};
 
 /// Neo4j implementation of the Database trait.
@@ -111,49 +112,26 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                 .context("Failed to deserialize AddMemoryRequest")?;
             let config: voidm_core::Config = serde_json::from_value(config)
                 .context("Failed to deserialize Config")?;
+
+            // USE SHARED CRUD LOGIC ✓
+            let prepared = voidm_core::crud_logic::MemoryCreationPreparer::new(req.clone())
+                .prepare()
+                .context("Failed to prepare memory for creation")?;
+
             let config_model = config.embeddings.model.clone();
-
-            let id = req.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            let created_at = chrono::Utc::now().to_rfc3339();
-            let memory_type = req.memory_type.to_string();
             
-            // Compute quality score (same as SQLite path)
-            let quality_mt = match req.memory_type {
-                voidm_core::models::MemoryType::Episodic => voidm_scoring::MemoryType::Episodic,
-                voidm_core::models::MemoryType::Semantic => voidm_scoring::MemoryType::Semantic,
-                voidm_core::models::MemoryType::Procedural => voidm_scoring::MemoryType::Procedural,
-                voidm_core::models::MemoryType::Conceptual => voidm_scoring::MemoryType::Conceptual,
-                voidm_core::models::MemoryType::Contextual => voidm_scoring::MemoryType::Contextual,
-            };
-            let quality = voidm_scoring::compute_quality_score(&req.content, &quality_mt);
-            
-            // Extract author and source from metadata (set by MCP layer)
-            let author = req.metadata.get("author")
-                .and_then(|v| v.as_str())
-                .unwrap_or("user")
-                .to_string();
-            let source = req.metadata.get("source")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            
-            // Convert metadata and tags to JSON strings for Neo4j storage
-            let metadata_str = serde_json::to_string(&req.metadata)
+            // Convert metadata to JSON string for Neo4j storage
+            let metadata_str = serde_json::to_string(&prepared.metadata)
                 .context("Failed to serialize metadata")?;
-            let tags_str = serde_json::to_string(&req.tags)
-                .context("Failed to serialize tags")?;
-            let scopes_str = serde_json::to_string(&req.scopes)
-                .context("Failed to serialize scopes")?;
 
-            // Use MERGE to handle duplicates gracefully (upsert pattern)
-            let cypher = r#"MERGE (m:Memory { id: $id }) 
+            // Create Memory node AND tag relationships in ONE transaction ✓
+            // Using FOREACH loop to handle multiple tags safely
+            let memory_cypher = r#"MERGE (m:Memory { id: $id }) 
             SET m += { 
                 type: $type, 
                 content: $content, 
                 importance: $importance, 
-                tags: $tags, 
                 metadata: $metadata, 
-                scopes: $scopes, 
                 quality_score: $quality_score,
                 context: $context,
                 author: $author,
@@ -161,27 +139,31 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                 created_at: $created_at, 
                 updated_at: $updated_at, 
                 embedding_model: $embedding_model 
-            } 
+            }
+            WITH m
+            FOREACH (tag IN $tags |
+              MERGE (t:Tag { name: tag })
+              MERGE (m)-[:HAS_TAG]->(t)
+            )
             RETURN m"#;
             
-            let query_obj = neo4rs::query(cypher)
-                .param("id", id.clone())
-                .param("type", memory_type.clone())
-                .param("content", req.content.clone())
-                .param("importance", req.importance)
-                .param("tags", tags_str)
+            let query_obj = neo4rs::query(memory_cypher)
+                .param("id", prepared.id.clone())
+                .param("type", prepared.memory_type.to_string())
+                .param("content", prepared.content.clone())
+                .param("importance", prepared.importance)
                 .param("metadata", metadata_str)
-                .param("scopes", scopes_str)
-                .param("quality_score", quality.score)
-                .param("context", req.context.clone())
-                .param("author", author.clone())
-                .param("source", source.clone())
-                .param("created_at", created_at.clone())
-                .param("updated_at", created_at.clone())
-                .param("embedding_model", config_model.clone());
+                .param("quality_score", prepared.quality_score)
+                .param("context", prepared.context.clone())
+                .param("author", prepared.author.clone())
+                .param("source", prepared.source.clone())
+                .param("created_at", prepared.created_at.clone())
+                .param("updated_at", prepared.created_at.clone())
+                .param("embedding_model", config_model.clone())
+                .param("tags", prepared.tags.clone());  // ✓ Pass tags to Cypher
 
-            tracing::debug!("Neo4j: Creating/updating memory in database '{}' with id: {}", 
-                database, id);
+            tracing::debug!("Neo4j: Creating/updating memory in database '{}' with id: {} and tags: {:?}", 
+                database, prepared.id, prepared.tags);
 
             let mut result = graph
                 .execute_on(&database, query_obj)
@@ -191,28 +173,26 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                     anyhow::anyhow!("Failed to create memory in Neo4j: {}", e)
                 })?;
 
-            // Check if this was a new create or an update
-            let _is_duplicate = if let Ok(Some(_row)) = result.next().await {
-                // MERGE doesn't tell us if it was created or matched
-                false
-            } else {
-                false
-            };
+            if let Ok(Some(_row)) = result.next().await {
+                // Memory and tags created successfully
+                tracing::debug!("Neo4j: Memory created with {} tags", prepared.tags.len());
+            }
 
-            let response = AddMemoryResponse {
-                id,
-                memory_type,
-                content: req.content,
-                scopes: req.scopes,
-                tags: req.tags,
-                importance: req.importance,
-                created_at,
+            // Build response with tags from prepared data
+            let response = voidm_core::models::AddMemoryResponse {
+                id: prepared.id,
+                memory_type: prepared.memory_type.to_string(),
+                content: prepared.content,
+                scopes: prepared.scopes,
+                tags: prepared.tags,
+                importance: prepared.importance,
+                created_at: prepared.created_at,
                 quality_score: None,
-                metadata: req.metadata,
+                metadata: prepared.metadata,
                 suggested_links: vec![],
                 duplicate_warning: None,
-                context: req.context,
-                title: req.title,
+                context: prepared.context,
+                title: prepared.title,
             };
 
             serde_json::to_value(response).context("Failed to serialize AddMemoryResponse")
@@ -222,11 +202,15 @@ impl voidm_db_trait::Database for Neo4jDatabase {
     fn get_memory(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>>> + Send + '_>> {
         let graph = self.graph.clone();
         let id = id.to_string();
+        let database = self.database.clone();
 
         Box::pin(async move {
+            // Query Memory node WITH related Tag nodes ✓
             let mut result = graph
-                .execute_on(&self.database, 
-                    neo4rs::query("MATCH (m:Memory {id: $id}) RETURN m")
+                .execute_on(&database, 
+                    neo4rs::query(
+                        "MATCH (m:Memory {id: $id}) OPTIONAL MATCH (m)-[:HAS_TAG]->(t:Tag) RETURN m, COLLECT(t.name) as tags"
+                    )
                         .param("id", id),
                 )
                 .await
@@ -235,14 +219,22 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             if let Ok(Some(row)) = result.next().await {
                 let node: neo4rs::Node = row.get("m").context("Failed to extract memory node")?;
                 
+                // Get tags from Tag nodes, not from Memory properties ✓
+                let tags: Vec<String> = row.get("tags").unwrap_or_default();
+                
+                // Get metadata from property (stored as JSON string)
+                let metadata_str: String = node.get("metadata").unwrap_or_else(|_| "{}".to_string());
+                let metadata: serde_json::Value = serde_json::from_str(&metadata_str)
+                    .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+                
                 let memory = Memory {
                     id: node.get("id").context("Missing id")?,
                     content: node.get("content").context("Missing content")?,
                     memory_type: node.get::<String>("type").context("Missing type")?,
                     importance: node.get("importance").unwrap_or(0),
-                    tags: node.get("tags").unwrap_or_default(),
-                    metadata: serde_json::Value::Object(Default::default()),
-                    scopes: node.get("scopes").unwrap_or_default(),
+                    tags,  // ✓ FROM TAG NODES, NOT PROPERTY
+                    metadata,
+                    scopes: vec![], // TODO: Query scope relationships
                     created_at: node.get("created_at").context("Missing created_at")?,
                     updated_at: node.get("updated_at").context("Missing updated_at")?,
                     quality_score: None,
@@ -259,12 +251,16 @@ impl voidm_db_trait::Database for Neo4jDatabase {
 
     fn list_memories(&self, limit: Option<usize>) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>> {
         let graph = self.graph.clone();
+        let database = self.database.clone();
         let limit = limit.unwrap_or(100);
 
         Box::pin(async move {
+            // Query Memory nodes WITH their Tag nodes ✓
             let mut result = graph
-                .execute_on(&self.database, 
-                    neo4rs::query("MATCH (m:Memory) RETURN m ORDER BY m.created_at DESC LIMIT $limit")
+                .execute_on(&database, 
+                    neo4rs::query(
+                        "MATCH (m:Memory) OPTIONAL MATCH (m)-[:HAS_TAG]->(t:Tag) RETURN m, COLLECT(t.name) as tags ORDER BY m.created_at DESC LIMIT $limit"
+                    )
                         .param("limit", limit as i64),
                 )
                 .await
@@ -274,14 +270,22 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             while let Ok(Some(row)) = result.next().await {
                 let node: neo4rs::Node = row.get("m").context("Failed to extract memory node")?;
                 
+                // Get tags from Tag nodes ✓
+                let tags: Vec<String> = row.get("tags").unwrap_or_default();
+                
+                // Get metadata from property
+                let metadata_str: String = node.get("metadata").unwrap_or_else(|_| "{}".to_string());
+                let metadata: serde_json::Value = serde_json::from_str(&metadata_str)
+                    .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+                
                 let memory = Memory {
                     id: node.get("id").context("Missing id")?,
                     content: node.get("content").context("Missing content")?,
                     memory_type: node.get::<String>("type").context("Missing type")?,
                     importance: node.get("importance").unwrap_or(0),
-                    tags: node.get("tags").unwrap_or_default(),
-                    metadata: serde_json::Value::Object(Default::default()),
-                    scopes: node.get("scopes").unwrap_or_default(),
+                    tags,  // ✓ FROM TAG NODES
+                    metadata,
+                    scopes: vec![], // TODO: Query scope relationships
                     created_at: node.get("created_at").context("Missing created_at")?,
                     updated_at: node.get("updated_at").unwrap_or_default(),
                     quality_score: None,
@@ -464,7 +468,6 @@ impl voidm_db_trait::Database for Neo4jDatabase {
                 from: from_id,
                 rel: rel_type,
                 to: to_id,
-                conflict_warning: None,
             };
 
             serde_json::to_value(response).context("Failed to serialize LinkResponse")
@@ -532,509 +535,19 @@ impl voidm_db_trait::Database for Neo4jDatabase {
         })
     }
 
-    fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>> {
-        let graph = self.graph.clone();
-        
-        Box::pin(async move {
-            // Query all relationships with their properties
-            let cypher = r#"
-                MATCH (from)-[r]->(to)
-                WHERE r.from_id IS NOT NULL AND r.rel_type IS NOT NULL
-                RETURN r.from_id AS from_id, r.from_type AS from_type, 
-                       r.to_id AS to_id, r.to_type AS to_type, 
-                       r.rel_type AS rel_type, r.note AS note
-            "#;
-            
-            let mut result = graph
-                .execute_on(&self.database, neo4rs::query(cypher))
-                .await
-                .context("Failed to list ontology edges from Neo4j")?;
-            
-            let mut edges = Vec::new();
-            while let Ok(Some(row)) = result.next().await {
-                if let (Ok(from_id), Ok(from_type), Ok(to_id), Ok(to_type), Ok(rel_type)) = (
-                    row.get::<String>("from_id"),
-                    row.get::<String>("from_type"),
-                    row.get::<String>("to_id"),
-                    row.get::<String>("to_type"),
-                    row.get::<String>("rel_type"),
-                ) {
-                    let note = row.get::<Option<String>>("note").ok().flatten();
-                    let edge = voidm_core::models::OntologyEdgeForMigration {
-                        from_id,
-                        from_type,
-                        to_id,
-                        to_type,
-                        rel_type,
-                        note,
-                    };
-                    let edge_json = serde_json::to_value(edge).context("Failed to serialize OntologyEdgeForMigration")?;
-                    edges.push(edge_json);
-                }
-            }
-            
-            Ok(edges)
-        })
-    }
-
-    /// Link a memory or concept to another memory or concept (for ontology edges)
-    fn create_ontology_edge(
-        &self,
-        from_id: &str,
-        from_type: &str,
-        rel_type: &str,
-        to_id: &str,
-        to_type: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
-        let graph = self.graph.clone();
-        let from_id = from_id.to_string();
-        let to_id = to_id.to_string();
-        let from_label = if from_type == "memory" { "Memory" } else { "Concept" };
-        let to_label = if to_type == "memory" { "Memory" } else { "Concept" };
-        let rel_type_str = rel_type.to_string();
-        let from_type_str = from_type.to_string();
-        let to_type_str = to_type.to_string();
-
-        Box::pin(async move {
-            // Create relationship with properties for later querying/deletion
-            let query_str = format!(
-                "MATCH (from:{} {{id: $from_id}}), (to:{} {{id: $to_id}})
-                 CREATE (from)-[r:{}{{from_id: $from_id, from_type: $from_type, to_id: $to_id, to_type: $to_type, rel_type: $rel_type}}]->(to)
-                 RETURN true as created",
-                from_label, to_label, rel_type_str
-            );
-
-            let mut result = graph
-                .execute_on(&self.database, neo4rs::query(&query_str)
-                    .param("from_id", from_id.clone())
-                    .param("from_type", from_type_str)
-                    .param("to_id", to_id.clone())
-                    .param("to_type", to_type_str)
-                    .param("rel_type", rel_type_str))
-                .await
-                .with_context(|| format!("Failed to link {} -> {} in Neo4j", from_id, to_id))?;
-
-            if let Ok(Some(_row)) = result.next().await {
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        })
-    }
+    // ===== Search =====
 
     fn search_hybrid(
         &self,
-        opts_json: serde_json::Value,
-        model_name: &str,
-        embeddings_enabled: bool,
-        config_min_score: f32,
-        config_search: &serde_json::Value,
+        _opts_json: serde_json::Value,
+        _model_name: &str,
+        _embeddings_enabled: bool,
+        _config_min_score: f32,
+        _config_search: &serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
         Box::pin(async move {
-            // TODO: Implement Neo4j hybrid search
-            let response = serde_json::json!({
-                "results": [],
-                "threshold_applied": false,
-                "best_score": null
-            });
-            Ok(response)
-        })
-    }
-
-    fn add_concept(
-        &self,
-        name: &str,
-        description: Option<&str>,
-        scope: Option<&str>,
-        id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
-        let graph = self.graph.clone();
-        let database = self.database.clone();
-        let name = name.to_string();
-        let description = description.map(|s| s.to_string());
-        let scope = scope.map(|s| s.to_string());
-        let id_owned = id.map(|s| s.to_string());
-
-        Box::pin(async move {
-            let id = id_owned.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            let created_at = chrono::Utc::now().to_rfc3339();
-
-            let query = neo4rs::query(
-                "MERGE (c:Concept {id: $id})
-                 ON CREATE SET c.name = $name, c.description = $description, c.scope = $scope, c.created_at = $created_at
-                 ON MATCH SET c.name = $name, c.description = $description, c.scope = $scope
-                 RETURN c"
-            )
-            .param("id", id.clone())
-            .param("name", name.clone())
-            .param("description", description.clone() as Option<String>)
-            .param("scope", scope.clone() as Option<String>)
-            .param("created_at", created_at.clone());
-
-            graph
-                .execute_on(&database, query)
-                .await
-                .map_err(|e| {
-                    tracing::error!("Neo4j add_concept error for '{}': {}", name, e);
-                    anyhow::anyhow!("Failed to create concept '{}' in Neo4j: {}", name, e)
-                })?;
-
-            let response = ConceptWithSimilarityWarning {
-                id,
-                name,
-                description,
-                scope,
-                created_at,
-                similar_concepts: vec![],
-            };
-
-            serde_json::to_value(response).context("Failed to serialize ConceptWithSimilarityWarning")
-        })
-    }
-
-    fn get_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
-        let graph = self.graph.clone();
-        let id = id.to_string();
-
-        Box::pin(async move {
-            let mut result = graph
-                .execute_on(&self.database, 
-                    neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c")
-                        .param("id", id.clone()),
-                )
-                .await
-                .context("Failed to get concept from Neo4j")?;
-
-            if let Ok(Some(row)) = result.next().await {
-                let node: neo4rs::Node = row.get("c").context("Failed to extract concept node")?;
-                
-                let concept = Concept {
-                    id: node.get("id").context("Missing id")?,
-                    name: node.get("name").context("Missing name")?,
-                    description: node.get("description").ok(),
-                    scope: node.get("scope").ok(),
-                    created_at: node.get("created_at").context("Missing created_at")?,
-                };
-                
-                Ok(serde_json::to_value(concept).context("Failed to serialize Concept")?)
-            } else {
-                anyhow::bail!("Concept not found: {}", id)
-            }
-        })
-    }
-
-    fn get_concept_with_instances(
-        &self,
-        id: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
-        let graph = self.graph.clone();
-        let id = id.to_string();
-
-        Box::pin(async move {
-            let mut result = graph
-                .execute_on(&self.database, 
-                    neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c")
-                        .param("id", id.clone()),
-                )
-                .await
-                .context("Failed to get concept from Neo4j")?;
-
-            if let Ok(Some(row)) = result.next().await {
-                let node: neo4rs::Node = row.get("c").context("Failed to extract concept node")?;
-                
-                let concept = ConceptWithInstances {
-                    id: node.get("id").context("Missing id")?,
-                    name: node.get("name").context("Missing name")?,
-                    description: node.get("description").ok(),
-                    scope: node.get("scope").ok(),
-                    created_at: node.get("created_at").context("Missing created_at")?,
-                    instances: vec![],
-                    subclasses: vec![],
-                    superclasses: vec![],
-                };
-                
-                Ok(serde_json::to_value(concept).context("Failed to serialize ConceptWithInstances")?)
-            } else {
-                anyhow::bail!("Concept not found: {}", id)
-            }
-        })
-    }
-
-    fn list_concepts(
-        &self,
-        scope: Option<&str>,
-        limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>> {
-        let graph = self.graph.clone();
-        let scope = scope.map(|s| s.to_string());
-
-        Box::pin(async move {
-            let query = if let Some(scope_filter) = scope {
-                neo4rs::query(
-                    "MATCH (c:Concept {scope: $scope}) RETURN c LIMIT $limit"
-                )
-                .param("scope", scope_filter)
-                .param("limit", limit as i64)
-            } else {
-                neo4rs::query(
-                    "MATCH (c:Concept) RETURN c LIMIT $limit"
-                )
-                .param("limit", limit as i64)
-            };
-
-            let mut result = graph
-                .execute_on(&self.database, query)
-                .await
-                .context("Failed to list concepts from Neo4j")?;
-
-            let mut concepts = Vec::new();
-            while let Ok(Some(row)) = result.next().await {
-                let node: neo4rs::Node = row.get("c").context("Failed to extract concept node")?;
-                
-                let concept = Concept {
-                    id: node.get("id").context("Missing id")?,
-                    name: node.get("name").context("Missing name")?,
-                    description: node.get("description").ok(),
-                    scope: node.get("scope").ok(),
-                    created_at: node.get("created_at").context("Missing created_at")?,
-                };
-                
-                let concept_json = serde_json::to_value(concept).context("Failed to serialize Concept")?;
-                concepts.push(concept_json);
-            }
-
-            Ok(concepts)
-        })
-    }
-
-    fn delete_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
-        let graph = self.graph.clone();
-        let id = id.to_string();
-
-        Box::pin(async move {
-            let mut result = graph
-                .execute_on(&self.database, 
-                    neo4rs::query("MATCH (c:Concept {id: $id}) DELETE c RETURN count(c) as deleted")
-                        .param("id", id),
-                )
-                .await
-                .context("Failed to delete concept from Neo4j")?;
-
-            if let Ok(Some(row)) = result.next().await {
-                let deleted: i64 = row.get("deleted").unwrap_or(0);
-                Ok(deleted > 0)
-            } else {
-                Ok(false)
-            }
-        })
-    }
-
-    fn resolve_concept_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let graph = self.graph.clone();
-        let id = id.to_string();
-        
-        Box::pin(async move {
-            // Try exact match first
-            let mut result = graph
-                .execute_on(&self.database, neo4rs::query("MATCH (c:Concept {id: $id}) RETURN c.id LIMIT 1")
-                    .param("id", id.clone()))
-                .await
-                .context("Failed to query Neo4j")?;
-            
-            if let Ok(Some(row)) = result.next().await {
-                if let Ok(full_id) = row.get::<String>("c.id") {
-                    return Ok(full_id);
-                }
-            }
-
-            // Try prefix match
-            if id.len() < 4 {
-                anyhow::bail!("Concept ID prefix '{}' is too short (minimum 4 characters)", id);
-            }
-
-            let mut result = graph
-                .execute_on(&self.database, neo4rs::query("MATCH (c:Concept) WHERE c.id STARTS WITH $prefix RETURN c.id")
-                    .param("prefix", id.clone()))
-                .await
-                .context("Failed to query Neo4j")?;
-
-            let mut matches = Vec::new();
-            while let Ok(Some(row)) = result.next().await {
-                if let Ok(cid) = row.get::<String>("c.id") {
-                    matches.push(cid);
-                }
-            }
-
-            match matches.len() {
-                0 => anyhow::bail!("Concept '{}' not found", id),
-                1 => Ok(matches.into_iter().next().unwrap()),
-                n => anyhow::bail!(
-                    "Ambiguous concept ID '{}' matches {} concepts. Use more characters:\n{}",
-                    id, n,
-                    matches.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
-                ),
-            }
-        })
-    }
-
-    fn search_concepts(
-        &self,
-        query: &str,
-        scope: Option<&str>,
-        limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>> {
-        let graph = self.graph.clone();
-        let query_str = query.to_string();
-        let scope = scope.map(|s| s.to_string());
-
-        Box::pin(async move {
-            let cypher_query = if let Some(scope_filter) = scope {
-                neo4rs::query(
-                    "MATCH (c:Concept {scope: $scope}) WHERE c.name =~ ('(?i).*' + $query + '.*') RETURN c LIMIT $limit"
-                )
-                .param("scope", scope_filter)
-                .param("query", query_str)
-                .param("limit", limit as i64)
-            } else {
-                neo4rs::query(
-                    "MATCH (c:Concept) WHERE c.name =~ ('(?i).*' + $query + '.*') RETURN c LIMIT $limit"
-                )
-                .param("query", query_str)
-                .param("limit", limit as i64)
-            };
-
-            let mut result = graph
-                .execute_on(&self.database, cypher_query)
-                .await
-                .context("Failed to search concepts in Neo4j")?;
-
-            let mut results = Vec::new();
-            while let Ok(Some(row)) = result.next().await {
-                let node: neo4rs::Node = row.get("c").context("Failed to extract concept node")?;
-                
-                let search_result = ConceptSearchResult {
-                    id: node.get("id").context("Missing id")?,
-                    name: node.get("name").context("Missing name")?,
-                    description: node.get("description").ok(),
-                    scope: node.get("scope").ok(),
-                    score: 0.5,
-                };
-                
-                let result_json = serde_json::to_value(search_result).context("Failed to serialize ConceptSearchResult")?;
-                results.push(result_json);
-            }
-
-            Ok(results)
-        })
-    }
-
-    fn add_ontology_edge(
-        &self,
-        from_id: &str,
-        from_kind: &str,
-        rel: &str,
-        to_id: &str,
-        to_kind: &str,
-        note: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
-        let graph = self.graph.clone();
-        let database = self.database.clone();
-        let from_id = from_id.to_string();
-        let from_kind = from_kind.to_string();
-        let rel = rel.to_string();
-        let to_id = to_id.to_string();
-        let to_kind = to_kind.to_string();
-        let note = note.map(|s| s.to_string());
-
-        Box::pin(async move {
-            let from_label = match from_kind.as_str() {
-                "concept" => "Concept",
-                "memory" => "Memory",
-                _ => "Concept", // default
-            };
-            let to_label = match to_kind.as_str() {
-                "concept" => "Concept", 
-                "memory" => "Memory",
-                _ => "Concept", // default
-            };
-
-            // Use the actual relationship type (INSTANCE_OF, SUPPORTS, etc.)
-            let query_str = format!(
-                "MATCH (from:{} {{id: $from_id}}), (to:{} {{id: $to_id}})
-                 CREATE (from)-[r:{}]->(to)
-                 SET r.note = $note
-                 RETURN id(r) as edge_id",
-                from_label, to_label, rel
-            );
-
-            let q = neo4rs::query(&query_str)
-                .param("from_id", from_id.clone())
-                .param("to_id", to_id.clone())
-                .param("note", note.clone() as Option<String>);
-
-            let mut result = graph
-                .execute_on(&database, q)
-                .await
-                .context("Failed to create ontology edge in Neo4j")?;
-
-            let edge_id = if let Ok(Some(row)) = result.next().await {
-                row.get::<i64>("edge_id").unwrap_or(1)
-            } else {
-                1
-            };
-
-            let created_at = chrono::Utc::now().to_rfc3339();
-
-            let edge = OntologyEdge {
-                id: edge_id,
-                from_id,
-                from_type: match from_kind.as_str() {
-                    "concept" => voidm_core::ontology::NodeKind::Concept,
-                    "memory" => voidm_core::ontology::NodeKind::Memory,
-                    _ => voidm_core::ontology::NodeKind::Concept,
-                },
-                rel_type: rel.to_string(),
-                to_id,
-                to_type: match to_kind.as_str() {
-                    "concept" => voidm_core::ontology::NodeKind::Concept,
-                    "memory" => voidm_core::ontology::NodeKind::Memory,
-                    _ => voidm_core::ontology::NodeKind::Concept,
-                },
-                note: note.map(|s| s.to_string()),
-                created_at,
-            };
-
-            serde_json::to_value(edge).context("Failed to serialize OntologyEdge")
-        })
-    }
-
-    fn delete_ontology_edge(&self, edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
-        let graph = self.graph.clone();
-        
-        Box::pin(async move {
-            // Neo4j internal relationship IDs are not directly accessible in parameterized queries
-            // For now, we'll query to find the Nth relationship (by ordinal position)
-            // and delete it. This is not ideal but works for the current interface.
-            
-            let cypher = r#"
-                MATCH (from)-[r]->(to)
-                WHERE r.from_id IS NOT NULL AND r.rel_type IS NOT NULL
-                WITH r, row_number() OVER () AS rn
-                WHERE rn = $edge_id
-                DELETE r
-                RETURN true as deleted
-            "#;
-            
-            let mut result = graph
-                .execute_on(&self.database, neo4rs::query(cypher).param("edge_id", edge_id))
-                .await
-                .context("Failed to delete ontology edge from Neo4j")?;
-            
-            if let Ok(Some(_row)) = result.next().await {
-                Ok(true)
-            } else {
-                Ok(false)
-            }
+            // TODO: Implement hybrid search for Neo4j
+            Ok(serde_json::json!({"results": [], "count": 0}))
         })
     }
 
@@ -1353,25 +866,30 @@ impl voidm_db_trait::Database for Neo4jDatabase {
         })
     }
 
-    fn clean_database(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+    fn clean_database(&self) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
         let graph = self.graph.clone();
         let database = self.database.clone();
 
         Box::pin(async move {
-            // Delete all OntologyEdge relationships and their nodes
-            graph
+            let mut deleted_count = 0;
+
+            // Delete all OntologyEdge relationships
+            let _ = graph
                 .execute_on(&database, neo4rs::query("MATCH ()-[r:INSTANCE_OF|RELATES_TO|SUPPORTS|CONTRADICTS|PRECEDES|DERIVED_FROM|PART_OF|EXEMPLIFIES]-() DELETE r"))
                 .await
-                .ok();  // Ignore if no edges exist
+                .ok();
 
             // Delete all Concept nodes
-            graph
+            let _ = graph
                 .execute_on(&database, neo4rs::query("MATCH (c:Concept) DELETE c"))
                 .await
-                .context("Failed to delete Concept nodes")?;
+                .ok();
 
-            tracing::info!("Neo4j: Database cleaned (all Concept nodes and ontology edges removed)");
-            Ok(())
+            // TODO: Implement proper count tracking for all deleted nodes and edges
+            deleted_count += 0; // Placeholder
+
+            tracing::info!("Neo4j: Database cleaned ({} items deleted)", deleted_count);
+            Ok(deleted_count)
         })
     }
 
@@ -1744,6 +1262,513 @@ impl voidm_db_trait::Database for Neo4jDatabase {
             );
             Ok((memory_count, chunk_count, relationship_count))
         })
+    }
+
+    // ===== NEW MIGRATION METHODS (STUBS) =====
+
+    fn list_tags(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let cypher = "MATCH (t:Tag) RETURN t.id as id, t.name as name, t.created_at as created_at";
+            let mut tags = Vec::new();
+
+            match graph.execute_on(&database, neo4rs::query(cypher)).await {
+                Ok(mut result) => {
+                    while let Ok(Some(row)) = result.next().await {
+                        let tag_id: String = row.get("id").unwrap_or_else(|_| Uuid::new_v4().to_string());
+                        let tag_name: Option<String> = row.get("name").ok().flatten();
+                        let created_at: Option<String> = row.get("created_at").ok().flatten();
+
+                        if let Some(name) = tag_name {
+                            tags.push(json!({
+                                "id": tag_id,
+                                "name": name,
+                                "created_at": created_at
+                            }));
+                        }
+                    }
+                    tracing::debug!("Neo4j: Found {} tags", tags.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Neo4j: Failed to list tags: {}", e);
+                }
+            }
+
+            Ok(tags)
+        })
+    }
+
+    fn create_tag(&self, _name: &str) -> Pin<Box<dyn Future<Output = Result<(String, bool)>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let name = _name.to_string();
+        
+        Box::pin(async move {
+            // MERGE creates if doesn't exist, returns whether created
+            let cypher = "MERGE (t:Tag {name: $name}) 
+                         ON CREATE SET t.id = $id, t.created_at = $created_at
+                         RETURN t.id as id, elementId(t) as element_id";
+            
+            let tag_id = Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+
+            match graph.execute_on(
+                &database,
+                neo4rs::query(cypher)
+                    .param("name", name.clone())
+                    .param("id", tag_id.clone())
+                    .param("created_at", now),
+            ).await {
+                Ok(mut result) => {
+                    if let Ok(Some(row)) = result.next().await {
+                        let returned_id: String = row.get("id").unwrap_or_else(|_| tag_id.clone());
+                        tracing::debug!("Neo4j: Created/found tag '{}' with id {}", name, returned_id);
+                        Ok((returned_id, true))
+                    } else {
+                        Ok((tag_id, false))
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Neo4j: Failed to create tag '{}': {}", name, e);
+                    Err(e.into())
+                }
+            }
+        })
+    }
+
+    fn link_tag_to_memory(&self, _tag_id: &str, _memory_id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let tag_id = _tag_id.to_string();
+        let memory_id = _memory_id.to_string();
+        
+        Box::pin(async move {
+            let cypher = "MATCH (t:Tag {id: $tag_id}), (m:Memory {id: $memory_id}) 
+                         CREATE (t)-[:HAS_TAG]->(m)
+                         RETURN true as success";
+
+            match graph.execute_on(
+                &database,
+                neo4rs::query(cypher)
+                    .param("tag_id", tag_id.clone())
+                    .param("memory_id", memory_id.clone()),
+            ).await {
+                Ok(mut result) => {
+                    if result.next().await.is_ok() {
+                        tracing::debug!("Neo4j: Linked tag {} to memory {}", tag_id, memory_id);
+                        Ok(true)
+                    } else {
+                        tracing::warn!("Neo4j: Failed to link tag {} to memory {}", tag_id, memory_id);
+                        Ok(false)
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Neo4j: Error linking tag to memory: {}", e);
+                    Ok(false)
+                }
+            }
+        })
+    }
+
+    fn list_tag_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let cypher = "MATCH (t:Tag)-[rel:HAS_TAG]->(m:Memory) 
+                         RETURN t.id as from, m.id as to";
+            let mut edges = Vec::new();
+
+            match graph.execute_on(&database, neo4rs::query(cypher)).await {
+                Ok(mut result) => {
+                    while let Ok(Some(row)) = result.next().await {
+                        let from: String = row.get("from").unwrap_or_default();
+                        let to: String = row.get("to").unwrap_or_default();
+
+                        edges.push(json!({
+                            "from": from,
+                            "to": to,
+                            "type": "HAS_TAG"
+                        }));
+                    }
+                    tracing::debug!("Neo4j: Found {} tag edges", edges.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Neo4j: Failed to list tag edges: {}", e);
+                }
+            }
+
+            Ok(edges)
+        })
+    }
+
+    fn list_chunks(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let cypher = "MATCH (c:MemoryChunk) RETURN c.id as id, c.text as text, c.index as index, c.size as size, c.created_at as created_at";
+            let mut chunks = Vec::new();
+
+            match graph.execute_on(&database, neo4rs::query(cypher)).await {
+                Ok(mut result) => {
+                    while let Ok(Some(row)) = result.next().await {
+                        let id: String = row.get("id").unwrap_or_default();
+                        let text: String = row.get("text").unwrap_or_default();
+                        let index: i64 = row.get("index").unwrap_or(0);
+                        let size: i64 = row.get("size").unwrap_or(0);
+                        let created_at: Option<String> = row.get("created_at").ok().flatten();
+
+                        chunks.push(json!({
+                            "id": id,
+                            "text": text,
+                            "index": index,
+                            "size": size,
+                            "created_at": created_at
+                        }));
+                    }
+                    tracing::debug!("Neo4j: Found {} chunks", chunks.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Neo4j: Failed to list chunks: {}", e);
+                }
+            }
+
+            Ok(chunks)
+        })
+    }
+
+    fn get_chunk(&self, _chunk_id: &str) -> Pin<Box<dyn Future<Output = Result<Option<Value>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let chunk_id = _chunk_id.to_string();
+        
+        Box::pin(async move {
+            let cypher = "MATCH (c:MemoryChunk {id: $id}) RETURN c.id as id, c.text as text, c.index as index, c.size as size, c.created_at as created_at";
+
+            match graph.execute_on(
+                &database,
+                neo4rs::query(cypher).param("id", chunk_id.clone()),
+            ).await {
+                Ok(mut result) => {
+                    if let Ok(Some(row)) = result.next().await {
+                        let id: String = row.get("id").unwrap_or_default();
+                        let text: String = row.get("text").unwrap_or_default();
+                        let index: i64 = row.get("index").unwrap_or(0);
+                        let size: i64 = row.get("size").unwrap_or(0);
+                        let created_at: Option<String> = row.get("created_at").ok().flatten();
+
+                        tracing::debug!("Neo4j: Found chunk {}", chunk_id);
+                        return Ok(Some(json!({
+                            "id": id,
+                            "text": text,
+                            "index": index,
+                            "size": size,
+                            "created_at": created_at
+                        })));
+                    }
+                    tracing::debug!("Neo4j: Chunk {} not found", chunk_id);
+                    Ok(None)
+                }
+                Err(e) => {
+                    tracing::error!("Neo4j: Error getting chunk {}: {}", chunk_id, e);
+                    Ok(None)
+                }
+            }
+        })
+    }
+
+    fn list_chunk_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let cypher = "MATCH (c:MemoryChunk)-[rel:BELONGS_TO]->(m:Memory) RETURN c.id as from, m.id as to";
+            let mut edges = Vec::new();
+
+            match graph.execute_on(&database, neo4rs::query(cypher)).await {
+                Ok(mut result) => {
+                    while let Ok(Some(row)) = result.next().await {
+                        let from: String = row.get("from").unwrap_or_default();
+                        let to: String = row.get("to").unwrap_or_default();
+
+                        edges.push(json!({
+                            "from": from,
+                            "to": to,
+                            "type": "BELONGS_TO"
+                        }));
+                    }
+                    tracing::debug!("Neo4j: Found {} chunk edges", edges.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Neo4j: Failed to list chunk edges: {}", e);
+                }
+            }
+
+            Ok(edges)
+        })
+    }
+
+    fn list_entities(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let cypher = "MATCH (e:Entity) RETURN e.id as id, e.name as name, e.type as entity_type, e.created_at as created_at";
+            let mut entities = Vec::new();
+
+            match graph.execute_on(&database, neo4rs::query(cypher)).await {
+                Ok(mut result) => {
+                    while let Ok(Some(row)) = result.next().await {
+                        let id: String = row.get("id").unwrap_or_default();
+                        let name: String = row.get("name").unwrap_or_default();
+                        let entity_type: String = row.get("entity_type").unwrap_or_else(|_| "MISC".to_string());
+                        let created_at: Option<String> = row.get("created_at").ok().flatten();
+
+                        entities.push(json!({
+                            "id": id,
+                            "name": name,
+                            "type": entity_type,
+                            "created_at": created_at
+                        }));
+                    }
+                    tracing::debug!("Neo4j: Found {} entities", entities.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Neo4j: Failed to list entities: {}", e);
+                }
+            }
+
+            Ok(entities)
+        })
+    }
+
+    fn get_or_create_entity(&self, _name: &str, _entity_type: &str) -> Pin<Box<dyn Future<Output = Result<(String, bool)>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let name = _name.to_string();
+        let entity_type = _entity_type.to_string();
+        
+        Box::pin(async move {
+            let cypher = "MERGE (e:Entity {name: $name, type: $type})
+                         ON CREATE SET e.id = $id, e.created_at = $created_at
+                         RETURN e.id as id";
+            
+            let entity_id = Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+
+            match graph.execute_on(
+                &database,
+                neo4rs::query(cypher)
+                    .param("name", name.clone())
+                    .param("type", entity_type.clone())
+                    .param("id", entity_id.clone())
+                    .param("created_at", now),
+            ).await {
+                Ok(mut result) => {
+                    if let Ok(Some(row)) = result.next().await {
+                        let returned_id: String = row.get("id").unwrap_or_else(|_| entity_id.clone());
+                        tracing::debug!("Neo4j: Created/found entity '{}' (type: {}) with id {}", name, entity_type, returned_id);
+                        Ok((returned_id, true))
+                    } else {
+                        Ok((entity_id, false))
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Neo4j: Failed to create entity '{}': {}", name, e);
+                    Err(e.into())
+                }
+            }
+        })
+    }
+
+    fn link_chunk_to_entity(&self, _chunk_id: &str, _entity_id: &str, _confidence: f32) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let chunk_id = _chunk_id.to_string();
+        let entity_id = _entity_id.to_string();
+        let confidence = _confidence;
+        
+        Box::pin(async move {
+            let cypher = "MATCH (c:MemoryChunk {id: $chunk_id}), (e:Entity {id: $entity_id})
+                         CREATE (c)-[:MENTIONS {confidence: $confidence}]->(e)
+                         RETURN true as success";
+
+            match graph.execute_on(
+                &database,
+                neo4rs::query(cypher)
+                    .param("chunk_id", chunk_id.clone())
+                    .param("entity_id", entity_id.clone())
+                    .param("confidence", confidence as f64),
+            ).await {
+                Ok(mut result) => {
+                    if result.next().await.is_ok() {
+                        tracing::debug!("Neo4j: Linked chunk {} to entity {} (confidence: {})", chunk_id, entity_id, confidence);
+                        Ok(true)
+                    } else {
+                        tracing::warn!("Neo4j: Failed to link chunk {} to entity {}", chunk_id, entity_id);
+                        Ok(false)
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Neo4j: Error linking chunk to entity: {}", e);
+                    Ok(false)
+                }
+            }
+        })
+    }
+
+    fn list_entity_mention_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let cypher = "MATCH (c:MemoryChunk)-[rel:MENTIONS]->(e:Entity) 
+                         RETURN c.id as from, e.id as to, rel.confidence as confidence";
+            let mut edges = Vec::new();
+
+            match graph.execute_on(&database, neo4rs::query(cypher)).await {
+                Ok(mut result) => {
+                    while let Ok(Some(row)) = result.next().await {
+                        let from: String = row.get("from").unwrap_or_default();
+                        let to: String = row.get("to").unwrap_or_default();
+                        let confidence: f64 = row.get("confidence").unwrap_or(0.5);
+
+                        edges.push(json!({
+                            "from": from,
+                            "to": to,
+                            "type": "MENTIONS",
+                            "confidence": confidence
+                        }));
+                    }
+                    tracing::debug!("Neo4j: Found {} entity mention edges", edges.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Neo4j: Failed to list entity mention edges: {}", e);
+                }
+            }
+
+            Ok(edges)
+        })
+    }
+
+    fn count_nodes(&self, _node_type: &str) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let node_type = _node_type.to_string();
+        
+        Box::pin(async move {
+            let cypher = match node_type.as_str() {
+                "Memory" => "MATCH (n:Memory) RETURN count(n) as count",
+                "MemoryChunk" => "MATCH (n:MemoryChunk) RETURN count(n) as count",
+                "Tag" => "MATCH (n:Tag) RETURN count(n) as count",
+                "Entity" => "MATCH (n:Entity) RETURN count(n) as count",
+                "Concept" => "MATCH (n:Concept) RETURN count(n) as count",
+                _ => return Ok(0),
+            };
+
+            match graph.execute_on(&database, neo4rs::query(cypher)).await {
+                Ok(mut result) => {
+                    if let Ok(Some(row)) = result.next().await {
+                        let count: i64 = row.get("count").unwrap_or(0);
+                        tracing::debug!("Neo4j: Counted {} {} nodes", count, node_type);
+                        Ok(count as usize)
+                    } else {
+                        Ok(0)
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Neo4j: Failed to count {} nodes: {}", node_type, e);
+                    Ok(0)
+                }
+            }
+        })
+    }
+
+    fn count_edges(&self, _edge_type: Option<&str>) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let edge_type = _edge_type.map(|s| s.to_string());
+        
+        Box::pin(async move {
+            let cypher = match edge_type.as_deref() {
+                Some("HAS_TAG") => "MATCH ()-[r:HAS_TAG]-() RETURN count(r) as count",
+                Some("BELONGS_TO") => "MATCH ()-[r:BELONGS_TO]-() RETURN count(r) as count",
+                Some("MENTIONS") => "MATCH ()-[r:MENTIONS]-() RETURN count(r) as count",
+                _ => "MATCH ()-[r]-() RETURN count(r) as count",
+            };
+
+            match graph.execute_on(&database, neo4rs::query(cypher)).await {
+                Ok(mut result) => {
+                    if let Ok(Some(row)) = result.next().await {
+                        let count: i64 = row.get("count").unwrap_or(0);
+                        let label = edge_type.as_deref().unwrap_or("total");
+                        tracing::debug!("Neo4j: Counted {} {} edges", count, label);
+                        Ok(count as usize)
+                    } else {
+                        Ok(0)
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Neo4j: Failed to count edges: {}", e);
+                    Ok(0)
+                }
+            }
+        })
+    }
+
+    // Phase 0: Generic node/edge methods (stubs for Neo4j)
+    fn create_node(
+        &self,
+        _id: &str,
+        _node_type: &str,
+        _properties: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move { Err(anyhow::anyhow!("Not yet implemented for Neo4j")) })
+    }
+
+    fn get_node(&self, _id: &str) -> Pin<Box<dyn Future<Output = Result<Option<Value>>> + Send + '_>> {
+        Box::pin(async move { Err(anyhow::anyhow!("Not yet implemented for Neo4j")) })
+    }
+
+    fn delete_node(&self, _id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        Box::pin(async move { Err(anyhow::anyhow!("Not yet implemented for Neo4j")) })
+    }
+
+    fn list_nodes(&self, _node_type: &str) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        Box::pin(async move { Err(anyhow::anyhow!("Not yet implemented for Neo4j")) })
+    }
+
+    fn create_edge(
+        &self,
+        _from_id: &str,
+        _edge_type: &str,
+        _to_id: &str,
+        _properties: Option<Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move { Err(anyhow::anyhow!("Not yet implemented for Neo4j")) })
+    }
+
+    fn get_edge(
+        &self,
+        _from_id: &str,
+        _edge_type: &str,
+        _to_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>>> + Send + '_>> {
+        Box::pin(async move { Err(anyhow::anyhow!("Not yet implemented for Neo4j")) })
+    }
+
+    fn delete_edge(
+        &self,
+        _from_id: &str,
+        _edge_type: &str,
+        _to_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        Box::pin(async move { Err(anyhow::anyhow!("Not yet implemented for Neo4j")) })
+    }
+
+    fn get_node_edges(
+        &self,
+        _node_id: &str,
+        _edge_type: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        Box::pin(async move { Err(anyhow::anyhow!("Not yet implemented for Neo4j")) })
     }
     
 }

@@ -1,14 +1,20 @@
 # voidm
+
 Help AI assistant to store and search memories using cli.
 Memories are splitted into chunks before embeddings.
 Memories are auto tagged on add.
 Memories are auto linked on add. 
 
 
-# voidm-cli
+
+# voidm-core
 Hardrules : backend agnostic. 
 All DB operation must be done using DB trait
 Cypher query is first class citizen.
+
+
+# voidm-cli
+Glue between user / voidm-core / backend
 
 # vodm-sqlite
 sqlite backend, with cyper to sql.

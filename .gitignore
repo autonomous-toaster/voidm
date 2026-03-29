@@ -24,3 +24,6 @@ ort_cache/
 # Env
 .env
 .env.local
+
+# Development config (local only, never commit)
+.voidm.dev.toml

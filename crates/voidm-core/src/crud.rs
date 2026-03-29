@@ -5,14 +5,14 @@ use uuid::Uuid;
 
 use crate::models::{
     AddMemoryRequest, AddMemoryResponse, DuplicateWarning, EdgeType, LinkResponse,
-    ConflictWarning, Memory,
+    Memory,
 };
 use voidm_scoring;
 use crate::{embeddings, search, vector, redactor};
 use crate::config::Config;
 
 /// Convert voidm_core MemoryType to voidm_scoring MemoryType
-fn convert_memory_type(mt: &crate::models::MemoryType) -> voidm_scoring::MemoryType {
+pub fn convert_memory_type(mt: &crate::models::MemoryType) -> voidm_scoring::MemoryType {
     match mt {
         crate::models::MemoryType::Episodic => voidm_scoring::MemoryType::Episodic,
         crate::models::MemoryType::Semantic => voidm_scoring::MemoryType::Semantic,
@@ -274,7 +274,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         ).await.unwrap_or_default();
 
         if let Some((merge_id, merge_score)) = merge_candidates.first() {
-            if let Ok(Some(dup_mem)) = get_memory(pool, merge_id).await {
+            if let Ok(Some(dup_mem)) = get_memory_sqlite(pool, merge_id).await {
                 // For episodic memories, check temporal compatibility
                 let should_merge = if memory_type_str == "episodic" {
                     let (temporal_ok, reason) = check_episodic_temporal_compatibility(
@@ -326,7 +326,7 @@ pub async fn add_memory(pool: &SqlitePool, mut req: AddMemoryRequest, config: &C
         ).await.unwrap_or_default();
 
         let dup_warning = if let Some((dup_id, dup_score)) = dup_candidates.first() {
-            if let Ok(Some(dup_mem)) = get_memory(pool, dup_id).await {
+            if let Ok(Some(dup_mem)) = get_memory_sqlite(pool, dup_id).await {
                 let content_trunc = if dup_mem.content.len() > 120 {
                     format!("{}...", crate::search::safe_truncate(&dup_mem.content, 120))
                 } else {
@@ -474,16 +474,33 @@ async fn merge_memories(
 }
 
 /// Get a single memory by ID.
-pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
+/// Get a memory by ID (backend-agnostic via Database trait)
+///
+/// # Arguments
+/// * `db` - Any type implementing Database trait
+/// * `id` - Memory ID (full UUID or 4+ char prefix)
+///
+/// Returns the Memory if found, None if not found
+pub async fn get_memory<D: voidm_db_trait::Database + ?Sized>(db: &D, id: &str) -> Result<Option<Memory>> {
+    match db.get_memory(id).await? {
+        None => Ok(None),
+        Some(value) => {
+            let memory: Memory = serde_json::from_value(value)?;
+            Ok(Some(memory))
+        }
+    }
+}
+
+/// Get a memory by ID from SqlitePool (for backward compatibility during Phase 1)
+/// TODO: Remove in Phase 1.5 when add_memory is refactored
+pub async fn get_memory_sqlite(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
     // Resolve short IDs to full IDs (supports 4+ char prefixes)
     let full_id = if id.len() < 4 {
-        // If less than 4 chars, can't be a valid short ID, treat as exact match attempt
         id.to_string()
     } else {
         match resolve_id_sqlite(pool, id).await {
             Ok(resolved) => resolved,
             Err(_) => {
-                // If resolution fails, it means ID not found
                 return Ok(None);
             }
         }
@@ -532,150 +549,37 @@ pub async fn get_memory(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
     }
 }
 
-/// List memories newest-first, with optional scope prefix and type filter.
-pub async fn list_memories(
-    pool: &SqlitePool,
-    scope_filter: Option<&str>,
-    type_filter: Option<&str>,
-    limit: usize,
-) -> Result<Vec<Memory>> {
-    // Build query dynamically
-    let rows: Vec<(String, String, String, i64, String, String, Option<f32>, Option<String>, String, String)> = if let Some(scope) = scope_filter {
-        let scope_prefix = format!("{}%", scope);
-        sqlx::query_as(
-            "SELECT DISTINCT m.id, m.type, m.content, m.importance, m.tags, m.metadata, m.quality_score, m.context, m.created_at, m.updated_at
-             FROM memories m
-             JOIN memory_scopes ms ON ms.memory_id = m.id
-             WHERE ms.scope LIKE ?
-             ORDER BY m.created_at DESC LIMIT ?"
-        )
-        .bind(&scope_prefix)
-        .bind(limit as i64)
-        .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query_as(
-            "SELECT id, type, content, importance, tags, metadata, quality_score, context, created_at, updated_at
-             FROM memories ORDER BY created_at DESC LIMIT ?"
-        )
-        .bind(limit as i64)
-        .fetch_all(pool)
-        .await?
-    };
-
-    let mut memories = Vec::new();
-    for (id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, context, created_at, updated_at) in rows {
-        if let Some(t) = type_filter {
-            if memory_type != t { continue; }
-        }
-        let scopes = get_scopes(pool, &id).await?;
-        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-        let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_default();
-        
-        // Use persisted quality_score if available, otherwise compute
-        let quality_score = if let Some(score) = quality_score_db {
-            Some(score)
-        } else {
-            let memory_type_enum: crate::models::MemoryType = memory_type.parse().unwrap_or(crate::models::MemoryType::Semantic);
-            let quality_mt = convert_memory_type(&memory_type_enum);
-            let quality_score_val = voidm_scoring::compute_quality_score(&content, &quality_mt);
-            Some(quality_score_val.score)
-        };
-        
-        memories.push(Memory { 
-            id, 
-            memory_type, 
-            content, 
-            importance, 
-            tags, 
-            metadata, 
-            scopes, 
-            created_at, 
-            updated_at,
-            quality_score,
-            context,
-            title: None,
-        });
-    }
+/// List memories newest-first (backend-agnostic via Database trait)
+///
+/// # Arguments
+/// * `db` - Any type implementing Database trait
+/// * `limit` - Maximum number of memories to return
+///
+/// Returns a list of memories ordered by creation date
+pub async fn list_memories<D: voidm_db_trait::Database + ?Sized>(db: &D, limit: Option<usize>) -> Result<Vec<Memory>> {
+    let values = db.list_memories(limit).await?;
+    let memories: Vec<Memory> = values
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect();
     Ok(memories)
 }
 
 /// Delete a memory and all its graph edges (cascade via FK).
-pub async fn delete_memory(pool: &SqlitePool, id: &str) -> Result<bool> {
-    // Resolve short IDs to full IDs (supports 4+ char prefixes)
-    let full_id = resolve_id_sqlite(pool, id).await
-        .or_else(|_| {
-            // If resolution fails, treat as not found
-            Ok::<String, anyhow::Error>(String::new())
-        })?;
-    
-    if full_id.is_empty() {
-        return Ok(false);
-    }
-
-    // Check if memory exists first
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?)")
-        .bind(&full_id)
-        .fetch_one(pool)
-        .await?;
-    
-    if !exists {
-        return Ok(false);
-    }
-
-    // Delete graph_edges (using source_id and target_id, not from_id/to_id)
-    // First get the graph node IDs for this memory
-    let node_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
-        .bind(&full_id)
-        .fetch_all(pool)
-        .await?;
-    
-    for node_id in node_ids {
-        sqlx::query("DELETE FROM graph_edges WHERE source_id = ? OR target_id = ?")
-            .bind(node_id)
-            .bind(node_id)
-            .execute(pool)
-            .await?;
-        
-        sqlx::query("DELETE FROM graph_nodes WHERE id = ?")
-            .bind(node_id)
-            .execute(pool)
-            .await?;
-    }
-
-    // Delete memory_edges (which uses from_id and to_id)
-    sqlx::query("DELETE FROM memory_edges WHERE from_id = ? OR to_id = ?")
-        .bind(&full_id)
-        .bind(&full_id)
-        .execute(pool)
-        .await?;
-
-    sqlx::query("DELETE FROM memory_scopes WHERE memory_id = ?")
-        .bind(&full_id)
-        .execute(pool)
-        .await?;
-
-    sqlx::query("DELETE FROM vec_memories WHERE memory_id = ?")
-        .bind(&full_id)
-        .execute(pool)
-        .await?;
-
-    sqlx::query("DELETE FROM memories_fts WHERE id = ?")
-        .bind(&full_id)
-        .execute(pool)
-        .await?;
-
-    sqlx::query("DELETE FROM memories WHERE id = ?")
-        .bind(&full_id)
-        .execute(pool)
-        .await?;
-
-    Ok(true)
+/// Delete a memory by ID (backend-agnostic via Database trait)
+///
+/// # Arguments
+/// * `db` - Any type implementing Database trait
+/// * `id` - Memory ID (full UUID or 4+ char prefix)
+///
+/// Returns true if memory was deleted, false if not found
+pub async fn delete_memory<D: voidm_db_trait::Database + ?Sized>(db: &D, id: &str) -> Result<bool> {
+    db.delete_memory(id).await
 }
 
 
 /// Get all scopes for a memory.
-async fn get_scopes(pool: &SqlitePool, memory_id: &str) -> Result<Vec<String>> {
+pub async fn get_scopes(pool: &SqlitePool, memory_id: &str) -> Result<Vec<String>> {
     let scopes: Vec<String> = sqlx::query_scalar(
         "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
     )
@@ -696,7 +600,43 @@ pub async fn list_scopes(pool: &SqlitePool) -> Result<Vec<String>> {
 }
 
 /// Create a graph edge between two memories.
-pub async fn link_memories(
+/// Create a graph edge between two memories (backend-agnostic)
+pub async fn link_memories<D: voidm_db_trait::Database + ?Sized>(
+    db: &D,
+    from_id: &str,
+    edge_type: &EdgeType,
+    to_id: &str,
+    note: Option<&str>,
+) -> Result<LinkResponse> {
+    // Validate RELATES_TO requires note
+    if edge_type.requires_note() && note.is_none() {
+        anyhow::bail!("RELATES_TO requires --note explaining why no stronger relationship applies.");
+    }
+
+    // Resolve IDs (support short prefixes)
+    let from_id = db.resolve_memory_id(from_id).await?;
+    let to_id = db.resolve_memory_id(to_id).await?;
+
+    // Call trait method - returns JSON response with resolved IDs
+    let response_json = db.link_memories(&from_id, edge_type.as_str(), &to_id, note).await?;
+    
+    // Convert JSON back to LinkResponse
+    let created = response_json.get("created").and_then(|v| v.as_bool()).unwrap_or(false);
+    let from = response_json.get("from").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let rel = response_json.get("rel").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let to = response_json.get("to").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    Ok(LinkResponse {
+        created,
+        from,
+        rel,
+        to,
+    })
+}
+
+/// Create a graph edge between two memories using SqlitePool (for backward compatibility)
+/// TODO: Remove in Phase 1.5 when add_memory is refactored
+pub async fn link_memories_sqlite(
     pool: &SqlitePool,
     from_id: &str,
     edge_type: &EdgeType,
@@ -717,33 +657,6 @@ pub async fn link_memories(
     let from_node = get_or_create_node(pool, &from_id).await?;
     let to_node = get_or_create_node(pool, &to_id).await?;
 
-    // Check for conflicting edge
-    let conflict_rel = edge_type.conflict();
-    let conflict_warning = if let Some(opposing) = conflict_rel {
-        let exists: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?"
-        )
-        .bind(from_node)
-        .bind(to_node)
-        .bind(opposing)
-        .fetch_optional(pool)
-        .await?;
-
-        if exists.is_some() {
-            Some(ConflictWarning {
-                existing_rel: opposing.to_string(),
-                message: format!(
-                    "Conflict: {} {} {} already exists. Both edges are now present. Use 'voidm unlink {} {} {}' to resolve.",
-                    from_id, opposing, to_id, from_id, opposing, to_id
-                ),
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT OR IGNORE INTO graph_edges (source_id, target_id, rel_type, note, created_at)
@@ -762,7 +675,6 @@ pub async fn link_memories(
         from: from_id.to_string(),
         rel: edge_type.as_str().to_string(),
         to: to_id.to_string(),
-        conflict_warning,
     })
 }
 
@@ -865,32 +777,6 @@ pub async fn list_edges(pool: &SqlitePool) -> Result<Vec<crate::models::MemoryEd
         crate::models::MemoryEdge {
             from_id,
             to_id,
-            rel_type,
-            note,
-        }
-    }).collect();
-
-    Ok(edges)
-}
-
-/// List all ontology edges for migration purposes
-pub async fn list_ontology_edges(pool: &SqlitePool) -> Result<Vec<crate::models::OntologyEdgeForMigration>> {
-    let edges_data: Vec<(String, String, String, String, String, Option<String>)> = sqlx::query_as(
-        r#"
-        SELECT from_id, from_type, to_id, to_type, rel_type, note
-        FROM ontology_edges
-        ORDER BY from_id
-        "#
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let edges = edges_data.into_iter().map(|(from_id, from_type, to_id, to_type, rel_type, note)| {
-        crate::models::OntologyEdgeForMigration {
-            from_id,
-            from_type,
-            to_id,
-            to_type,
             rel_type,
             note,
         }

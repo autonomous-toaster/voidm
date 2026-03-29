@@ -20,3 +20,5 @@ tracing = { workspace = true }
 voidm-db-trait = { path = "../voidm-db-trait" }
 # For QueryTranslator and CypherOperation
 voidm-core = { path = "../voidm-core" }
+# For quality scoring
+voidm-scoring = { path = "../voidm-scoring" }

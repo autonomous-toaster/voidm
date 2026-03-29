@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Subcommand;
-use sqlx::SqlitePool;
 use voidm_core::{Config, embeddings, vector};
 
 #[derive(Subcommand)]
@@ -36,7 +35,7 @@ pub fn run_list(json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn run(cmd: ModelsCommands, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, config: &Config, json: bool) -> Result<()> {
+pub async fn run(cmd: ModelsCommands, db: &std::sync::Arc<dyn voidm_db_trait::Database>, config: &Config, json: bool) -> Result<()> {
     match cmd {
         ModelsCommands::List => run_list(json),
         ModelsCommands::Download { model } => {
@@ -46,17 +45,9 @@ pub async fn run(cmd: ModelsCommands, db: &std::sync::Arc<dyn voidm_db_trait::Da
             eprintln!("Model '{}' ready.", model);
             Ok(())
         }
-        ModelsCommands::Reembed { model, batch_size } => {
-            let model_name = model.as_deref().unwrap_or(&config.embeddings.model);
-            eprintln!("Re-embedding all memories with '{}'...", model_name);
-
-            // Get dimension from a test embed
-            let test = embeddings::embed_text(model_name, "test")?;
-            let dim = test.len();
-
-            vector::reembed_all(pool, model_name, dim, batch_size).await?;
-            eprintln!("Done.");
-            Ok(())
+        ModelsCommands::Reembed { model: _, batch_size: _ } => {
+            Err(anyhow::anyhow!("Reembed requires Phase 1.3 implementation (backend trait methods)"))
         }
     }
 }
+

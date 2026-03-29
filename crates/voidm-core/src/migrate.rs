@@ -83,7 +83,32 @@ async fn upgrade_add_title(pool: &SqlitePool) -> Result<()> {
 }
 
 const SCHEMA: &str = r#"
--- Core memory storage
+-- Phase 0: Generic node/edge format (foundation for multi-backend)
+CREATE TABLE IF NOT EXISTS nodes (
+    id            TEXT PRIMARY KEY,
+    type          TEXT NOT NULL,           -- Memory, Chunk, Tag, MemoryType, Scope, Entity, EntityType
+    properties    TEXT NOT NULL,           -- JSON: all node-specific data
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
+
+CREATE TABLE IF NOT EXISTS edges (
+    id            TEXT PRIMARY KEY,
+    from_id       TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    edge_type     TEXT NOT NULL,           -- HAS_CHUNK, TAGGED_WITH, HAS_TYPE, IN_SCOPE, MENTIONS, RELATED_ENTITY, etc.
+    to_id         TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    properties    TEXT,                    -- JSON: metadata (weight, sequence_num, etc.)
+    created_at    TEXT NOT NULL,
+    UNIQUE(from_id, edge_type, to_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_edges_from_to ON edges(from_id, edge_type, to_id);
+CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
+CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_id);
+
+-- Core memory storage (legacy, to be migrated)
 CREATE TABLE IF NOT EXISTS memories (
     id            TEXT PRIMARY KEY,
     type          TEXT NOT NULL CHECK (type IN ('episodic','semantic','procedural','conceptual','contextual')),
@@ -240,88 +265,4 @@ CREATE INDEX IF NOT EXISTS idx_graph_node_props_text ON graph_node_props_text(ke
 CREATE INDEX IF NOT EXISTS idx_graph_node_props_int  ON graph_node_props_int(key_id, value, node_id);
 CREATE INDEX IF NOT EXISTS idx_graph_edge_props_text ON graph_edge_props_text(key_id, value, edge_id);
 
--- ── Ontology layer ────────────────────────────────────────────────────────────
-
--- First-class concept nodes (distinct from memories)
-CREATE TABLE IF NOT EXISTS ontology_concepts (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    description TEXT,
-    scope       TEXT,
-    created_at  TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_ontology_concepts_name  ON ontology_concepts(lower(name));
-CREATE INDEX IF NOT EXISTS idx_ontology_concepts_scope ON ontology_concepts(scope);
-
--- FTS for concepts
-CREATE VIRTUAL TABLE IF NOT EXISTS ontology_concept_fts USING fts5(
-    id UNINDEXED,
-    name,
-    description,
-    tokenize = 'porter ascii'
-);
-
--- Typed edges: concept↔concept, concept↔memory, memory↔concept
--- from_type / to_type discriminate between 'concept' and 'memory' endpoints
-CREATE TABLE IF NOT EXISTS ontology_edges (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    from_id     TEXT NOT NULL,
-    from_type   TEXT NOT NULL CHECK (from_type IN ('concept', 'memory')),
-    rel_type    TEXT NOT NULL,
-    to_id       TEXT NOT NULL,
-    to_type     TEXT NOT NULL CHECK (to_type IN ('concept', 'memory')),
-    note        TEXT,
-    created_at  TEXT NOT NULL
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ontology_edges_unique
-    ON ontology_edges(from_id, rel_type, to_id);
-CREATE INDEX IF NOT EXISTS idx_ontology_edges_from   ON ontology_edges(from_id, rel_type);
-CREATE INDEX IF NOT EXISTS idx_ontology_edges_to     ON ontology_edges(to_id, rel_type);
-CREATE INDEX IF NOT EXISTS idx_ontology_edges_type   ON ontology_edges(rel_type);
-
--- NER enrichment tracking: records which memories have been processed
--- by 'voidm ontology enrich-memories' so re-runs skip them by default.
-CREATE TABLE IF NOT EXISTS ontology_ner_processed (
-    memory_id    TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-    processed_at TEXT NOT NULL,
-    entity_count INTEGER NOT NULL DEFAULT 0,
-    link_count   INTEGER NOT NULL DEFAULT 0
-);
-
--- ── Batch merge operations (Phase 5) ───────────────────────────────────────
-
--- Tracks individual merge operations within a batch
-CREATE TABLE IF NOT EXISTS ontology_merge_log (
-    id                TEXT PRIMARY KEY,
-    batch_id          TEXT NOT NULL,
-    source_id         TEXT NOT NULL,
-    target_id         TEXT NOT NULL,
-    edges_retargeted  INTEGER DEFAULT 0,
-    conflicts_kept    INTEGER DEFAULT 0,
-    status            TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'rolled_back', 'failed')),
-    reason            TEXT,
-    created_at        TEXT NOT NULL,
-    completed_at      TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_merge_log_batch ON ontology_merge_log(batch_id);
-CREATE INDEX IF NOT EXISTS idx_merge_log_status ON ontology_merge_log(status);
-CREATE INDEX IF NOT EXISTS idx_merge_log_source ON ontology_merge_log(source_id);
-CREATE INDEX IF NOT EXISTS idx_merge_log_target ON ontology_merge_log(target_id);
-
--- Tracks batch merge operations
-CREATE TABLE IF NOT EXISTS ontology_merge_batch (
-    id               TEXT PRIMARY KEY,
-    total_merges     INTEGER NOT NULL,
-    failed_merges    INTEGER DEFAULT 0,
-    conflicts        INTEGER DEFAULT 0,
-    transaction_id   TEXT,
-    created_at       TEXT NOT NULL,
-    executed_at      TEXT,
-    rolled_back_at   TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_merge_batch_created ON ontology_merge_batch(created_at DESC);
 "#;

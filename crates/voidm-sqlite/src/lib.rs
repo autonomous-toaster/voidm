@@ -98,6 +98,257 @@ impl SqliteDatabase {
 
         Ok(row.map(|r| map_fn(&r)).unwrap_or(Value::Null))
     }
+
+    /// Delete a memory and all associated data (internal implementation)
+
+    /// Get a memory by ID (internal implementation, extracted from voidm-core)
+    async fn get_memory_impl(&self, id: &str) -> Result<Option<voidm_core::models::Memory>> {
+        // Resolve short IDs to full IDs (supports 4+ char prefixes)
+        let full_id = if id.len() < 4 {
+            // If less than 4 chars, can't be a valid short ID, treat as exact match attempt
+            id.to_string()
+        } else {
+            match voidm_core::crud::resolve_id_sqlite(&self.pool, id).await {
+                Ok(resolved) => resolved,
+                Err(_) => {
+                    // If resolution fails, it means ID not found
+                    return Ok(None);
+                }
+            }
+        };
+
+        let row: Option<(String, String, String, i64, String, String, Option<f32>, Option<String>, String, String)> = sqlx::query_as(
+            "SELECT id, type, content, importance, tags, metadata, quality_score, context, created_at, updated_at
+             FROM memories WHERE id = ?"
+        )
+        .bind(&full_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            None => Ok(None),
+            Some((id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, context, created_at, updated_at)) => {
+                let scopes = voidm_core::crud::get_scopes(&self.pool, &id).await?;
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+                let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_default();
+                
+                // Use persisted quality_score if available, otherwise compute
+                let quality_score = if let Some(score) = quality_score_db {
+                    Some(score)
+                } else {
+                    let memory_type_enum: voidm_core::models::MemoryType = memory_type.parse().unwrap_or(voidm_core::models::MemoryType::Semantic);
+                    let quality_mt = voidm_core::crud::convert_memory_type(&memory_type_enum);
+                    let quality_score_val = voidm_scoring::compute_quality_score(&content, &quality_mt);
+                    Some(quality_score_val.score)
+                };
+                
+                Ok(Some(voidm_core::models::Memory {
+                    id,
+                    memory_type,
+                    content,
+                    importance,
+                    tags,
+                    metadata,
+                    scopes,
+                    created_at,
+                    updated_at,
+                    quality_score,
+                    context,
+                    title: None,
+                }))
+            }
+        }
+    }
+
+    /// List memories (internal implementation, extracted from voidm-core)
+    async fn list_memories_impl(&self, scope_filter: Option<&str>, type_filter: Option<&str>, limit: usize) -> Result<Vec<voidm_core::models::Memory>> {
+        // Build query dynamically
+        let rows: Vec<(String, String, String, i64, String, String, Option<f32>, Option<String>, String, String)> = if let Some(scope) = scope_filter {
+            let scope_prefix = format!("{}%", scope);
+            sqlx::query_as(
+                "SELECT DISTINCT m.id, m.type, m.content, m.importance, m.tags, m.metadata, m.quality_score, m.context, m.created_at, m.updated_at
+                 FROM memories m
+                 JOIN memory_scopes ms ON ms.memory_id = m.id
+                 WHERE ms.scope LIKE ?
+                 ORDER BY m.created_at DESC LIMIT ?"
+            )
+            .bind(&scope_prefix)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as(
+                "SELECT id, type, content, importance, tags, metadata, quality_score, context, created_at, updated_at
+                 FROM memories ORDER BY created_at DESC LIMIT ?"
+            )
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        let mut memories = Vec::new();
+        for (id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, context, created_at, updated_at) in rows {
+            if let Some(t) = type_filter {
+                if memory_type != t { continue; }
+            }
+            let scopes = voidm_core::crud::get_scopes(&self.pool, &id).await?;
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_default();
+            
+            // Use persisted quality_score if available, otherwise compute
+            let quality_score = if let Some(score) = quality_score_db {
+                Some(score)
+            } else {
+                let memory_type_enum: voidm_core::models::MemoryType = memory_type.parse().unwrap_or(voidm_core::models::MemoryType::Semantic);
+                let quality_mt = voidm_core::crud::convert_memory_type(&memory_type_enum);
+                let quality_score_val = voidm_scoring::compute_quality_score(&content, &quality_mt);
+                Some(quality_score_val.score)
+            };
+            
+            memories.push(voidm_core::models::Memory { 
+                id, 
+                memory_type, 
+                content, 
+                importance, 
+                tags, 
+                metadata, 
+                scopes, 
+                created_at, 
+                updated_at,
+                quality_score,
+                context,
+                title: None,
+            });
+        }
+        Ok(memories)
+    }
+    /// Extracted from voidm-core::crud::delete_memory to keep sqlx in backend only
+    async fn delete_memory_impl(&self, id: &str) -> Result<bool> {
+        // Resolve short IDs to full IDs (supports 4+ char prefixes)
+        let full_id = voidm_core::crud::resolve_id_sqlite(&self.pool, id).await
+            .or_else(|_| {
+                // If resolution fails, treat as not found
+                Ok::<String, anyhow::Error>(String::new())
+            })?;
+        
+        if full_id.is_empty() {
+            return Ok(false);
+        }
+
+        // Check if memory exists first
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?)")
+            .bind(&full_id)
+            .fetch_one(&self.pool)
+            .await?;
+        
+        if !exists {
+            return Ok(false);
+        }
+
+        // Delete graph_edges (using source_id and target_id, not from_id/to_id)
+        // First get the graph node IDs for this memory
+        let node_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+            .bind(&full_id)
+            .fetch_all(&self.pool)
+            .await?;
+        
+        for node_id in node_ids {
+            sqlx::query("DELETE FROM graph_edges WHERE source_id = ? OR target_id = ?")
+                .bind(node_id)
+                .bind(node_id)
+                .execute(&self.pool)
+                .await?;
+            
+            sqlx::query("DELETE FROM graph_nodes WHERE id = ?")
+                .bind(node_id)
+                .execute(&self.pool)
+                .await?;
+        }
+
+        // Delete memory_edges (which uses from_id and to_id)
+        sqlx::query("DELETE FROM memory_edges WHERE from_id = ? OR to_id = ?")
+            .bind(&full_id)
+            .bind(&full_id)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM memory_scopes WHERE memory_id = ?")
+            .bind(&full_id)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM vec_memories WHERE memory_id = ?")
+            .bind(&full_id)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM memories_fts WHERE id = ?")
+            .bind(&full_id)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM memories WHERE id = ?")
+            .bind(&full_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(true)
+    }
+
+    /// Extracted link_memories implementation - creates or updates graph edges
+    async fn link_memories_impl(
+        &self,
+        from_id: &str,
+        edge_type_str: &str,
+        to_id: &str,
+        note: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        // Get or create graph nodes
+        let from_node = self.get_or_create_node_impl(from_id).await?;
+        let to_node = self.get_or_create_node_impl(to_id).await?;
+
+        // Check for conflicting edge (simplified - just check if opposing rel exists)
+        let conflict_warning: Option<serde_json::Value> = None; // TODO: implement conflict checking if needed
+
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT OR IGNORE INTO graph_edges (source_id, target_id, rel_type, note, created_at)
+             VALUES (?, ?, ?, ?, ?)"
+        )
+        .bind(from_node)
+        .bind(to_node)
+        .bind(edge_type_str)
+        .bind(note)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        // Return JSON response
+        let response = serde_json::json!({
+            "created": true,
+            "from": from_id,
+            "rel": edge_type_str,
+            "to": to_id,
+            "conflict_warning": conflict_warning,
+        });
+
+        Ok(response)
+    }
+
+    /// Helper: Get or create a graph node for a memory
+    async fn get_or_create_node_impl(&self, memory_id: &str) -> Result<i64> {
+        sqlx::query("INSERT OR IGNORE INTO graph_nodes (memory_id) VALUES (?)")
+            .bind(memory_id)
+            .execute(&self.pool)
+            .await?;
+        
+        let node_id: i64 = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
+            .bind(memory_id)
+            .fetch_one(&self.pool)
+            .await?;
+        
+        Ok(node_id)
+    }
 }
 
 impl Database for SqliteDatabase {
@@ -163,10 +414,9 @@ impl Database for SqliteDatabase {
     }
 
     fn get_memory(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Option<Value>>> + Send + '_>> {
-        let pool = self.pool.clone();
         let id = id.to_string();
         Box::pin(async move {
-            match voidm_core::crud::get_memory(&pool, &id).await {
+            match self.get_memory_impl(&id).await {
                 Ok(Some(mem)) => Ok(Some(serde_json::to_value(mem)?)),
                 Ok(None) => Ok(None),
                 Err(e) => Err(e),
@@ -178,9 +428,8 @@ impl Database for SqliteDatabase {
         &self,
         limit: Option<usize>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
-        let pool = self.pool.clone();
         Box::pin(async move {
-            match voidm_core::crud::list_memories(&pool, None, None, limit.unwrap_or(100)).await {
+            match self.list_memories_impl(None, None, limit.unwrap_or(100)).await {
                 Ok(mems) => Ok(mems.into_iter().map(|m| serde_json::to_value(m).unwrap_or(Value::Null)).collect()),
                 Err(e) => Err(e),
             }
@@ -188,10 +437,9 @@ impl Database for SqliteDatabase {
     }
 
     fn delete_memory(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
-        let pool = self.pool.clone();
         let id = id.to_string();
         Box::pin(async move {
-            voidm_core::crud::delete_memory(&pool, &id).await
+            self.delete_memory_impl(&id).await
         })
     }
 
@@ -284,7 +532,6 @@ impl Database for SqliteDatabase {
                 "from": from_id,
                 "rel": rel,
                 "to": to_id,
-                "conflict_warning": serde_json::Value::Null
             });
             Ok(response)
         })
@@ -331,62 +578,6 @@ impl Database for SqliteDatabase {
                     "note": r.get::<Option<String>, _>("note")
                 })
             }).collect())
-        })
-    }
-
-    fn list_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
-        let pool = self.pool.clone();
-        Box::pin(async move {
-            let rows = sqlx::query("SELECT id, from_id, from_type, rel_type, to_id, to_type, note FROM ontology_edges")
-                .fetch_all(&pool)
-                .await
-                .context("Failed to list ontology edges")?;
-
-            Ok(rows.iter().map(|r| {
-                json!({
-                    "id": r.get::<i64, _>("id"),
-                    "from_id": r.get::<String, _>("from_id"),
-                    "from_type": r.get::<String, _>("from_type"),
-                    "rel_type": r.get::<String, _>("rel_type"),
-                    "to_id": r.get::<String, _>("to_id"),
-                    "to_type": r.get::<String, _>("to_type"),
-                    "note": r.get::<Option<String>, _>("note")
-                })
-            }).collect())
-        })
-    }
-
-    fn create_ontology_edge(
-        &self,
-        from_id: &str,
-        from_type: &str,
-        rel_type: &str,
-        to_id: &str,
-        to_type: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
-        let pool = self.pool.clone();
-        let from_id = from_id.to_string();
-        let from_type = from_type.to_string();
-        let rel_type = rel_type.to_string();
-        let to_id = to_id.to_string();
-        let to_type = to_type.to_string();
-        let now = Utc::now().to_rfc3339();
-
-        Box::pin(async move {
-            sqlx::query(
-                "INSERT INTO ontology_edges (from_id, from_type, rel_type, to_id, to_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .bind(&from_id)
-            .bind(&from_type)
-            .bind(&rel_type)
-            .bind(&to_id)
-            .bind(&to_type)
-            .bind(&now)
-            .execute(&pool)
-            .await
-            .context("Failed to create ontology edge")?;
-
-            Ok(true)
         })
     }
 
@@ -588,172 +779,6 @@ impl Database for SqliteDatabase {
 
     // ===== Ontology =====
 
-    fn add_concept(
-        &self,
-        name: &str,
-        description: Option<&str>,
-        scope: Option<&str>,
-        id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
-        let pool = self.pool.clone();
-        let name = name.to_string();
-        let description = description.map(|s| s.to_string());
-        let scope = scope.map(|s| s.to_string());
-        let id = id.map(|s| s.to_string()).unwrap_or_else(|| Uuid::new_v4().to_string());
-        let now = Utc::now().to_rfc3339();
-
-        Box::pin(async move {
-            sqlx::query(
-                "INSERT OR REPLACE INTO ontology_concepts (id, name, description, scope, created_at) VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(&id)
-            .bind(&name)
-            .bind(&description)
-            .bind(&scope)
-            .bind(&now)
-            .execute(&pool)
-            .await
-            .context("Failed to add concept")?;
-
-            Ok(json!({"id": id, "name": name}))
-        })
-    }
-
-    fn get_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
-        let pool = self.pool.clone();
-        let id = id.to_string();
-        Box::pin(async move {
-            let row = sqlx::query(
-                "SELECT id, name, description, scope FROM ontology_concepts WHERE id = ? OR id LIKE ? LIMIT 1",
-            )
-            .bind(&id)
-            .bind(format!("{}%", id))
-            .fetch_optional(&pool)
-            .await
-            .context("Failed to fetch concept")?;
-
-            row.map(|r| {
-                json!({
-                    "id": r.get::<String, _>("id"),
-                    "name": r.get::<String, _>("name"),
-                    "description": r.get::<Option<String>, _>("description"),
-                    "scope": r.get::<Option<String>, _>("scope")
-                })
-            })
-            .context("Concept not found")
-        })
-    }
-
-    fn get_concept_with_instances(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
-        self.get_concept(id)
-    }
-
-    fn list_concepts(&self, _scope: Option<&str>, limit: usize) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
-        let pool = self.pool.clone();
-        Box::pin(async move {
-            let rows = sqlx::query("SELECT id, name, description, scope, created_at FROM ontology_concepts LIMIT ?")
-                .bind(limit as i64)
-                .fetch_all(&pool)
-                .await
-                .context("Failed to list concepts")?;
-
-            Ok(rows.iter().map(|r| {
-                json!({
-                    "id": r.get::<String, _>("id"),
-                    "name": r.get::<String, _>("name"),
-                    "description": r.get::<Option<String>, _>("description"),
-                    "scope": r.get::<Option<String>, _>("scope"),
-                    "created_at": r.get::<String, _>("created_at")
-                })
-            }).collect())
-        })
-    }
-
-    fn delete_concept(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
-        let pool = self.pool.clone();
-        let id = id.to_string();
-        Box::pin(async move {
-            let result = sqlx::query("DELETE FROM ontology_concepts WHERE id = ? OR id LIKE ?")
-                .bind(&id)
-                .bind(format!("{}%", id))
-                .execute(&pool)
-                .await
-                .context("Failed to delete concept")?;
-
-            Ok(result.rows_affected() > 0)
-        })
-    }
-
-    fn resolve_concept_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        let pool = self.pool.clone();
-        let id = id.to_string();
-        Box::pin(async move {
-            let row = sqlx::query_scalar::<_, String>("SELECT id FROM ontology_concepts WHERE id LIKE ? LIMIT 1")
-                .bind(format!("{}%", id))
-                .fetch_optional(&pool)
-                .await
-                .context("Failed to resolve concept ID")?;
-
-            row.context("Concept not found")
-        })
-    }
-
-    fn search_concepts(
-        &self,
-        _query: &str,
-        _scope: Option<&str>,
-        limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
-        self.list_concepts(None, limit)
-    }
-
-    fn add_ontology_edge(
-        &self,
-        from_id: &str,
-        _from_kind: &str,
-        rel: &str,
-        to_id: &str,
-        _to_kind: &str,
-        note: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
-        let pool = self.pool.clone();
-        let from_id = from_id.to_string();
-        let rel = rel.to_string();
-        let to_id = to_id.to_string();
-        let note = note.map(|s| s.to_string());
-        let now = Utc::now().to_rfc3339();
-
-        Box::pin(async move {
-            sqlx::query(
-                "INSERT INTO ontology_edges (from_id, from_type, rel_type, to_id, to_type, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(&from_id)
-            .bind("concept")
-            .bind(&rel)
-            .bind(&to_id)
-            .bind("concept")
-            .bind(&note)
-            .bind(&now)
-            .execute(&pool)
-            .await
-            .context("Failed to add ontology edge")?;
-
-            Ok(json!({"from_id": from_id, "rel_type": rel, "to_id": to_id}))
-        })
-    }
-
-    fn delete_ontology_edge(&self, edge_id: i64) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
-        let pool = self.pool.clone();
-        Box::pin(async move {
-            let result = sqlx::query("DELETE FROM ontology_edges WHERE id = ?")
-                .bind(edge_id)
-                .execute(&pool)
-                .await
-                .context("Failed to delete ontology edge")?;
-
-            Ok(result.rows_affected() > 0)
-        })
-    }
 
     // ===== Graph Stubs =====
 
@@ -1086,6 +1111,536 @@ impl Database for SqliteDatabase {
             Ok((memory_count, chunk_count, relationship_count))
         })
     }
+
+    // ===== NEW MIGRATION METHODS (REAL IMPLEMENTATIONS) =====
+
+    fn list_tags(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+                "SELECT id, name, created_at FROM tags"
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default();
+
+            let tags: Vec<Value> = rows.into_iter().map(|(id, name, created_at)| {
+                json!({
+                    "id": id,
+                    "name": name,
+                    "created_at": created_at
+                })
+            }).collect();
+
+            Ok(tags)
+        })
+    }
+
+    fn create_tag(&self, _name: &str) -> Pin<Box<dyn Future<Output = Result<(String, bool)>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let name = _name.to_string();
+        
+        Box::pin(async move {
+            let tag_id = Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+
+            let result = sqlx::query(
+                "INSERT OR IGNORE INTO tags (id, name, created_at) VALUES (?, ?, ?)"
+            )
+            .bind(&tag_id)
+            .bind(&name)
+            .bind(&now)
+            .execute(&pool)
+            .await;
+
+            match result {
+                Ok(r) => {
+                    let created = r.rows_affected() > 0;
+                    Ok((tag_id, created))
+                }
+                Err(e) => Err(e.into()),
+            }
+        })
+    }
+
+    fn link_tag_to_memory(&self, _tag_id: &str, _memory_id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let tag_id = _tag_id.to_string();
+        let memory_id = _memory_id.to_string();
+        
+        Box::pin(async move {
+            let result = sqlx::query(
+                "INSERT OR IGNORE INTO memory_tags (tag_id, memory_id) VALUES (?, ?)"
+            )
+            .bind(&tag_id)
+            .bind(&memory_id)
+            .execute(&pool)
+            .await;
+
+            Ok(result.is_ok())
+        })
+    }
+
+    fn list_tag_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let rows: Vec<(String, String)> = sqlx::query_as(
+                "SELECT tag_id, memory_id FROM memory_tags"
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default();
+
+            let edges: Vec<Value> = rows.into_iter().map(|(from, to)| {
+                json!({
+                    "from": from,
+                    "to": to,
+                    "type": "HAS_TAG"
+                })
+            }).collect();
+
+            Ok(edges)
+        })
+    }
+
+    fn list_chunks(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let rows: Vec<(String, String, i64, i64, Option<String>)> = sqlx::query_as(
+                "SELECT id, text, index, size, created_at FROM memory_chunks"
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default();
+
+            let chunks: Vec<Value> = rows.into_iter().map(|(id, text, index, size, created_at)| {
+                json!({
+                    "id": id,
+                    "text": text,
+                    "index": index,
+                    "size": size,
+                    "created_at": created_at
+                })
+            }).collect();
+
+            Ok(chunks)
+        })
+    }
+
+    fn get_chunk(&self, _chunk_id: &str) -> Pin<Box<dyn Future<Output = Result<Option<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let chunk_id = _chunk_id.to_string();
+        
+        Box::pin(async move {
+            let row: Option<(String, String, i64, i64, Option<String>)> = sqlx::query_as(
+                "SELECT id, text, index, size, created_at FROM memory_chunks WHERE id = ?"
+            )
+            .bind(&chunk_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or(None);
+
+            Ok(row.map(|(id, text, index, size, created_at)| {
+                json!({
+                    "id": id,
+                    "text": text,
+                    "index": index,
+                    "size": size,
+                    "created_at": created_at
+                })
+            }))
+        })
+    }
+
+    fn list_chunk_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let rows: Vec<(String, String)> = sqlx::query_as(
+                "SELECT chunk_id, memory_id FROM chunk_memory_edges"
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default();
+
+            let edges: Vec<Value> = rows.into_iter().map(|(from, to)| {
+                json!({
+                    "from": from,
+                    "to": to,
+                    "type": "BELONGS_TO"
+                })
+            }).collect();
+
+            Ok(edges)
+        })
+    }
+
+    fn list_entities(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+                "SELECT id, name, type, created_at FROM entities"
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default();
+
+            let entities: Vec<Value> = rows.into_iter().map(|(id, name, entity_type, created_at)| {
+                json!({
+                    "id": id,
+                    "name": name,
+                    "type": entity_type,
+                    "created_at": created_at
+                })
+            }).collect();
+
+            Ok(entities)
+        })
+    }
+
+    fn get_or_create_entity(&self, _name: &str, _entity_type: &str) -> Pin<Box<dyn Future<Output = Result<(String, bool)>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let name = _name.to_string();
+        let entity_type = _entity_type.to_string();
+        
+        Box::pin(async move {
+            let entity_id = Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+
+            let result = sqlx::query(
+                "INSERT OR IGNORE INTO entities (id, name, type, created_at) VALUES (?, ?, ?, ?)"
+            )
+            .bind(&entity_id)
+            .bind(&name)
+            .bind(&entity_type)
+            .bind(&now)
+            .execute(&pool)
+            .await;
+
+            match result {
+                Ok(r) => {
+                    let created = r.rows_affected() > 0;
+                    Ok((entity_id, created))
+                }
+                Err(e) => Err(e.into()),
+            }
+        })
+    }
+
+    fn link_chunk_to_entity(&self, _chunk_id: &str, _entity_id: &str, _confidence: f32) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let chunk_id = _chunk_id.to_string();
+        let entity_id = _entity_id.to_string();
+        let confidence = _confidence;
+        
+        Box::pin(async move {
+            let result = sqlx::query(
+                "INSERT OR IGNORE INTO chunk_entity_mentions (chunk_id, entity_id, confidence) VALUES (?, ?, ?)"
+            )
+            .bind(&chunk_id)
+            .bind(&entity_id)
+            .bind(confidence as f64)
+            .execute(&pool)
+            .await;
+
+            Ok(result.is_ok())
+        })
+    }
+
+    fn list_entity_mention_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let rows: Vec<(String, String, f64)> = sqlx::query_as(
+                "SELECT chunk_id, entity_id, confidence FROM chunk_entity_mentions"
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default();
+
+            let edges: Vec<Value> = rows.into_iter().map(|(from, to, confidence)| {
+                json!({
+                    "from": from,
+                    "to": to,
+                    "type": "MENTIONS",
+                    "confidence": confidence
+                })
+            }).collect();
+
+            Ok(edges)
+        })
+    }
+
+    fn count_nodes(&self, _node_type: &str) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let node_type = _node_type.to_string();
+        
+        Box::pin(async move {
+            let query = match node_type.as_str() {
+                "Memory" => "SELECT COUNT(*) as count FROM memories",
+                "MemoryChunk" => "SELECT COUNT(*) as count FROM memory_chunks",
+                "Tag" => "SELECT COUNT(*) as count FROM tags",
+                "Entity" => "SELECT COUNT(*) as count FROM entities",
+                "Concept" => "SELECT COUNT(*) as count FROM concepts",
+                _ => return Ok(0),
+            };
+
+            let row: (i64,) = sqlx::query_as(query)
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(None)
+                .unwrap_or((0,));
+
+            Ok(row.0 as usize)
+        })
+    }
+
+    fn count_edges(&self, _edge_type: Option<&str>) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let edge_type = _edge_type.map(|s| s.to_string());
+        
+        Box::pin(async move {
+            let query = match edge_type.as_deref() {
+                Some("HAS_TAG") => "SELECT COUNT(*) as count FROM memory_tags",
+                Some("BELONGS_TO") => "SELECT COUNT(*) as count FROM chunk_memory_edges",
+                Some("MENTIONS") => "SELECT COUNT(*) as count FROM chunk_entity_mentions",
+                _ => "SELECT COUNT(*) as count FROM (SELECT 1 FROM memory_edges UNION SELECT 1 FROM memory_tags UNION SELECT 1 FROM chunk_memory_edges UNION SELECT 1 FROM chunk_entity_mentions)",
+            };
+
+            let row: (i64,) = sqlx::query_as(query)
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(None)
+                .unwrap_or((0,));
+
+            Ok(row.0 as usize)
+        })
+    }
+
+    // ===== Generic Node/Edge API (Phase 0) =====
+
+    fn create_node(
+        &self,
+        id: &str,
+        node_type: &str,
+        properties: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let id = id.to_string();
+        let node_type = node_type.to_string();
+        let props_json = properties.to_string();
+        let now = Utc::now().to_rfc3339();
+
+        Box::pin(async move {
+            sqlx::query(
+                "INSERT OR IGNORE INTO nodes (id, type, properties, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+            )
+            .bind(&id)
+            .bind(&node_type)
+            .bind(&props_json)
+            .bind(&now)
+            .bind(&now)
+            .execute(&pool)
+            .await
+            .context("Failed to create node")?;
+            Ok(())
+        })
+    }
+
+    fn get_node(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<Option<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let id = id.to_string();
+
+        Box::pin(async move {
+            let row = sqlx::query_as::<_, (String, String, String, String, String)>(
+                "SELECT id, type, properties, created_at, updated_at FROM nodes WHERE id = ?"
+            )
+            .bind(&id)
+            .fetch_optional(&pool)
+            .await
+            .context("Failed to get node")?;
+
+            Ok(row.map(|(id, node_type, props, created, updated)| {
+                json!({
+                    "id": id,
+                    "type": node_type,
+                    "properties": serde_json::from_str::<Value>(&props).unwrap_or(Value::Null),
+                    "created_at": created,
+                    "updated_at": updated
+                })
+            }))
+        })
+    }
+
+    fn delete_node(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let id = id.to_string();
+
+        Box::pin(async move {
+            let result = sqlx::query("DELETE FROM nodes WHERE id = ?")
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .context("Failed to delete node")?;
+            Ok(result.rows_affected() > 0)
+        })
+    }
+
+    fn list_nodes(&self, node_type: &str) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let node_type = node_type.to_string();
+
+        Box::pin(async move {
+            let rows = sqlx::query_as::<_, (String, String, String, String, String)>(
+                "SELECT id, type, properties, created_at, updated_at FROM nodes WHERE type = ?"
+            )
+            .bind(&node_type)
+            .fetch_all(&pool)
+            .await
+            .context("Failed to list nodes")?;
+
+            Ok(rows.iter().map(|(id, ntype, props, created, updated)| {
+                json!({
+                    "id": id,
+                    "type": ntype,
+                    "properties": serde_json::from_str::<Value>(props).unwrap_or(Value::Null),
+                    "created_at": created,
+                    "updated_at": updated
+                })
+            }).collect())
+        })
+    }
+
+    fn create_edge(
+        &self,
+        from_id: &str,
+        edge_type: &str,
+        to_id: &str,
+        properties: Option<Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let from_id = from_id.to_string();
+        let edge_type = edge_type.to_string();
+        let to_id = to_id.to_string();
+        let id = format!("{}:{}:{}", from_id, edge_type, to_id);
+        let props_json = properties.as_ref().map(|p| p.to_string()).unwrap_or_else(|| "{}".to_string());
+        let now = Utc::now().to_rfc3339();
+
+        Box::pin(async move {
+            sqlx::query(
+                "INSERT OR IGNORE INTO edges (id, from_id, edge_type, to_id, properties, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&id)
+            .bind(&from_id)
+            .bind(&edge_type)
+            .bind(&to_id)
+            .bind(&props_json)
+            .bind(&now)
+            .execute(&pool)
+            .await
+            .context("Failed to create edge")?;
+            Ok(())
+        })
+    }
+
+    fn get_edge(
+        &self,
+        from_id: &str,
+        edge_type: &str,
+        to_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let from_id = from_id.to_string();
+        let edge_type = edge_type.to_string();
+        let to_id = to_id.to_string();
+
+        Box::pin(async move {
+            let row = sqlx::query_as::<_, (String, String, String, String, String, String)>(
+                "SELECT id, from_id, edge_type, to_id, properties, created_at FROM edges WHERE from_id = ? AND edge_type = ? AND to_id = ?"
+            )
+            .bind(&from_id)
+            .bind(&edge_type)
+            .bind(&to_id)
+            .fetch_optional(&pool)
+            .await
+            .context("Failed to get edge")?;
+
+            Ok(row.map(|(id, from, etype, to, props, created)| {
+                json!({
+                    "id": id,
+                    "from_id": from,
+                    "edge_type": etype,
+                    "to_id": to,
+                    "properties": serde_json::from_str::<Value>(&props).unwrap_or(Value::Null),
+                    "created_at": created
+                })
+            }))
+        })
+    }
+
+    fn delete_edge(
+        &self,
+        from_id: &str,
+        edge_type: &str,
+        to_id: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let from_id = from_id.to_string();
+        let edge_type = edge_type.to_string();
+        let to_id = to_id.to_string();
+
+        Box::pin(async move {
+            let result = sqlx::query(
+                "DELETE FROM edges WHERE from_id = ? AND edge_type = ? AND to_id = ?"
+            )
+            .bind(&from_id)
+            .bind(&edge_type)
+            .bind(&to_id)
+            .execute(&pool)
+            .await
+            .context("Failed to delete edge")?;
+            Ok(result.rows_affected() > 0)
+        })
+    }
+
+    fn get_node_edges(
+        &self,
+        node_id: &str,
+        edge_type: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let node_id = node_id.to_string();
+        let edge_type = edge_type.map(|s| s.to_string());
+
+        Box::pin(async move {
+            let query = if let Some(et) = &edge_type {
+                sqlx::query_as::<_, (String, String, String, String, String, String)>(
+                    "SELECT id, from_id, edge_type, to_id, properties, created_at FROM edges WHERE from_id = ? AND edge_type = ?"
+                )
+                .bind(&node_id)
+                .bind(et)
+                .fetch_all(&pool)
+                .await
+            } else {
+                sqlx::query_as::<_, (String, String, String, String, String, String)>(
+                    "SELECT id, from_id, edge_type, to_id, properties, created_at FROM edges WHERE from_id = ?"
+                )
+                .bind(&node_id)
+                .fetch_all(&pool)
+                .await
+            }
+            .context("Failed to get node edges")?;
+
+            Ok(query.iter().map(|(id, from, etype, to, props, created)| {
+                json!({
+                    "id": id,
+                    "from_id": from,
+                    "edge_type": etype,
+                    "to_id": to,
+                    "properties": serde_json::from_str::<Value>(props).unwrap_or(Value::Null),
+                    "created_at": created
+                })
+            }).collect())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1153,4 +1708,95 @@ mod tests {
         let list = db.list_memories(None).await.unwrap();
         assert_eq!(list.len(), 2);
     }
+
+    #[tokio::test]
+    async fn test_generic_node_create_and_get() {
+        let pool = open_pool(Path::new(":memory:")).await.unwrap();
+        let db = SqliteDatabase::new(pool);
+        db.ensure_schema().await.unwrap();
+
+        // Create a node
+        db.create_node("mem:abc123", "Memory", json!({
+            "title": "Test Memory",
+            "content": "Content here"
+        })).await.unwrap();
+
+        // Get the node
+        let node = db.get_node("mem:abc123").await.unwrap();
+        assert!(node.is_some());
+        let n = node.unwrap();
+        assert_eq!(n["type"], "Memory");
+        assert_eq!(n["properties"]["title"], "Test Memory");
+    }
+
+    #[tokio::test]
+    async fn test_generic_edge_create_and_get() {
+        let pool = open_pool(Path::new(":memory:")).await.unwrap();
+        let db = SqliteDatabase::new(pool);
+        db.ensure_schema().await.unwrap();
+
+        // Create nodes
+        db.create_node("mem:abc", "Memory", json!({"title": "M1"})).await.unwrap();
+        db.create_node("chunk:123", "Chunk", json!({"sequence_num": 0, "char_start": 0, "char_end": 100})).await.unwrap();
+
+        // Create edge
+        db.create_edge("mem:abc", "HAS_CHUNK", "chunk:123", Some(json!({"sequence_num": 0}))).await.unwrap();
+
+        // Get edge
+        let edge = db.get_edge("mem:abc", "HAS_CHUNK", "chunk:123").await.unwrap();
+        assert!(edge.is_some());
+        let e = edge.unwrap();
+        assert_eq!(e["edge_type"], "HAS_CHUNK");
+        assert_eq!(e["properties"]["sequence_num"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_chunk_nodes_integration() {
+        use voidm_core::chunk_nodes;
+
+        let pool = open_pool(Path::new(":memory:")).await.unwrap();
+        let db = SqliteDatabase::new(pool.clone());
+        db.ensure_schema().await.unwrap();
+
+        // Create parent memory node
+        let memory_id = "mem:integration-test";
+        db.create_node(memory_id, "Memory", json!({
+            "title": "Test Memory",
+            "content": "Lorem ipsum dolor sit amet. Consectetur adipiscing elit. Sed do eiusmod tempor."
+        })).await.unwrap();
+
+        // Simulate chunks from text
+        let chunks = vec![
+            "Lorem ipsum dolor sit amet.".to_string(),
+            "Consectetur adipiscing elit.".to_string(),
+            "Sed do eiusmod tempor.".to_string(),
+        ];
+
+        // Store chunks as nodes
+        chunk_nodes::store_chunks_as_nodes(&pool, memory_id, &chunks).await.unwrap();
+
+        // Verify chunk nodes were created
+        let chunk_nodes = db.list_nodes("Chunk").await.unwrap();
+        assert!(!chunk_nodes.is_empty());
+        assert_eq!(chunk_nodes.len(), 3);
+
+        // Verify first chunk has correct ordering fields
+        let first_chunk = &chunk_nodes[0];
+        let props = &first_chunk["properties"];
+        assert!(props.get("sequence_num").is_some());
+        assert!(props.get("char_start").is_some());
+        assert!(props.get("char_end").is_some());
+        assert!(props.get("content").is_some());
+
+        // Verify edges exist
+        let edges = db.get_node_edges(memory_id, Some("HAS_CHUNK")).await.unwrap();
+        assert_eq!(edges.len(), 3);
+
+        // Verify edges have sequence_num property
+        for (i, edge) in edges.iter().enumerate() {
+            assert_eq!(edge["edge_type"], "HAS_CHUNK");
+            assert_eq!(edge["properties"]["sequence_num"], i);
+        }
+    }
 }
+

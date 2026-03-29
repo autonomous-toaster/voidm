@@ -11,7 +11,6 @@
 
 use anyhow::Result;
 use clap::Args;
-use sqlx::SqlitePool;
 use voidm_core::Config;
 use voidm_db_trait::Database;
 use tracing::info;
@@ -112,7 +111,6 @@ pub struct SearchArgs {
 pub async fn run(
     args: SearchArgs,
     db: &Arc<dyn Database>,
-    _pool: &SqlitePool,
     _config: &Config,
     _json_output: bool,
 ) -> Result<()> {

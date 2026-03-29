@@ -1,8 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use clap::Args;
-use sqlx::SqlitePool;
-use voidm_core::{crud, crud_trait, models::{EdgeType, LinkResponse}};
+use voidm_core::{crud_trait, models::{EdgeType, LinkResponse}};
 use voidm_db_trait::Database;
 
 #[derive(Args)]
@@ -18,10 +17,10 @@ pub struct LinkArgs {
     pub note: Option<String>,
 }
 
-pub async fn run(args: LinkArgs, db: &Arc<dyn Database>, _pool: &SqlitePool, json: bool) -> Result<()> {
+pub async fn run(args: LinkArgs, db: &Arc<dyn Database>, json: bool) -> Result<()> {
     let edge_type: EdgeType = args.rel.parse()?;
-    let from = crud::resolve_id(db.as_ref(), &args.from).await?;
-    let to   = crud::resolve_id(db.as_ref(), &args.to).await?;
+    let from = crud_trait::resolve_memory_id(db, &args.from).await?;
+    let to   = crud_trait::resolve_memory_id(db, &args.to).await?;
     let resp_json = crud_trait::link_memories(db, &from, edge_type.as_str(), &to, args.note.as_deref()).await?;
     let resp: LinkResponse = serde_json::from_value(resp_json)?;
 
@@ -29,9 +28,6 @@ pub async fn run(args: LinkArgs, db: &Arc<dyn Database>, _pool: &SqlitePool, jso
         println!("{}", serde_json::to_string_pretty(&resp)?);
     } else {
         println!("Linked: {} {} {}", resp.from, resp.rel, resp.to);
-        if let Some(ref w) = resp.conflict_warning {
-            eprintln!("Warning: {}", w.message);
-        }
     }
     Ok(())
 }

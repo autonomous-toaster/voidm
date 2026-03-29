@@ -4763,7 +4763,6 @@ dependencies = [
  "voidm-neo4j",
  "voidm-ner",
  "voidm-nli",
- "voidm-postgres",
  "voidm-redactor",
  "voidm-reranker",
  "voidm-sqlite",
@@ -4844,24 +4843,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "voidm-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "rmcp",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tracing",
- "uuid",
- "voidm-core",
- "voidm-db-trait",
- "voidm-sqlite",
-]
-
-[[package]]
 name = "voidm-models"
 version = "0.1.0"
 dependencies = [
@@ -4923,23 +4904,6 @@ dependencies = [
  "tracing",
  "voidm-embeddings",
  "voidm-models",
-]
-
-[[package]]
-name = "voidm-postgres"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "serde_json",
- "sqlx",
- "strsim 0.11.1",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "voidm-core",
- "voidm-db-trait",
 ]
 
 [[package]]
@@ -5011,6 +4975,7 @@ dependencies = [
  "uuid",
  "voidm-core",
  "voidm-db-trait",
+ "voidm-scoring",
 ]
 
 [[package]]

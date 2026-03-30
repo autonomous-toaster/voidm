@@ -1786,6 +1786,8 @@ impl Database for SqliteDatabase {
     }
 }
 
+pub mod graph_query_ops_impl;
+
 #[cfg(test)]
 mod tests {
     use super::*;

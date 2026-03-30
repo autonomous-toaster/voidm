@@ -4,14 +4,14 @@ pub mod parser;
 pub mod translator;
 
 use anyhow::{bail, Result};
-use sqlx::SqlitePool;
+use voidm_db::graph_ops::GraphQueryOps;
 use std::collections::HashMap;
 
 pub use ast::CypherAst;
 
 /// Execute a read-only Cypher query. Rejects write clauses before parsing.
 pub async fn execute_read(
-    pool: &SqlitePool,
+    ops: &dyn GraphQueryOps,
     query: &str,
 ) -> Result<Vec<HashMap<String, serde_json::Value>>> {
     // Step 1: Strip comments
@@ -39,8 +39,8 @@ pub async fn execute_read(
         anyhow::anyhow!("Cypher translation error: {}", e)
     })?;
 
-    // Step 5: Execute
-    let rows = run_query(pool, &sql, &params).await?;
+    // Step 5: Execute using trait
+    let rows = ops.execute_cypher(&sql, &params).await?;
     Ok(rows)
 }
 
@@ -64,53 +64,4 @@ fn reject_write_clauses(query: &str) -> Result<()> {
         }
     }
     Ok(())
-}
-
-async fn run_query(
-    pool: &SqlitePool,
-    sql: &str,
-    params: &[serde_json::Value],
-) -> Result<Vec<HashMap<String, serde_json::Value>>> {
-    use sqlx::Row;
-    use sqlx::Column;
-
-    // Build query with dynamic binding
-    let mut q = sqlx::query(sql);
-    for param in params {
-        match param {
-            serde_json::Value::String(s) => q = q.bind(s.clone()),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    q = q.bind(i);
-                } else if let Some(f) = n.as_f64() {
-                    q = q.bind(f);
-                }
-            }
-            serde_json::Value::Null => q = q.bind(Option::<String>::None),
-            other => q = q.bind(other.to_string()),
-        }
-    }
-
-    let rows = q.fetch_all(pool).await?;
-    let mut results = Vec::new();
-
-    for row in rows {
-        let mut map = HashMap::new();
-        for (i, col) in row.columns().iter().enumerate() {
-            let val: serde_json::Value = match row.try_get::<String, _>(i) {
-                Ok(s) => serde_json::Value::String(s),
-                Err(_) => match row.try_get::<i64, _>(i) {
-                    Ok(n) => serde_json::Value::Number(n.into()),
-                    Err(_) => match row.try_get::<f64, _>(i) {
-                        Ok(f) => serde_json::json!(f),
-                        Err(_) => serde_json::Value::Null,
-                    }
-                }
-            };
-            map.insert(col.name().to_string(), val);
-        }
-        results.push(map);
-    }
-
-    Ok(results)
 }

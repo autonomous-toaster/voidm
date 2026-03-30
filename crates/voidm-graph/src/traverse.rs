@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use voidm_db::graph_ops::GraphQueryOps;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,7 +27,7 @@ pub struct GraphStats {
 
 /// Get N-hop neighbors of a memory. RELATES_TO is always queried bidirectionally.
 pub async fn neighbors(
-    pool: &SqlitePool,
+    ops: &dyn GraphQueryOps,
     memory_id: &str,
     depth: u8,
     rel_filter: Option<&str>,
@@ -43,12 +43,7 @@ pub async fn neighbors(
             continue;
         }
 
-        let current_node: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM graph_nodes WHERE memory_id = ?"
-        )
-        .bind(&current_id)
-        .fetch_optional(pool)
-        .await?;
+        let current_node: Option<i64> = ops.get_node_id(&current_id).await?;
 
         let node_id = match current_node {
             Some(n) => n,
@@ -56,15 +51,7 @@ pub async fn neighbors(
         };
 
         // Outgoing edges
-        let outgoing: Vec<(String, String, Option<String>)> = sqlx::query_as(
-            "SELECT n.memory_id, e.rel_type, e.note
-             FROM graph_edges e
-             JOIN graph_nodes n ON n.id = e.target_id
-             WHERE e.source_id = ?"
-        )
-        .bind(node_id)
-        .fetch_all(pool)
-        .await?;
+        let outgoing = ops.get_outgoing_edges(node_id).await?;
 
         for (neighbor_id, rel_type, note) in outgoing {
             if let Some(filter) = rel_filter {
@@ -84,15 +71,7 @@ pub async fn neighbors(
         }
 
         // Incoming edges (all types + always include RELATES_TO reverse)
-        let incoming: Vec<(String, String, Option<String>)> = sqlx::query_as(
-            "SELECT n.memory_id, e.rel_type, e.note
-             FROM graph_edges e
-             JOIN graph_nodes n ON n.id = e.source_id
-             WHERE e.target_id = ?"
-        )
-        .bind(node_id)
-        .fetch_all(pool)
-        .await?;
+        let incoming = ops.get_incoming_edges(node_id).await?;
 
         for (neighbor_id, rel_type, note) in incoming {
             // For directed edges, only traverse incoming if specifically RELATES_TO
@@ -121,7 +100,7 @@ pub async fn neighbors(
 
 /// BFS shortest path between two memories. Max 10 hops.
 pub async fn shortest_path(
-    pool: &SqlitePool,
+    ops: &dyn GraphQueryOps,
     from_id: &str,
     to_id: &str,
 ) -> Result<Option<Vec<PathStep>>> {
@@ -142,26 +121,11 @@ pub async fn shortest_path(
             continue;
         }
 
-        let node_id: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM graph_nodes WHERE memory_id = ?"
-        )
-        .bind(current)
-        .fetch_optional(pool)
-        .await?;
+        let node_id: Option<i64> = ops.get_node_id(current).await?;
 
         if let Some(nid) = node_id {
             // Both directions
-            let edges: Vec<(String, String)> = sqlx::query_as(
-                "SELECT n.memory_id, e.rel_type FROM graph_edges e
-                 JOIN graph_nodes n ON n.id = e.target_id WHERE e.source_id = ?
-                 UNION
-                 SELECT n.memory_id, e.rel_type FROM graph_edges e
-                 JOIN graph_nodes n ON n.id = e.source_id WHERE e.target_id = ?"
-            )
-            .bind(nid)
-            .bind(nid)
-            .fetch_all(pool)
-            .await?;
+            let edges = ops.get_all_edges(nid).await?;
 
             for (neighbor_id, rel_type) in edges {
                 if !visited.contains(&neighbor_id) {
@@ -181,27 +145,17 @@ pub async fn shortest_path(
 /// Includes ontology concept nodes (prefixed "concept::<id>") in the same graph so
 /// well-connected concepts rank alongside well-connected memories.
 pub async fn pagerank(
-    pool: &SqlitePool,
+    ops: &dyn GraphQueryOps,
     damping: f64,
     iterations: u32,
 ) -> Result<Vec<(String, f64)>> {
     // ── Memory nodes + graph_edges ────────────────────────────────────────────
-    let mem_edges: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT source_id, target_id FROM graph_edges"
-    ).fetch_all(pool).await?;
-
-    let mem_nodes: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, memory_id FROM graph_nodes"
-    ).fetch_all(pool).await?;
+    let mem_edges = ops.get_all_memory_edges().await?;
+    let mem_nodes = ops.get_all_memory_nodes().await?;
 
     // ── Concept nodes + ontology_edges ────────────────────────────────────────
-    let concept_nodes: Vec<(String,)> = sqlx::query_as(
-        "SELECT id FROM ontology_concepts"
-    ).fetch_all(pool).await?;
-
-    let ont_edges: Vec<(String, String)> = sqlx::query_as(
-        "SELECT from_id, to_id FROM ontology_edges"
-    ).fetch_all(pool).await?;
+    let concept_nodes = ops.get_all_concept_nodes().await?;
+    let ont_edges = ops.get_all_ontology_edges().await?;
 
     // ── Build unified node index ───────────────────────────────────────────────
     // Memory nodes use integer graph_nodes.id as key.
@@ -215,7 +169,7 @@ pub async fn pagerank(
         mem_graph_id_to_idx.insert(*gid, idx);
         labels.push(mid.clone());
     }
-    for (cid,) in &concept_nodes {
+    for cid in &concept_nodes {
         let idx = labels.len();
         concept_id_to_idx.insert(cid.clone(), idx);
         labels.push(format!("concept::{}", cid));
@@ -283,23 +237,12 @@ pub async fn pagerank(
 }
 
 /// Graph statistics.
-pub async fn graph_stats(pool: &SqlitePool) -> Result<GraphStats> {
-    let node_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM graph_nodes")
-        .fetch_one(pool)
-        .await?;
-    let edge_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM graph_edges")
-        .fetch_one(pool)
-        .await?;
-
-    let rel_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT rel_type, COUNT(*) as cnt FROM graph_edges GROUP BY rel_type ORDER BY cnt DESC"
-    )
-    .fetch_all(pool)
-    .await?;
+pub async fn graph_stats(ops: &dyn GraphQueryOps) -> Result<GraphStats> {
+    let (node_count, edge_count, rel_type_counts) = ops.get_graph_stats().await?;
 
     Ok(GraphStats {
         node_count,
         edge_count,
-        rel_type_counts: rel_rows.into_iter().collect(),
+        rel_type_counts,
     })
 }

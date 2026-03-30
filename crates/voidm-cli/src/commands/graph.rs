@@ -73,18 +73,19 @@ pub struct ExportArgs {
 }
 
 pub async fn run(cmd: GraphCommands, db: &std::sync::Arc<dyn voidm_db::Database>, pool: &sqlx::SqlitePool, json: bool) -> Result<()> {
+    let graph_ops = voidm_sqlite::graph_query_ops_impl::SqliteGraphQueryOps::new(pool.clone());
     match cmd {
-        GraphCommands::Cypher(args) => run_cypher(args, pool, json).await,
-        GraphCommands::Neighbors(args) => run_neighbors(args, db, pool, json).await,
-        GraphCommands::Path(args) => run_path(args, db, pool, json).await,
-        GraphCommands::Pagerank(args) => run_pagerank(args, pool, json).await,
+        GraphCommands::Cypher(args) => run_cypher(args, &graph_ops, json).await,
+        GraphCommands::Neighbors(args) => run_neighbors(args, db, &graph_ops, json).await,
+        GraphCommands::Path(args) => run_path(args, db, &graph_ops, json).await,
+        GraphCommands::Pagerank(args) => run_pagerank(args, &graph_ops, json).await,
         GraphCommands::Stats => run_stats(db, pool, json).await,
         GraphCommands::Export(args) => run_export(args, db, pool, json).await,
     }
 }
 
-async fn run_cypher(args: CypherArgs, pool: &SqlitePool, json: bool) -> Result<()> {
-    let rows = voidm_graph::cypher_read(pool, &args.query).await?;
+async fn run_cypher(args: CypherArgs, ops: &dyn voidm_db::graph_ops::GraphQueryOps, json: bool) -> Result<()> {
+    let rows = voidm_graph::cypher_read(ops, &args.query).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
@@ -97,7 +98,7 @@ async fn run_cypher(args: CypherArgs, pool: &SqlitePool, json: bool) -> Result<(
     Ok(())
 }
 
-async fn run_neighbors(args: NeighborsArgs, db: &Arc<dyn Database>, pool: &SqlitePool, json: bool) -> Result<()> {
+async fn run_neighbors(args: NeighborsArgs, db: &Arc<dyn Database>, ops: &dyn voidm_db::graph_ops::GraphQueryOps, json: bool) -> Result<()> {
     let id = match crud::resolve_id(db.as_ref(), &args.id).await {
         Ok(id) => id,
         Err(e) => {
@@ -109,7 +110,7 @@ async fn run_neighbors(args: NeighborsArgs, db: &Arc<dyn Database>, pool: &Sqlit
             std::process::exit(1);
         }
     };
-    let results = voidm_graph::neighbors(pool, &id, args.depth, args.rel.as_deref()).await?;
+    let results = voidm_graph::neighbors(ops, &id, args.depth, args.rel.as_deref()).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&results)?);
     } else {
@@ -126,7 +127,7 @@ async fn run_neighbors(args: NeighborsArgs, db: &Arc<dyn Database>, pool: &Sqlit
     Ok(())
 }
 
-async fn run_path(args: PathArgs, db: &Arc<dyn Database>, pool: &SqlitePool, json: bool) -> Result<()> {
+async fn run_path(args: PathArgs, db: &Arc<dyn Database>, ops: &dyn voidm_db::graph_ops::GraphQueryOps, json: bool) -> Result<()> {
     // Resolve both IDs before same-ID check (so short IDs expand correctly)
     let from = crud::resolve_id(db.as_ref(), &args.from).await?;
     let to   = crud::resolve_id(db.as_ref(), &args.to).await?;
@@ -143,7 +144,7 @@ async fn run_path(args: PathArgs, db: &Arc<dyn Database>, pool: &SqlitePool, jso
         std::process::exit(2);
     }
 
-    match voidm_graph::shortest_path(pool, &from, &to).await? {
+    match voidm_graph::shortest_path(ops, &from, &to).await? {
         None => {
             if json {
                 println!("{}", serde_json::json!({
@@ -174,8 +175,8 @@ async fn run_path(args: PathArgs, db: &Arc<dyn Database>, pool: &SqlitePool, jso
     Ok(())
 }
 
-async fn run_pagerank(args: PagerankArgs, pool: &SqlitePool, json: bool) -> Result<()> {
-    let mut results = voidm_graph::pagerank(pool, args.damping, args.iterations).await?;
+async fn run_pagerank(args: PagerankArgs, ops: &dyn voidm_db::graph_ops::GraphQueryOps, json: bool) -> Result<()> {
+    let mut results = voidm_graph::pagerank(ops, args.damping, args.iterations).await?;
     results.truncate(args.top);
     if json {
         let v: Vec<_> = results.iter()

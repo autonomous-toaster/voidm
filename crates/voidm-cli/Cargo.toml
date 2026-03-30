@@ -23,7 +23,6 @@ voidm-nli        = { path = "../voidm-nli", optional = true }
 voidm-redactor   = { path = "../voidm-redactor", optional = true }
 voidm-embeddings = { path = "../voidm-embeddings", optional = true }
 voidm-reranker   = { path = "../voidm-reranker", optional = true }
-sqlx             = { workspace = true }
 clap             = { workspace = true }
 comfy-table      = { workspace = true }
 colored          = { workspace = true }

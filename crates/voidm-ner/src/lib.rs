@@ -330,25 +330,20 @@ pub fn extract_entities(text: &str) -> Result<Vec<NamedEntity>> {
 /// Convert extracted entities to concept candidates, checking for existing concepts.
 pub async fn entities_to_candidates(
     entities: &[NamedEntity],
-    pool: &sqlx::SqlitePool,
+    db: &std::sync::Arc<dyn voidm_db::Database>,
 ) -> Result<Vec<ConceptCandidate>> {
     let mut candidates = Vec::new();
 
     for entity in entities {
-        // Check if a concept with this name already exists (case-insensitive)
-        let existing: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM ontology_concepts WHERE lower(name) = lower(?)"
-        )
-        .bind(&entity.text)
-        .fetch_optional(pool)
-        .await?;
+        // Check if a concept with this name already exists
+        let (existing_id, already_exists) = db.get_or_create_entity(&entity.text, &entity.entity_type).await?;
 
         candidates.push(ConceptCandidate {
             name: entity.text.clone(),
             entity_type: entity.entity_type.clone(),
             score: entity.score,
-            already_exists: existing.is_some(),
-            existing_id: existing.map(|(id,)| id),
+            already_exists,
+            existing_id: Some(existing_id),
         });
     }
 

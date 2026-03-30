@@ -13,6 +13,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tokenizers = { version = "0.15" }
 hf-hub = { version = "0.3", features = ["tokio"] }
-sqlx = { workspace = true }
+voidm-db = { path = "../voidm-db" }
 voidm-embeddings = { path = "../voidm-embeddings" }
 voidm-models = { path = "../voidm-models" }

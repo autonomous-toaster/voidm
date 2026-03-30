@@ -6,10 +6,9 @@ description = "Tag-based automatic linking for voidm memories"
 publish = false
 
 [dependencies]
-sqlx = { workspace = true }
+voidm-db = { path = "../voidm-db" }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-chrono = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

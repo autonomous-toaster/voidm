@@ -9,7 +9,6 @@ keywords = ["memory", "llm", "agents", "embeddings", "sqlite"]
 categories = ["database", "command-line-utilities"]
 
 [dependencies]
-sqlx             = { workspace = true }
 sqlite-vec       = { workspace = true }
 libsqlite3-sys   = { workspace = true }
 fastembed        = { workspace = true }

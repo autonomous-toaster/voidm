@@ -2,14 +2,14 @@
 /// When a new memory is created, find other memories with shared tags
 /// and create RELATES_TO edges in the knowledge graph.
 
-use sqlx::SqlitePool;
 use anyhow::Result;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Find all memories that share at least one tag with the given memory.
 /// Returns list of (memory_id, shared_tag_count, shared_tags_list)
 pub async fn find_memories_with_shared_tags(
-    pool: &SqlitePool,
+    db: &Arc<dyn voidm_db::Database>,
     memory_id: &str,
     current_tags: &[String],
 ) -> Result<Vec<(String, usize, Vec<String>)>> {
@@ -24,21 +24,30 @@ pub async fn find_memories_with_shared_tags(
         .collect();
 
     // Get all memories with their tags
-    let all_memories: Vec<(String, String)> = sqlx::query_as::<_, (String, String)>(
-        "SELECT id, tags FROM memories WHERE id != ? ORDER BY created_at DESC"
-    )
-    .bind(memory_id)
-    .fetch_all(pool)
-    .await?;
+    let all_memories = db.fetch_memories_raw(None, None, 10000).await?;
 
     let mut results = vec![];
 
-    for (other_id, tags_json) in all_memories {
-        // Parse tags JSON
-        let tags: Vec<String> = match serde_json::from_str(&tags_json) {
-            Ok(t) => t,
+    for (other_id, content) in all_memories {
+        if other_id == memory_id {
+            continue;
+        }
+
+        // Parse memory JSON to extract tags
+        let mem: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(m) => m,
             Err(_) => continue,
         };
+
+        let tags: Vec<String> = mem
+            .get("tags")
+            .and_then(|t| t.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // Find shared tags (case-insensitive)
         let other_tags_lower: HashSet<String> = tags
@@ -66,98 +75,53 @@ pub async fn find_memories_with_shared_tags(
 
 /// Check if a link already exists between two memories
 pub async fn link_exists(
-    pool: &SqlitePool,
+    db: &Arc<dyn voidm_db::Database>,
     source_id: &str,
     target_id: &str,
 ) -> Result<bool> {
-    // Get node IDs
-    let source_node: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(source_id)
-    .fetch_optional(pool)
-    .await?;
-
-    let target_node: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(target_id)
-    .fetch_optional(pool)
-    .await?;
-
-    if let (Some(src), Some(tgt)) = (source_node, target_node) {
-        let exists: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM graph_edges WHERE source_id = ? AND target_id = ?"
-        )
-        .bind(src)
-        .bind(tgt)
-        .fetch_optional(pool)
-        .await?;
-
-        Ok(exists.is_some())
-    } else {
-        Ok(false)
+    // Try to get edges between the two memories
+    let edges = db.list_edges().await?;
+    
+    for edge in edges {
+        let from = edge.get("from_id").and_then(|v| v.as_str());
+        let to = edge.get("to_id").and_then(|v| v.as_str());
+        
+        if (from == Some(source_id) && to == Some(target_id)) ||
+           (from == Some(target_id) && to == Some(source_id)) {
+            return Ok(true);
+        }
     }
+    
+    Ok(false)
 }
 
 /// Create a RELATES_TO edge between two memories
 pub async fn create_tag_link(
-    pool: &SqlitePool,
+    db: &Arc<dyn voidm_db::Database>,
     source_id: &str,
     target_id: &str,
     shared_tags: &[String],
 ) -> Result<()> {
     // Check if link already exists (both directions)
-    let forward_exists = link_exists(pool, source_id, target_id).await?;
-    let backward_exists = link_exists(pool, target_id, source_id).await?;
-
-    if forward_exists || backward_exists {
+    let exists = link_exists(db, source_id, target_id).await?;
+    if exists {
         return Ok(()); // Link already exists, don't create duplicate
     }
 
-    // Get node IDs
-    let source_node: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(source_id)
-    .fetch_optional(pool)
-    .await?;
+    let note = if shared_tags.is_empty() {
+        "Shares tags with memory".to_string()
+    } else {
+        format!("Shares tags: {}", shared_tags.join(", "))
+    };
 
-    let target_node: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(target_id)
-    .fetch_optional(pool)
-    .await?;
+    db.link_memories(source_id, "RELATES_TO", target_id, Some(&note)).await?;
 
-    if let (Some(src), Some(tgt)) = (source_node, target_node) {
-        let note = if shared_tags.is_empty() {
-            "Shares tags with memory".to_string()
-        } else {
-            format!("Shares tags: {}", shared_tags.join(", "))
-        };
-
-        let now = chrono::Utc::now().to_rfc3339();
-
-        sqlx::query(
-            "INSERT OR IGNORE INTO graph_edges (source_id, target_id, rel_type, note, created_at)
-             VALUES (?, ?, ?, ?, ?)"
-        )
-        .bind(src)
-        .bind(tgt)
-        .bind("RELATES_TO")
-        .bind(&note)
-        .bind(&now)
-        .execute(pool)
-        .await?;
-
-        tracing::debug!(
-            "Created tag-based link: {} → {} (shared tags: {})",
-            source_id,
-            target_id,
-            shared_tags.join(", ")
-        );
-    }
+    tracing::debug!(
+        "Created tag-based link: {} → {} (shared tags: {})",
+        source_id,
+        target_id,
+        shared_tags.join(", ")
+    );
 
     Ok(())
 }
@@ -165,16 +129,16 @@ pub async fn create_tag_link(
 /// Auto-link a memory to all memories with shared tags (up to limit)
 /// Returns count of links created
 pub async fn auto_link_by_tags(
-    pool: &SqlitePool,
+    db: &Arc<dyn voidm_db::Database>,
     memory_id: &str,
     tags: &[String],
     max_links: usize,
 ) -> Result<usize> {
-    let matches = find_memories_with_shared_tags(pool, memory_id, tags).await?;
+    let matches = find_memories_with_shared_tags(db, memory_id, tags).await?;
 
     let mut count = 0;
     for (other_id, _shared_count, shared_tags) in matches.iter().take(max_links) {
-        create_tag_link(pool, memory_id, other_id, &shared_tags).await?;
+        create_tag_link(db, memory_id, other_id, &shared_tags).await?;
         count += 1;
     }
 

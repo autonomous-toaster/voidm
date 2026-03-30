@@ -6,7 +6,7 @@ pub mod crud;
 pub mod crud_logic;
 pub mod crud_trait;
 pub mod query;
-pub mod migrate;
+// migrate moved to voidm-sqlite backend
 // Models moved to voidm-db foundation
 pub use voidm_db::models;
 pub mod search;

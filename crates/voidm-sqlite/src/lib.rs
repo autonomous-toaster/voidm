@@ -26,6 +26,7 @@ use voidm_core::query::sqlite::SqliteTranslator;
 use voidm_core::query::cypher::CypherOperation;
 
 pub mod add_memory_backend;
+pub mod migrate;
 pub mod utils;
 
 /// Load sqlite-vec at process level via sqlite3_auto_extension
@@ -376,9 +377,9 @@ impl Database for SqliteDatabase {
     fn ensure_schema(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         let pool = self.pool.clone();
         Box::pin(async move {
-            // Use voidm_core::migrate to run the complete schema
+            // Use migrate::run to run the complete schema
             // This ensures all tables and migrations are applied properly
-            voidm_core::migrate::run(&pool).await?;
+            migrate::run(&pool).await?;
             Ok(())
         })
     }

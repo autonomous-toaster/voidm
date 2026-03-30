@@ -267,7 +267,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Validate(args) => commands::validate::run(args, &db).await,
                 Commands::Chunk(args) => commands::chunk::run(args, &db).await,
                 Commands::Embed(args) => commands::embed::run(args, &db).await,
-                Commands::Stats(args) => commands::stats::run(args, &db, &pool, &config, cli.json).await,
+                Commands::Stats(args) => commands::stats::run(args, &db, &config, cli.json).await,
             };
 
             // Perform backend-specific shutdown (SQLite: WAL checkpoint, etc.)

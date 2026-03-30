@@ -5,7 +5,7 @@ use voidm_core::Config;
 #[derive(Args)]
 pub struct StatsArgs {}
 
-pub async fn run(_args: StatsArgs, db: &std::sync::Arc<dyn voidm_db::Database>, _pool: &sqlx::SqlitePool, config: &Config, json: bool) -> Result<()> {
+pub async fn run(_args: StatsArgs, db: &std::sync::Arc<dyn voidm_db::Database>, config: &Config, json: bool) -> Result<()> {
     // Get all statistics from database trait method (no sqlx here!)
     let mut stats = db.get_statistics().await?;
     

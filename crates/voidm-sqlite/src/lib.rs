@@ -396,8 +396,11 @@ impl Database for SqliteDatabase {
             let config: voidm_core::Config = serde_json::from_value(config_json)
                 .context("Failed to parse Config")?;
             
-            // Call the optimized backend-specific implementation
-            let resp = add_memory_backend::execute_add_memory_transaction_wrapper(&pool, req, &config).await?;
+            // Prepare pre-transaction data
+            let pre_tx_data = add_memory_backend::prepare_add_memory_data(&pool, req, &config).await?;
+            
+            // Execute transaction with prepared data
+            let resp = add_memory_backend::execute_add_memory_transaction_wrapper(&pool, pre_tx_data).await?;
             
             // Serialize response with proper field name "type" (not "memory_type")
             Ok(serde_json::json!({

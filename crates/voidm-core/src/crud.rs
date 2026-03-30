@@ -787,7 +787,7 @@ pub async fn list_edges(pool: &SqlitePool) -> Result<Vec<crate::models::MemoryEd
 
 /// Redact secrets from memory content, tags, and metadata in-place.
 /// Returns list of redaction warnings.
-fn redact_memory(
+pub fn redact_memory(
     req: &mut AddMemoryRequest,
     config: &Config,
     warnings: &mut Vec<redactor::RedactionWarning>,

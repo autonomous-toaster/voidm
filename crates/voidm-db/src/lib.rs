@@ -349,4 +349,10 @@ pub trait Database: Send + Sync {
         node_id: &str,
         edge_type: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>>;
+
+    // ===== Graph Operations =====
+
+    /// Get graph query operations for this backend
+    /// Returns a trait object that implements GraphQueryOps
+    fn graph_ops(&self) -> std::sync::Arc<dyn crate::graph_ops::GraphQueryOps>;
 }

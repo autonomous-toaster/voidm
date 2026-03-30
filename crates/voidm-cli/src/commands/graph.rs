@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use sqlx::SqlitePool;
 use voidm_core::crud;
 use voidm_db::Database;
 use std::sync::Arc;
@@ -72,15 +71,15 @@ pub struct ExportArgs {
     pub min_edges: usize,
 }
 
-pub async fn run(cmd: GraphCommands, db: &std::sync::Arc<dyn voidm_db::Database>, pool: &sqlx::SqlitePool, json: bool) -> Result<()> {
-    let graph_ops = voidm_sqlite::graph_query_ops_impl::SqliteGraphQueryOps::new(pool.clone());
+pub async fn run(cmd: GraphCommands, db: &std::sync::Arc<dyn voidm_db::Database>, json: bool) -> Result<()> {
+    let graph_ops = db.graph_ops();
     match cmd {
-        GraphCommands::Cypher(args) => run_cypher(args, &graph_ops, json).await,
-        GraphCommands::Neighbors(args) => run_neighbors(args, db, &graph_ops, json).await,
-        GraphCommands::Path(args) => run_path(args, db, &graph_ops, json).await,
-        GraphCommands::Pagerank(args) => run_pagerank(args, &graph_ops, json).await,
-        GraphCommands::Stats => run_stats(db, pool, json).await,
-        GraphCommands::Export(args) => run_export(args, db, pool, json).await,
+        GraphCommands::Cypher(args) => run_cypher(args, graph_ops.as_ref(), json).await,
+        GraphCommands::Neighbors(args) => run_neighbors(args, db, graph_ops.as_ref(), json).await,
+        GraphCommands::Path(args) => run_path(args, db, graph_ops.as_ref(), json).await,
+        GraphCommands::Pagerank(args) => run_pagerank(args, graph_ops.as_ref(), json).await,
+        GraphCommands::Stats => run_stats(db, json).await,
+        GraphCommands::Export(args) => run_export(args, db, json).await,
     }
 }
 
@@ -195,7 +194,7 @@ async fn run_pagerank(args: PagerankArgs, ops: &dyn voidm_db::graph_ops::GraphQu
     Ok(())
 }
 
-async fn run_stats(db: &Arc<dyn Database>, _pool: &SqlitePool, json: bool) -> Result<()> {
+async fn run_stats(db: &Arc<dyn Database>, json: bool) -> Result<()> {
     let stats = db.get_graph_stats().await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
@@ -220,7 +219,7 @@ async fn run_stats(db: &Arc<dyn Database>, _pool: &SqlitePool, json: bool) -> Re
     Ok(())
 }
 
-async fn run_export(args: ExportArgs, db: &Arc<dyn Database>, _pool: &SqlitePool, _json: bool) -> Result<()> {
+async fn run_export(args: ExportArgs, db: &Arc<dyn Database>, _json: bool) -> Result<()> {
     match args.format.as_str() {
         "dot" => export_dot(db, args).await,
         "json" => export_json(db, args).await,

@@ -1794,8 +1794,77 @@ impl voidm_db::Database for Neo4jDatabase {
             Err(anyhow::anyhow!("get_graph_export_data not yet implemented for Neo4j backend"))
         })
     }
+
+    fn graph_ops(&self) -> std::sync::Arc<dyn voidm_db::graph_ops::GraphQueryOps> {
+        // Neo4j: Return a stub implementation for now
+        // TODO: Implement full GraphQueryOps for Neo4j using Cypher
+        std::sync::Arc::new(Neo4jGraphQueryOpsStub)
+    }
     
 }
+
+/// Stub implementation of GraphQueryOps for Neo4j
+/// TODO: Implement full Cypher-based graph operations
+pub struct Neo4jGraphQueryOpsStub;
+
+impl voidm_db::graph_ops::GraphQueryOps for Neo4jGraphQueryOpsStub {
+    fn upsert_node(&self, _memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<i64>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn delete_node(&self, _memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn get_node_id(&self, _memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Option<i64>>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn upsert_edge(&self, _from_memory_id: &str, _to_memory_id: &str, _rel_type: &str, _note: Option<&str>) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<i64>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn delete_edge(&self, _from_memory_id: &str, _rel_type: &str, _to_memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn get_outgoing_edges(&self, _node_id: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String, Option<String>)>>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn get_incoming_edges(&self, _node_id: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String, Option<String>)>>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn get_all_edges(&self, _node_id: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String)>>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn get_all_memory_edges(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(i64, i64)>>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn get_all_memory_nodes(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(i64, String)>>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn get_all_concept_nodes(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<String>>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn get_all_ontology_edges(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String)>>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn get_graph_stats(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<(i64, i64, std::collections::HashMap<String, i64>)>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+
+    fn execute_cypher(&self, _sql: &str, _params: &[serde_json::Value]) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<std::collections::HashMap<String, serde_json::Value>>>> + Send + '_>> {
+        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    }
+}
+
 #[cfg(test)]
 #[allow(dead_code)] // Integration tests disabled for now
 mod neo4j_integration_tests {

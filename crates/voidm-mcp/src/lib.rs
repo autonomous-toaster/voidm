@@ -17,23 +17,21 @@ use rmcp::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
-use sqlx::SqlitePool;
 use voidm_core::{
     Config, crud,
     models::{AddMemoryRequest, EdgeType, MemoryType},
     search::{SearchMode, SearchOptions, search},
 };
 use voidm_db::Database;
-use voidm_sqlite::{SqliteDatabase, utils};
+use voidm_sqlite::SqliteDatabase;
 
 #[derive(Clone)]
 pub struct McpServerConfig {
     pub transport: String,
 }
 
-pub async fn run_server( pool: SqlitePool, config: Config) -> Result<()> {
-    let db = Arc::new(SqliteDatabase::new(pool.clone()));
-    let server = VoidmMcpServer::new(pool, db, config);
+pub async fn run_server(db: Arc<dyn Database>, config: Config) -> Result<()> {
+    let server = VoidmMcpServer::new(db, config);
     let running = server.serve(rmcp::transport::stdio()).await?;
     running.waiting().await?;
     Ok(())
@@ -41,16 +39,14 @@ pub async fn run_server( pool: SqlitePool, config: Config) -> Result<()> {
 
 #[derive(Debug, Clone)]
 pub struct VoidmMcpServer {
-    pool: SqlitePool, // Keep for add_memory until it's refactored (Phase 1.5)
     db: Arc<dyn Database>,
     config: Config,
     tool_router: ToolRouter<Self>,
 }
 
 impl VoidmMcpServer {
-    pub fn new(pool: SqlitePool, db: Arc<dyn Database>, config: Config) -> Self {
+    pub fn new(db: Arc<dyn Database>, config: Config) -> Self {
         Self {
-            pool,
             db,
             config,
             tool_router: Self::tool_router(),
@@ -442,12 +438,6 @@ fn memory_write_warnings(resp: &voidm_db::models::AddMemoryResponse) -> Vec<Stri
     warnings
 }
 
-async fn resolve_node_id(pool: &SqlitePool, id: &str, kind: NodeKind) -> Result<String> {
-    match kind {
-        NodeKind::Concept => ontology::resolve_concept_id(pool, id).await,
-        NodeKind::Memory => utils::resolve_id_sqlite(pool, id).await,
-    }
-}
 
 fn mcp_err(err: anyhow::Error) -> rmcp::ErrorData {
     rmcp::ErrorData::internal_error(err.to_string(), None)

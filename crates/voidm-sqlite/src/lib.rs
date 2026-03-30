@@ -1785,6 +1785,10 @@ impl Database for SqliteDatabase {
             }).collect())
         })
     }
+
+    fn graph_ops(&self) -> std::sync::Arc<dyn voidm_db::graph_ops::GraphQueryOps> {
+        std::sync::Arc::new(crate::graph_query_ops_impl::SqliteGraphQueryOps::new(self.pool.clone()))
+    }
 }
 
 pub mod graph_query_ops_impl;

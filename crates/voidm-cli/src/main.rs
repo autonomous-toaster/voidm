@@ -253,7 +253,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Delete(args) => commands::delete::run(args, &db, cli.json).await,
                 Commands::Link(args) => commands::link::run(args, &db, cli.json).await,
                 Commands::Unlink(args) => commands::unlink::run(args, &db, cli.json).await,
-                Commands::Graph(cmd) => commands::graph::run(cmd, &db, &pool, cli.json).await,
+                Commands::Graph(cmd) => commands::graph::run(cmd, &db, cli.json).await,
                 Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, cli.json).await,
                 Commands::Export(args) => commands::export::run(args, &db, &config, cli.json).await,
                 Commands::Config(_) => unreachable!(),

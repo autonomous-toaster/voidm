@@ -9,7 +9,7 @@
 //! - Entity specificity (named entity density)
 
 /// Memory type for quality scoring context.
-/// Mirrors voidm_core::models::MemoryType but avoids circular dependency.
+/// Mirrors voidm_db::models::MemoryType but avoids circular dependency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MemoryType {
     Episodic,

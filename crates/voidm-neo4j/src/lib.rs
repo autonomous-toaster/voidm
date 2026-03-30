@@ -6,7 +6,7 @@ use voidm_db::Database;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use voidm_core::models::{
+use voidm_db::models::{
     AddMemoryRequest, AddMemoryResponse, Memory, EdgeType, LinkResponse,
 };
 use voidm_core::search::{SearchOptions, SearchResponse};
@@ -185,7 +185,7 @@ impl voidm_db::Database for Neo4jDatabase {
             }
 
             // Build response with tags from prepared data
-            let response = voidm_core::models::AddMemoryResponse {
+            let response = voidm_db::models::AddMemoryResponse {
                 id: prepared.id,
                 memory_type: prepared.memory_type.to_string(),
                 content: prepared.content,
@@ -527,7 +527,7 @@ impl voidm_db::Database for Neo4jDatabase {
 
             let mut edges = Vec::new();
             while let Ok(Some(row)) = result.next().await {
-                let edge = voidm_core::models::MemoryEdge {
+                let edge = voidm_db::models::MemoryEdge {
                     from_id: row.get("from_id").context("Missing from_id")?,
                     to_id: row.get("to_id").context("Missing to_id")?,
                     rel_type: row.get("rel_type").context("Missing rel_type")?,

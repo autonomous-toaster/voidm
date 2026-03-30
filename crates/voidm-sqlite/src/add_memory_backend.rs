@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
-use voidm_core::models::{AddMemoryRequest, AddMemoryResponse, EdgeType};
+use voidm_db::models::{AddMemoryRequest, AddMemoryResponse, EdgeType};
 use voidm_scoring::QualityScore;
 use serde_json::json;
 use chrono::DateTime;

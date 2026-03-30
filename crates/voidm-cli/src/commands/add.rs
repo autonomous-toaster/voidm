@@ -87,7 +87,7 @@ pub async fn run(args: AddArgs, db: &Arc<dyn Database>, config: &Config, json: b
 
     // Validate context if provided
     if let Some(ref ctx) = args.context {
-        let _: voidm_core::models::MemoryContext = ctx.parse()?;
+        let _: voidm_db::models::MemoryContext = ctx.parse()?;
     }
 
     // Validate and prepare title

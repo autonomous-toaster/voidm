@@ -104,7 +104,7 @@ impl SqliteDatabase {
     /// Delete a memory and all associated data (internal implementation)
 
     /// Get a memory by ID (internal implementation, extracted from voidm-core)
-    async fn get_memory_impl(&self, id: &str) -> Result<Option<voidm_core::models::Memory>> {
+    async fn get_memory_impl(&self, id: &str) -> Result<Option<voidm_db::models::Memory>> {
         // Resolve short IDs to full IDs (supports 4+ char prefixes)
         let full_id = if id.len() < 4 {
             // If less than 4 chars, can't be a valid short ID, treat as exact match attempt
@@ -138,13 +138,13 @@ impl SqliteDatabase {
                 let quality_score = if let Some(score) = quality_score_db {
                     Some(score)
                 } else {
-                    let memory_type_enum: voidm_core::models::MemoryType = memory_type.parse().unwrap_or(voidm_core::models::MemoryType::Semantic);
+                    let memory_type_enum: voidm_db::models::MemoryType = memory_type.parse().unwrap_or(voidm_db::models::MemoryType::Semantic);
                     let quality_mt = voidm_core::crud::convert_memory_type(&memory_type_enum);
                     let quality_score_val = voidm_scoring::compute_quality_score(&content, &quality_mt);
                     Some(quality_score_val.score)
                 };
                 
-                Ok(Some(voidm_core::models::Memory {
+                Ok(Some(voidm_db::models::Memory {
                     id,
                     memory_type,
                     content,
@@ -163,7 +163,7 @@ impl SqliteDatabase {
     }
 
     /// List memories (internal implementation, extracted from voidm-core)
-    async fn list_memories_impl(&self, scope_filter: Option<&str>, type_filter: Option<&str>, limit: usize) -> Result<Vec<voidm_core::models::Memory>> {
+    async fn list_memories_impl(&self, scope_filter: Option<&str>, type_filter: Option<&str>, limit: usize) -> Result<Vec<voidm_db::models::Memory>> {
         // Build query dynamically
         let rows: Vec<(String, String, String, i64, String, String, Option<f32>, Option<String>, String, String)> = if let Some(scope) = scope_filter {
             let scope_prefix = format!("{}%", scope);
@@ -201,13 +201,13 @@ impl SqliteDatabase {
             let quality_score = if let Some(score) = quality_score_db {
                 Some(score)
             } else {
-                let memory_type_enum: voidm_core::models::MemoryType = memory_type.parse().unwrap_or(voidm_core::models::MemoryType::Semantic);
+                let memory_type_enum: voidm_db::models::MemoryType = memory_type.parse().unwrap_or(voidm_db::models::MemoryType::Semantic);
                 let quality_mt = voidm_core::crud::convert_memory_type(&memory_type_enum);
                 let quality_score_val = voidm_scoring::compute_quality_score(&content, &quality_mt);
                 Some(quality_score_val.score)
             };
             
-            memories.push(voidm_core::models::Memory { 
+            memories.push(voidm_db::models::Memory { 
                 id, 
                 memory_type, 
                 content, 
@@ -391,7 +391,7 @@ impl Database for SqliteDatabase {
         let config_json = config_json.clone();
         Box::pin(async move {
             // Deserialize request and config
-            let req: voidm_core::models::AddMemoryRequest = serde_json::from_value(req_json)
+            let req: voidm_db::models::AddMemoryRequest = serde_json::from_value(req_json)
                 .context("Failed to parse AddMemoryRequest")?;
             let config: voidm_core::Config = serde_json::from_value(config_json)
                 .context("Failed to parse Config")?;

@@ -28,7 +28,7 @@ pub struct ExportArgs {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportData {
-    pub memories: Vec<voidm_core::models::Memory>,
+    pub memories: Vec<voidm_db::models::Memory>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub edges: Vec<MemoryEdge>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,7 +52,7 @@ pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db::Database>, 
     if args.with_edges || args.format == "full" {
         let edges_json = db.list_edges().await.unwrap_or_default();
         for edge_json in edges_json {
-            if let Ok(edge) = serde_json::from_value::<voidm_core::models::MemoryEdge>(edge_json) {
+            if let Ok(edge) = serde_json::from_value::<voidm_db::models::MemoryEdge>(edge_json) {
                 edges.push(edge);
             }
         }

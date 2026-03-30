@@ -217,7 +217,7 @@ async fn migrate_memories(
     let memories_json = source.list_memories(Some(10000)).await?;
     let mut memories = Vec::new();
     for mem_json in memories_json {
-        if let Ok(mem) = serde_json::from_value::<voidm_core::models::Memory>(mem_json) {
+        if let Ok(mem) = serde_json::from_value::<voidm_db::models::Memory>(mem_json) {
             memories.push(mem);
         }
     }
@@ -248,7 +248,7 @@ async fn migrate_memories(
             continue;
         }
 
-        let req = voidm_core::models::AddMemoryRequest {
+        let req = voidm_db::models::AddMemoryRequest {
             id: Some(mem.id.clone()),
             content: mem.content.clone(),
             memory_type: mem.memory_type.parse()?,
@@ -328,7 +328,7 @@ async fn migrate_relationships(
     let edges_json = source.list_edges().await?;
     let mut edges = Vec::new();
     for edge_json in edges_json {
-        if let Ok(edge) = serde_json::from_value::<voidm_core::models::MemoryEdge>(edge_json) {
+        if let Ok(edge) = serde_json::from_value::<voidm_db::models::MemoryEdge>(edge_json) {
             edges.push(edge);
         }
     }
@@ -353,13 +353,13 @@ async fn migrate_relationships(
 
         // Parse edge type from string
         let rel_type = match edge.rel_type.as_str() {
-            "SUPPORTS" => voidm_core::models::EdgeType::Supports,
-            "CONTRADICTS" => voidm_core::models::EdgeType::Contradicts,
-            "PRECEDES" => voidm_core::models::EdgeType::Precedes,
-            "DERIVED_FROM" => voidm_core::models::EdgeType::DerivedFrom,
-            "RELATES_TO" => voidm_core::models::EdgeType::RelatesTo,
-            "EXEMPLIFIES" => voidm_core::models::EdgeType::Exemplifies,
-            "PART_OF" => voidm_core::models::EdgeType::PartOf,
+            "SUPPORTS" => voidm_db::models::EdgeType::Supports,
+            "CONTRADICTS" => voidm_db::models::EdgeType::Contradicts,
+            "PRECEDES" => voidm_db::models::EdgeType::Precedes,
+            "DERIVED_FROM" => voidm_db::models::EdgeType::DerivedFrom,
+            "RELATES_TO" => voidm_db::models::EdgeType::RelatesTo,
+            "EXEMPLIFIES" => voidm_db::models::EdgeType::Exemplifies,
+            "PART_OF" => voidm_db::models::EdgeType::PartOf,
             _ => {
                 if !json {
                     eprintln!("  Warning: Unknown edge type '{}', skipping edge {} -> {}", edge.rel_type, edge.from_id, edge.to_id);
@@ -371,7 +371,7 @@ async fn migrate_relationships(
 
         match dest.link_memories(&edge.from_id, rel_type.as_str(), &edge.to_id, edge.note.as_deref()).await {
             Ok(resp_json) => {
-                let resp: voidm_core::models::LinkResponse = match serde_json::from_value(resp_json) {
+                let resp: voidm_db::models::LinkResponse = match serde_json::from_value(resp_json) {
                     Ok(r) => r,
                     Err(_) => {
                         if !json {

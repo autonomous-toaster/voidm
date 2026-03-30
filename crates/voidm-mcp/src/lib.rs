@@ -427,7 +427,7 @@ struct LinkConceptsParams {
 fn default_limit() -> usize { 10 }
 fn default_search_mode() -> String { "hybrid".to_string() }
 
-fn memory_write_warnings(resp: &voidm_core::models::AddMemoryResponse) -> Vec<String> {
+fn memory_write_warnings(resp: &voidm_db::models::AddMemoryResponse) -> Vec<String> {
     let mut warnings = Vec::new();
     if let Some(score) = resp.quality_score {
         if score < 0.5 {
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn low_quality_scores_produce_warning() {
-        let response = voidm_core::models::AddMemoryResponse {
+        let response = voidm_db::models::AddMemoryResponse {
             id: "id".to_string(),
             memory_type: "semantic".to_string(),
             content: "today I fixed task".to_string(),

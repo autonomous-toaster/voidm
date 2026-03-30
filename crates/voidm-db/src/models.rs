@@ -412,6 +412,67 @@ pub struct MergeLogEntry {
     pub completed_at: Option<String>,
 }
 
+// ── Database Statistics ────────────────────────────────────────────────────
+
+/// Overall database statistics collected from multiple queries
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseStats {
+    // Memory statistics
+    pub total_memories: i64,
+    pub memories_by_type: Vec<(String, i64)>,
+    pub scopes_count: i64,
+    pub top_tags: Vec<(String, usize)>,
+    pub embedding_coverage: EmbeddingStats,
+    
+    // Graph statistics
+    pub graph: GraphStats,
+    
+    // Database metadata
+    pub db_size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingStats {
+    pub total_embeddings: i64,
+    pub total_memories: i64,
+    pub coverage_percentage: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphStats {
+    pub node_count: i64,
+    pub edge_count: i64,
+    pub edges_by_type: Vec<(String, i64)>,
+}
+
+/// Graph export data structures
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphExportData {
+    pub memories: Vec<GraphMemory>,
+    pub concepts: Vec<GraphConcept>,
+    pub edges: Vec<GraphEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphMemory {
+    pub id: String,
+    pub mem_type: String,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphConcept {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphEdge {
+    pub from_id: String,
+    pub to_id: String,
+    pub rel_type: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

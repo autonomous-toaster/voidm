@@ -159,6 +159,18 @@ pub trait Database: Send + Sync {
     /// Get neighbors of a node at specified depth
     fn get_neighbors(&self, id: &str, depth: usize) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>>;
 
+    // ===== Statistics & Reporting =====
+
+    /// Get comprehensive database statistics
+    /// Returns: total memories, memories by type, scopes count, top tags, graph stats, embeddings coverage, db size
+    fn get_statistics(&self) -> Pin<Box<dyn Future<Output = Result<models::DatabaseStats>> + Send + '_>>;
+
+    /// Get graph statistics only (nodes, edges, edges by type)
+    fn get_graph_stats(&self) -> Pin<Box<dyn Future<Output = Result<models::GraphStats>> + Send + '_>>;
+
+    /// Get graph export data (memories, concepts, edges for export)
+    fn get_graph_export_data(&self) -> Pin<Box<dyn Future<Output = Result<models::GraphExportData>> + Send + '_>>;
+
     // ===== Utility =====
 
     /// Check if embedding model in database matches configured model

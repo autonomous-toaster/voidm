@@ -78,8 +78,8 @@ pub async fn run(cmd: GraphCommands, db: &std::sync::Arc<dyn voidm_db::Database>
         GraphCommands::Neighbors(args) => run_neighbors(args, db, pool, json).await,
         GraphCommands::Path(args) => run_path(args, db, pool, json).await,
         GraphCommands::Pagerank(args) => run_pagerank(args, pool, json).await,
-        GraphCommands::Stats => run_stats(pool, json).await,
-        GraphCommands::Export(args) => run_export(args, pool, json).await,
+        GraphCommands::Stats => run_stats(db, pool, json).await,
+        GraphCommands::Export(args) => run_export(args, db, pool, json).await,
     }
 }
 
@@ -194,17 +194,21 @@ async fn run_pagerank(args: PagerankArgs, pool: &SqlitePool, json: bool) -> Resu
     Ok(())
 }
 
-async fn run_stats(pool: &SqlitePool, json: bool) -> Result<()> {
-    let stats = voidm_graph::graph_stats(pool).await?;
+async fn run_stats(db: &Arc<dyn Database>, _pool: &SqlitePool, json: bool) -> Result<()> {
+    let stats = db.get_graph_stats().await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&stats)?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "node_count": stats.node_count,
+            "edge_count": stats.edge_count,
+            "rel_type_counts": stats.edges_by_type.iter().map(|(t, c)| (t.clone(), c)).collect::<std::collections::HashMap<_, _>>()
+        }))?);
     } else {
         println!("Nodes: {}", stats.node_count);
         println!("Edges: {}", stats.edge_count);
-        if !stats.rel_type_counts.is_empty() {
+        if !stats.edges_by_type.is_empty() {
             println!("Edge types:");
-            let mut counts: Vec<_> = stats.rel_type_counts.iter().collect();
-            counts.sort_by(|a, b| b.1.cmp(a.1));
+            let mut counts: Vec<_> = stats.edges_by_type.iter().collect();
+            counts.sort_by(|a, b| b.1.cmp(&a.1));
             for (rel, cnt) in counts {
                 println!("  {:20} {}", rel, cnt);
             }
@@ -215,36 +219,17 @@ async fn run_stats(pool: &SqlitePool, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_export(args: ExportArgs, pool: &SqlitePool, _json: bool) -> Result<()> {
+async fn run_export(args: ExportArgs, db: &Arc<dyn Database>, _pool: &SqlitePool, _json: bool) -> Result<()> {
     match args.format.as_str() {
-        "dot" => export_dot(args, pool).await,
-        "json" => export_json(args, pool).await,
-        "csv" => export_csv(args, pool).await,
+        "dot" => export_dot(db, args).await,
+        "json" => export_json(db, args).await,
+        "csv" => export_csv(db, args).await,
         fmt => anyhow::bail!("Unknown format: {}. Supported: dot, json, csv", fmt),
     }
 }
 
-async fn export_dot(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
-    // Get all memories
-    let memories: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT id, type, SUBSTR(content, 1, 50) as preview FROM memories LIMIT 1000"
-    )
-    .fetch_all(pool)
-    .await?;
-
-    // Get all concepts
-    let concepts: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, name FROM ontology_concepts LIMIT 500"
-    )
-    .fetch_all(pool)
-    .await?;
-
-    // Get all edges
-    let edges: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000"
-    )
-    .fetch_all(pool)
-    .await?;
+async fn export_dot(db: &Arc<dyn Database>, _args: ExportArgs) -> Result<()> {
+    let data = db.get_graph_export_data().await?;
 
     // Start DOT file
     println!("digraph voidm {{");
@@ -252,8 +237,8 @@ async fn export_dot(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
     println!("  node [shape=box, style=rounded];");
     
     // Add memory nodes
-    for (id, mem_type, preview) in &memories {
-        let color = match mem_type.as_str() {
+    for mem in &data.memories {
+        let color = match mem.mem_type.as_str() {
             "semantic" => "lightblue",
             "episodic" => "lightgreen",
             "procedural" => "lightyellow",
@@ -261,79 +246,62 @@ async fn export_dot(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
             "contextual" => "lightgray",
             _ => "white",
         };
-        let label = preview.replace("\"", "\\\"");
+        let label = mem.preview.replace("\"", "\\\"");
+        let id_short = if mem.id.len() >= 8 { &mem.id[..8] } else { &mem.id };
         println!("  \"m:{}\" [label=\"{}\", fillcolor=\"{}\", style=\"rounded,filled\"];", 
-                 &id[..8], label, color);
+                 id_short, label, color);
     }
 
     // Add concept nodes
-    for (id, name) in &concepts {
-        let label = name.replace("\"", "\\\"");
+    for concept in &data.concepts {
+        let label = concept.name.replace("\"", "\\\"");
+        let id_short = if concept.id.len() >= 8 { &concept.id[..8] } else { &concept.id };
         println!("  \"c:{}\" [label=\"{} (concept)\", fillcolor=\"lavender\", style=\"rounded,filled\"];", 
-                 &id[..8], label);
+                 id_short, label);
     }
 
     // Add edges
-    for (from, to, rel) in &edges {
-        let from_node = if from.starts_with("m:") { 
-            from.clone() 
+    for edge in &data.edges {
+        let from_node = if edge.from_id.starts_with("m:") { 
+            edge.from_id.clone() 
         } else { 
-            format!("m:{}", &from[..8]) 
+            let id_short = if edge.from_id.len() >= 8 { &edge.from_id[..8] } else { &edge.from_id };
+            format!("m:{}", id_short) 
         };
-        let to_node = if to.starts_with("c:") { 
-            to.clone() 
+        let to_node = if edge.to_id.starts_with("c:") { 
+            edge.to_id.clone() 
         } else { 
-            format!("c:{}", &to[..8]) 
+            let id_short = if edge.to_id.len() >= 8 { &edge.to_id[..8] } else { &edge.to_id };
+            format!("c:{}", id_short) 
         };
-        println!("  \"{}\" -> \"{}\" [label=\"{}\"];", from_node, to_node, rel);
+        println!("  \"{}\" -> \"{}\" [label=\"{}\"];", from_node, to_node, edge.rel_type);
     }
 
     println!("}}");
     Ok(())
 }
 
-async fn export_json(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
+async fn export_json(db: &Arc<dyn Database>, _args: ExportArgs) -> Result<()> {
     use serde_json::json;
     
-    let memories: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, type FROM memories LIMIT 1000"
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let concepts: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, name FROM ontology_concepts LIMIT 500"
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let edges: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000"
-    )
-    .fetch_all(pool)
-    .await?;
+    let data = db.get_graph_export_data().await?;
 
     let result = json!({
-        "memories": memories.iter().map(|(id, t)| json!({"id": id, "type": t})).collect::<Vec<_>>(),
-        "concepts": concepts.iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>(),
-        "edges": edges.iter().map(|(f, t, r)| json!({"from": f, "to": t, "type": r})).collect::<Vec<_>>(),
+        "memories": data.memories.iter().map(|m| json!({"id": m.id, "type": m.mem_type})).collect::<Vec<_>>(),
+        "concepts": data.concepts.iter().map(|c| json!({"id": c.id, "name": c.name})).collect::<Vec<_>>(),
+        "edges": data.edges.iter().map(|e| json!({"from": e.from_id, "to": e.to_id, "type": e.rel_type})).collect::<Vec<_>>(),
     });
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }
 
-async fn export_csv(_args: ExportArgs, pool: &SqlitePool) -> Result<()> {
-    let edges: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000"
-    )
-    .fetch_all(pool)
-    .await?;
+async fn export_csv(db: &Arc<dyn Database>, _args: ExportArgs) -> Result<()> {
+    let data = db.get_graph_export_data().await?;
 
     println!("from_id,to_id,relationship_type");
-    for (from, to, rel) in edges {
-        println!("{},{},{}", from, to, rel);
+    for edge in data.edges {
+        println!("{},{},{}", edge.from_id, edge.to_id, edge.rel_type);
     }
     Ok(())
 }
-

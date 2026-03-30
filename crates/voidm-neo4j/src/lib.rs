@@ -1776,6 +1776,24 @@ impl voidm_db::Database for Neo4jDatabase {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + '_>> {
         Box::pin(async move { Err(anyhow::anyhow!("Not yet implemented for Neo4j")) })
     }
+
+    fn get_statistics(&self) -> Pin<Box<dyn Future<Output = Result<voidm_db::models::DatabaseStats>> + Send + '_>> {
+        Box::pin(async move {
+            Err(anyhow::anyhow!("get_statistics not yet implemented for Neo4j backend"))
+        })
+    }
+
+    fn get_graph_stats(&self) -> Pin<Box<dyn Future<Output = Result<voidm_db::models::GraphStats>> + Send + '_>> {
+        Box::pin(async move {
+            Err(anyhow::anyhow!("get_graph_stats not yet implemented for Neo4j backend"))
+        })
+    }
+
+    fn get_graph_export_data(&self) -> Pin<Box<dyn Future<Output = Result<voidm_db::models::GraphExportData>> + Send + '_>> {
+        Box::pin(async move {
+            Err(anyhow::anyhow!("get_graph_export_data not yet implemented for Neo4j backend"))
+        })
+    }
     
 }
 #[cfg(test)]

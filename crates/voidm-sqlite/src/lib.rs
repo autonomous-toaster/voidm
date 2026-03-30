@@ -804,6 +804,139 @@ impl Database for SqliteDatabase {
         })
     }
 
+    fn get_statistics(&self) -> Pin<Box<dyn Future<Output = Result<voidm_db::models::DatabaseStats>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            use std::collections::HashMap;
+            
+            // Memory counts total + by type
+            let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+                .fetch_one(&pool).await?;
+
+            let by_type: Vec<(String, i64)> = sqlx::query_as(
+                "SELECT type, COUNT(*) FROM memories GROUP BY type ORDER BY COUNT(*) DESC"
+            ).fetch_all(&pool).await?;
+
+            // Scope count
+            let scope_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(DISTINCT scope) FROM memory_scopes"
+            ).fetch_one(&pool).await?;
+
+            // Tag counts (top 10)
+            let all_tags: Vec<(String,)> = sqlx::query_as(
+                "SELECT tags FROM memories WHERE tags != '[]'"
+            ).fetch_all(&pool).await?;
+
+            let mut tag_counts: HashMap<String, usize> = HashMap::new();
+            for (tags_json,) in &all_tags {
+                let tags: Vec<String> = serde_json::from_str(tags_json).unwrap_or_default();
+                for tag in tags {
+                    *tag_counts.entry(tag).or_default() += 1;
+                }
+            }
+            let mut top_tags: Vec<(String, usize)> = tag_counts.into_iter().collect();
+            top_tags.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            top_tags.truncate(10);
+
+            // Graph counts
+            let node_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM graph_nodes")
+                .fetch_one(&pool).await.unwrap_or(0);
+            let edge_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM graph_edges")
+                .fetch_one(&pool).await.unwrap_or(0);
+
+            let edge_by_type: Vec<(String, i64)> = sqlx::query_as(
+                "SELECT rel_type, COUNT(*) FROM graph_edges GROUP BY rel_type ORDER BY COUNT(*) DESC"
+            ).fetch_all(&pool).await.unwrap_or_default();
+
+            // Embedding coverage
+            let vec_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM vec_memories"
+            ).fetch_one(&pool).await.unwrap_or(0);
+            
+            let coverage_pct = if total > 0 {
+                (vec_count as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            Ok(voidm_db::models::DatabaseStats {
+                total_memories: total,
+                memories_by_type: by_type,
+                scopes_count: scope_count,
+                top_tags,
+                embedding_coverage: voidm_db::models::EmbeddingStats {
+                    total_embeddings: vec_count,
+                    total_memories: total,
+                    coverage_percentage: coverage_pct,
+                },
+                graph: voidm_db::models::GraphStats {
+                    node_count,
+                    edge_count,
+                    edges_by_type: edge_by_type,
+                },
+                db_size_bytes: 0, // Set by caller if needed
+            })
+        })
+    }
+
+    fn get_graph_stats(&self) -> Pin<Box<dyn Future<Output = Result<voidm_db::models::GraphStats>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let node_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM graph_nodes")
+                .fetch_one(&pool).await.unwrap_or(0);
+            let edge_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM graph_edges")
+                .fetch_one(&pool).await.unwrap_or(0);
+
+            let edges_by_type: Vec<(String, i64)> = sqlx::query_as(
+                "SELECT rel_type, COUNT(*) FROM graph_edges GROUP BY rel_type ORDER BY COUNT(*) DESC"
+            ).fetch_all(&pool).await.unwrap_or_default();
+
+            Ok(voidm_db::models::GraphStats {
+                node_count,
+                edge_count,
+                edges_by_type,
+            })
+        })
+    }
+
+    fn get_graph_export_data(&self) -> Pin<Box<dyn Future<Output = Result<voidm_db::models::GraphExportData>> + Send + '_>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            // Get all memories
+            let memories: Vec<(String, String, String)> = sqlx::query_as(
+                "SELECT id, type, SUBSTR(content, 1, 50) as preview FROM memories LIMIT 1000"
+            )
+            .fetch_all(&pool)
+            .await?;
+
+            // Get all concepts
+            let concepts: Vec<(String, String)> = sqlx::query_as(
+                "SELECT id, name FROM ontology_concepts LIMIT 500"
+            )
+            .fetch_all(&pool)
+            .await?;
+
+            // Get all edges
+            let edges: Vec<(String, String, String)> = sqlx::query_as(
+                "SELECT from_id, to_id, rel_type FROM ontology_edges LIMIT 2000"
+            )
+            .fetch_all(&pool)
+            .await?;
+
+            Ok(voidm_db::models::GraphExportData {
+                memories: memories.into_iter()
+                    .map(|(id, mem_type, preview)| voidm_db::models::GraphMemory { id, mem_type, preview })
+                    .collect(),
+                concepts: concepts.into_iter()
+                    .map(|(id, name)| voidm_db::models::GraphConcept { id, name })
+                    .collect(),
+                edges: edges.into_iter()
+                    .map(|(from_id, to_id, rel_type)| voidm_db::models::GraphEdge { from_id, to_id, rel_type })
+                    .collect(),
+            })
+        })
+    }
+
     fn check_model_mismatch(&self, _configured_model: &str) -> Pin<Box<dyn Future<Output = Result<Option<(String, String)>>> + Send + '_>> {
         Box::pin(async move {
             Ok(None)

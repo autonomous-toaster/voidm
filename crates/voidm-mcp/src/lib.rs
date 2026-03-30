@@ -24,7 +24,7 @@ use voidm_core::{
     search::{SearchMode, SearchOptions, search},
 };
 use voidm_db::Database;
-use voidm_sqlite::SqliteDatabase;
+use voidm_sqlite::{SqliteDatabase, utils};
 
 #[derive(Clone)]
 pub struct McpServerConfig {
@@ -445,7 +445,7 @@ fn memory_write_warnings(resp: &voidm_db::models::AddMemoryResponse) -> Vec<Stri
 async fn resolve_node_id(pool: &SqlitePool, id: &str, kind: NodeKind) -> Result<String> {
     match kind {
         NodeKind::Concept => ontology::resolve_concept_id(pool, id).await,
-        NodeKind::Memory => resolve_id_sqlite(pool, id).await,
+        NodeKind::Memory => utils::resolve_id_sqlite(pool, id).await,
     }
 }
 

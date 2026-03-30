@@ -113,7 +113,7 @@ impl SqliteDatabase {
             // If less than 4 chars, can't be a valid short ID, treat as exact match attempt
             id.to_string()
         } else {
-            match voidm_core::crud::resolve_id_sqlite(&self.pool, id).await {
+            match utils::resolve_id_sqlite(&self.pool, id).await {
                 Ok(resolved) => resolved,
                 Err(_) => {
                     // If resolution fails, it means ID not found
@@ -230,7 +230,7 @@ impl SqliteDatabase {
     /// Extracted from voidm-core::crud::delete_memory to keep sqlx in backend only
     async fn delete_memory_impl(&self, id: &str) -> Result<bool> {
         // Resolve short IDs to full IDs (supports 4+ char prefixes)
-        let full_id = voidm_core::crud::resolve_id_sqlite(&self.pool, id).await
+        let full_id = utils::resolve_id_sqlite(&self.pool, id).await
             .or_else(|_| {
                 // If resolution fails, treat as not found
                 Ok::<String, anyhow::Error>(String::new())

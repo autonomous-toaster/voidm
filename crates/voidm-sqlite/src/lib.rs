@@ -26,6 +26,7 @@ use voidm_core::query::sqlite::SqliteTranslator;
 use voidm_core::query::cypher::CypherOperation;
 
 pub mod add_memory_backend;
+pub mod chunk_nodes;
 pub mod migrate;
 pub mod utils;
 
@@ -1761,7 +1762,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_chunk_nodes_integration() {
-        use voidm_core::chunk_nodes;
+        use crate::chunk_nodes;
 
         let pool = open_pool(Path::new(":memory:")).await.unwrap();
         let db = SqliteDatabase::new(pool.clone());

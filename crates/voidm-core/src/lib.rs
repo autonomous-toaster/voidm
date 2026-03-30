@@ -7,6 +7,7 @@ pub mod crud_logic;
 pub mod crud_trait;
 pub mod query;
 // migrate moved to voidm-sqlite backend
+// chunk_nodes moved to voidm-sqlite backend
 // Models moved to voidm-db foundation
 pub use voidm_db::models;
 pub mod search;
@@ -29,7 +30,6 @@ pub mod coherence;
 pub mod similarity;
 pub mod export;
 pub mod import;
-pub mod chunk_nodes; // Phase 0.5.3: Generic node/edge storage for chunks
 
 pub use config::Config;
 pub use config::config_path_display;

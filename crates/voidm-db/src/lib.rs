@@ -15,6 +15,7 @@
 //! its own type conversions at the boundary.
 
 pub mod models;
+pub mod graph_ops;
 
 use anyhow::Result;
 use std::pin::Pin;

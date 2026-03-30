@@ -31,7 +31,7 @@ hex              = "0.4"
 sha2             = "0.10"
 base64           = "0.22"
 voidm-graph      = { path = "../voidm-graph" }
-voidm-db-trait   = { path = "../voidm-db-trait" }
+voidm-db   = { path = "../voidm-db" }
 voidm-ner        = { path = "../voidm-ner", optional = true }
 voidm-embeddings = { path = "../voidm-embeddings" }
 voidm-redactor   = { path = "../voidm-redactor" }

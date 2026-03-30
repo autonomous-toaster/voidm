@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::sync::Arc;
-use voidm_db_trait::Database;
+use voidm_db::Database;
 use std::io::Write;
 
 #[derive(Parser, Clone)]
@@ -70,7 +70,7 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
     let sqlite_path = config.db_path(cli_db);
 
     // Open source database
-    let source_db: Arc<dyn voidm_db_trait::Database> = if from_backend == "sqlite" {
+    let source_db: Arc<dyn voidm_db::Database> = if from_backend == "sqlite" {
         let pool = voidm_sqlite::open_pool(&sqlite_path).await?;
         Arc::new(voidm_sqlite::SqliteDatabase::new(pool))
     } else {
@@ -85,7 +85,7 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
     };
 
     // Open destination database
-    let dest_db: Arc<dyn voidm_db_trait::Database> = if to_backend == "sqlite" {
+    let dest_db: Arc<dyn voidm_db::Database> = if to_backend == "sqlite" {
         let pool = voidm_sqlite::open_pool(&sqlite_path).await?;
         Arc::new(voidm_sqlite::SqliteDatabase::new(pool))
     } else {

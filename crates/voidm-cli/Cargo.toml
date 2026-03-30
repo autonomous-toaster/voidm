@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 voidm-core       = { path = "../voidm-core", default-features = false }
-voidm-db-trait   = { path = "../voidm-db-trait" }
+voidm-db   = { path = "../voidm-db" }
 voidm-graph      = { path = "../voidm-graph" }
 voidm-sqlite     = { path = "../voidm-sqlite" }
 voidm-neo4j      = { path = "../voidm-neo4j" }

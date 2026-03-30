@@ -1,5 +1,5 @@
 // Simple compatibility type for DbPool
-pub type DbPool = std::sync::Arc<dyn voidm_db_trait::Database>;
+pub type DbPool = std::sync::Arc<dyn voidm_db::Database>;
 
 pub mod config;
 pub mod crud;
@@ -7,7 +7,8 @@ pub mod crud_logic;
 pub mod crud_trait;
 pub mod query;
 pub mod migrate;
-pub mod models;
+// Models moved to voidm-db foundation
+pub use voidm_db::models;
 pub mod search;
 pub mod migration;
 pub mod graph_retrieval;

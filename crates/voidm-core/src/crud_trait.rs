@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 use std::sync::Arc;
-use voidm_db_trait::Database;
+use voidm_db::Database;
 use crate::models::{AddMemoryRequest, AddMemoryResponse, Memory};
 use crate::Config;
 

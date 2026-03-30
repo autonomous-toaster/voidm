@@ -17,7 +17,7 @@ once_cell = { workspace = true }
 tracing = { workspace = true }
 
 # Trait definition
-voidm-db-trait = { path = "../voidm-db-trait" }
+voidm-db = { path = "../voidm-db" }
 # For QueryTranslator and CypherOperation
 voidm-core = { path = "../voidm-core" }
 # For quality scoring

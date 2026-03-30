@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use sqlx::SqlitePool;
 use voidm_core::crud;
-use voidm_db_trait::Database;
+use voidm_db::Database;
 use std::sync::Arc;
 use voidm_graph;
 
@@ -72,7 +72,7 @@ pub struct ExportArgs {
     pub min_edges: usize,
 }
 
-pub async fn run(cmd: GraphCommands, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, json: bool) -> Result<()> {
+pub async fn run(cmd: GraphCommands, db: &std::sync::Arc<dyn voidm_db::Database>, pool: &sqlx::SqlitePool, json: bool) -> Result<()> {
     match cmd {
         GraphCommands::Cypher(args) => run_cypher(args, pool, json).await,
         GraphCommands::Neighbors(args) => run_neighbors(args, db, pool, json).await,

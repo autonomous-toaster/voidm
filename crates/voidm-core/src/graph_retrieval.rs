@@ -123,7 +123,7 @@ impl Default for GraphRetrievalConfig {
 ///
 /// Returns memories with scores decayed based on overlap percentage.
 pub async fn find_related_by_tags(
-    db: &dyn voidm_db_trait::Database,
+    db: &dyn voidm_db::Database,
     direct_results: &[SearchResult],
     config: &TagRetrievalConfig,
 ) -> Result<Vec<SearchResult>> {
@@ -211,7 +211,7 @@ pub async fn find_related_by_tags(
 ///
 /// Returns (Memory, overlap_count) for all memories with sufficient tag overlap.
 async fn find_memories_by_tag_overlap(
-    db: &dyn voidm_db_trait::Database,
+    db: &dyn voidm_db::Database,
     exclude_id: &str,
     query_tags: &HashSet<&String>,
     config: &TagRetrievalConfig,
@@ -298,7 +298,7 @@ async fn find_memories_by_tag_overlap(
 /// Traverses ontology to find memories linked to related concept nodes.
 /// Returns memories with scores based on concept distance.
 pub async fn find_related_by_concepts(
-    _db: &dyn voidm_db_trait::Database,
+    _db: &dyn voidm_db::Database,
     _direct_results: &[SearchResult],
     _config: &ConceptRetrievalConfig,
     _max_concept_hops: u8,
@@ -344,7 +344,7 @@ pub fn merge_graph_results(
 /// 
 /// Errors are logged but don't stop the search pipeline (graceful degradation).
 pub async fn expand_graph_results(
-    db: &dyn voidm_db_trait::Database,
+    db: &dyn voidm_db::Database,
     results: &mut Vec<crate::search::SearchResult>,
     config: &GraphRetrievalConfig,
 ) -> Result<()> {

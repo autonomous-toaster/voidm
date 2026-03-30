@@ -4757,7 +4757,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "voidm-core",
- "voidm-db-trait",
+ "voidm-db",
  "voidm-embeddings",
  "voidm-graph",
  "voidm-neo4j",
@@ -4797,7 +4797,7 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
- "voidm-db-trait",
+ "voidm-db",
  "voidm-embeddings",
  "voidm-graph",
  "voidm-ner",
@@ -4809,11 +4809,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "voidm-db-trait"
+name = "voidm-db"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "serde",
  "serde_json",
+ "sqlx",
+ "uuid",
 ]
 
 [[package]]
@@ -4868,7 +4872,7 @@ dependencies = [
  "tracing",
  "uuid",
  "voidm-core",
- "voidm-db-trait",
+ "voidm-db",
  "voidm-scoring",
 ]
 
@@ -4974,7 +4978,7 @@ dependencies = [
  "tracing",
  "uuid",
  "voidm-core",
- "voidm-db-trait",
+ "voidm-db",
  "voidm-scoring",
 ]
 

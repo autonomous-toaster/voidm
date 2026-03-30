@@ -1,16 +1,20 @@
-//! voidm-db-trait: Database abstraction trait for multiple backend support
+//! voidm-db: Database abstraction, models, and configuration
 //!
-//! This crate defines the minimal `Database` trait needed for implementing
-//! different database backends (SQLite, PostgreSQL, Neo4j, etc.).
+//! This crate is the foundation for voidm's backend-independent architecture:
+//! - `Database` trait: abstraction for all backends (SQLite, PostgreSQL, Neo4j, etc.)
+//! - `models`: shared data structures used throughout voidm
+//! - `Config`: global application configuration
 //!
-//! It has minimal dependencies to avoid coupling backend implementations to
-//! specific voidm-core types.
+//! This crate has minimal dependencies to avoid coupling backend implementations
+//! to specific internal types.
 //!
 //! # Design Philosophy
 //!
 //! This trait uses `serde_json::Value` for complex types to decouple from
 //! voidm-core's SQLx-annotated types. Each backend implementation handles
 //! its own type conversions at the boundary.
+
+pub mod models;
 
 use anyhow::Result;
 use std::pin::Pin;

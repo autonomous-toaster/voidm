@@ -43,7 +43,7 @@ pub struct ExportMetadata {
     pub scopes_included: Vec<String>,
 }
 
-pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db_trait::Database>, _config: &Config, _json: bool) -> Result<()> {
+pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db::Database>, _config: &Config, _json: bool) -> Result<()> {
     
     let memories = crud_trait::list_memories_filtered(db, args.scope.as_deref(), None, Some(args.limit)).await?;
     let mut edges = Vec::new();

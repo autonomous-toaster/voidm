@@ -23,7 +23,7 @@ use voidm_core::{
     models::{AddMemoryRequest, EdgeType, MemoryType},
     search::{SearchMode, SearchOptions, search},
 };
-use voidm_db_trait::Database;
+use voidm_db::Database;
 use voidm_sqlite::SqliteDatabase;
 
 #[derive(Clone)]

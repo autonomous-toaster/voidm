@@ -196,7 +196,7 @@ async fn run(cli: Cli) -> Result<()> {
                 &neo4j_config.username,
                 &neo4j_config.password,
                 &neo4j_config.database,
-            ).await?) as Arc<dyn voidm_db_trait::Database>;
+            ).await?) as Arc<dyn voidm_db::Database>;
             
             db.ensure_schema().await?;
 
@@ -228,7 +228,7 @@ async fn run(cli: Cli) -> Result<()> {
             // SQLite backend - with pool
             let db_path = config.db_path(cli.db.as_deref());
             let pool = open_pool(&db_path).await?;
-            let db = Arc::new(voidm_sqlite::SqliteDatabase::new(pool.clone())) as Arc<dyn voidm_db_trait::Database>;
+            let db = Arc::new(voidm_sqlite::SqliteDatabase::new(pool.clone())) as Arc<dyn voidm_db::Database>;
 
             // Migrations already run in open_pool() via ensure_schema()
             let _ = voidm_core::vector::cleanup_stale_temp_table(&pool).await;

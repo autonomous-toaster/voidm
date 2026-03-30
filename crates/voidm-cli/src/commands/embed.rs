@@ -11,7 +11,7 @@
 
 use anyhow::Result;
 use clap::Args;
-use voidm_db_trait::Database;
+use voidm_db::Database;
 use tracing::{info, debug};
 use std::time::Instant;
 use std::sync::Arc;

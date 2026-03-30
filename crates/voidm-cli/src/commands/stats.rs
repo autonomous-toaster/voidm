@@ -6,7 +6,7 @@ use voidm_core::Config;
 #[derive(Args)]
 pub struct StatsArgs {}
 
-pub async fn run(_args: StatsArgs, db: &std::sync::Arc<dyn voidm_db_trait::Database>, pool: &sqlx::SqlitePool, config: &Config, json: bool) -> Result<()> {
+pub async fn run(_args: StatsArgs, db: &std::sync::Arc<dyn voidm_db::Database>, pool: &sqlx::SqlitePool, config: &Config, json: bool) -> Result<()> {
     // Memory counts total + by type
     let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
         .fetch_one(pool).await?;

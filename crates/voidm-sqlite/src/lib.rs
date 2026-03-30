@@ -20,7 +20,7 @@ use std::future::Future;
 use std::str::FromStr;
 use uuid::Uuid;
 use tracing;
-use voidm_db_trait::Database;
+use voidm_db::Database;
 use voidm_core::query::translator::QueryTranslator;
 use voidm_core::query::sqlite::SqliteTranslator;
 use voidm_core::query::cypher::CypherOperation;

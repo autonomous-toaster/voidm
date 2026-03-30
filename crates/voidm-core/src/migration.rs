@@ -1,5 +1,5 @@
 use anyhow::Result;
-use voidm_db_trait::Database;
+use voidm_db::Database;
 use crate::Config;
 use std::collections::HashSet;
 use crate::models::{Memory, MemoryType, AddMemoryRequest};

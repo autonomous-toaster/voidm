@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use clap::Args;
 use voidm_core::{Config, crud_trait};
-use voidm_db_trait::Database;
+use voidm_db::Database;
 
 #[derive(Args)]
 pub struct ListArgs {

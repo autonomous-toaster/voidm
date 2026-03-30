@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sqlx::SqlitePool;
 use crate::models::{Memory, SuggestedLink, edge_hint};
-use voidm_db_trait::Database;
+use voidm_db::Database;
 
 const NEIGHBOR_MAX_DEPTH: u8 = 3;
 const NEVER_TRAVERSE: &[&str] = &["CONTRADICTS", "INVALIDATES"];
@@ -153,7 +153,7 @@ fn rerank_by_title_relevance(results: &mut Vec<SearchResult>, query: &str) {
 
 /// Full hybrid search pipeline.
 pub async fn search(
-    db: &dyn voidm_db_trait::Database,
+    db: &dyn voidm_db::Database,
     opts: &SearchOptions,
     model_name: &str,
     embeddings_enabled: bool,
@@ -401,7 +401,7 @@ pub async fn search(
         if graph_config.enabled {
             if !results.is_empty() {
                 tracing::info!("Search: Applying graph-aware retrieval to {} results", results.len());
-                if let Err(e) = crate::graph_retrieval::expand_graph_results(db as &dyn voidm_db_trait::Database, &mut results, graph_config).await {
+                if let Err(e) = crate::graph_retrieval::expand_graph_results(db as &dyn voidm_db::Database, &mut results, graph_config).await {
                     tracing::warn!("Search: Graph-aware retrieval failed: {}", e);
                 }
             }
@@ -423,7 +423,7 @@ pub async fn search(
 
 /// Expand search results with graph neighbors in-place.
 async fn expand_neighbors(
-    db: &dyn voidm_db_trait::Database,
+    db: &dyn voidm_db::Database,
     _results: &mut Vec<SearchResult>,
     _opts: &SearchOptions,
     _config: &crate::config::SearchConfig,
@@ -432,7 +432,7 @@ async fn expand_neighbors(
     // TODO: Implement via Database trait when voidm_graph is refactored
     Ok(())
 }
-async fn fetch_memories_newest(db: &dyn voidm_db_trait::Database, opts: &SearchOptions) -> Result<Vec<SearchResult>> {    
+async fn fetch_memories_newest(db: &dyn voidm_db::Database, opts: &SearchOptions) -> Result<Vec<SearchResult>> {    
     let memories_json = db.list_memories(Some(opts.limit)).await?;
     let mut results = Vec::new();
     for memory_json in memories_json {
@@ -458,7 +458,7 @@ async fn fetch_memories_newest(db: &dyn voidm_db_trait::Database, opts: &SearchO
     Ok(results)
 }
 
-async fn fetch_memory_by_id(db: &dyn voidm_db_trait::Database, id: &str) -> Result<Option<Memory>> {
+async fn fetch_memory_by_id(db: &dyn voidm_db::Database, id: &str) -> Result<Option<Memory>> {
     if let Some(memory_json) = db.get_memory(id).await? {
         let memory: Memory = serde_json::from_value(memory_json)?;
         Ok(Some(memory))
@@ -705,7 +705,7 @@ pub fn apply_metadata_ranking(
 
 /// Query citation count for a memory (references from/to graph edges)
 pub async fn query_citation_count(
-    db: &dyn voidm_db_trait::Database,
+    db: &dyn voidm_db::Database,
     memory_id: &str,
 ) -> u32 {
     // TODO: Phase 4 - Implement via database trait method

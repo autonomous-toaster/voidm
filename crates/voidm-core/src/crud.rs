@@ -31,7 +31,7 @@ pub fn convert_memory_type(mt: &crate::models::MemoryType) -> voidm_scoring::Mem
 /// - If `id` is already a full UUID that exists → return it as-is.
 /// - If `id` is a prefix → find all matches; error if 0 or >1.
 /// - Minimum prefix length: 4 characters.
-pub async fn resolve_id<D: voidm_db_trait::Database + ?Sized>(db: &D, id: &str) -> Result<String> {
+pub async fn resolve_id<D: voidm_db::Database + ?Sized>(db: &D, id: &str) -> Result<String> {
     db.resolve_memory_id(id).await
 }
 
@@ -481,7 +481,7 @@ async fn merge_memories(
 /// * `id` - Memory ID (full UUID or 4+ char prefix)
 ///
 /// Returns the Memory if found, None if not found
-pub async fn get_memory<D: voidm_db_trait::Database + ?Sized>(db: &D, id: &str) -> Result<Option<Memory>> {
+pub async fn get_memory<D: voidm_db::Database + ?Sized>(db: &D, id: &str) -> Result<Option<Memory>> {
     match db.get_memory(id).await? {
         None => Ok(None),
         Some(value) => {
@@ -556,7 +556,7 @@ pub async fn get_memory_sqlite(pool: &SqlitePool, id: &str) -> Result<Option<Mem
 /// * `limit` - Maximum number of memories to return
 ///
 /// Returns a list of memories ordered by creation date
-pub async fn list_memories<D: voidm_db_trait::Database + ?Sized>(db: &D, limit: Option<usize>) -> Result<Vec<Memory>> {
+pub async fn list_memories<D: voidm_db::Database + ?Sized>(db: &D, limit: Option<usize>) -> Result<Vec<Memory>> {
     let values = db.list_memories(limit).await?;
     let memories: Vec<Memory> = values
         .into_iter()
@@ -573,7 +573,7 @@ pub async fn list_memories<D: voidm_db_trait::Database + ?Sized>(db: &D, limit: 
 /// * `id` - Memory ID (full UUID or 4+ char prefix)
 ///
 /// Returns true if memory was deleted, false if not found
-pub async fn delete_memory<D: voidm_db_trait::Database + ?Sized>(db: &D, id: &str) -> Result<bool> {
+pub async fn delete_memory<D: voidm_db::Database + ?Sized>(db: &D, id: &str) -> Result<bool> {
     db.delete_memory(id).await
 }
 
@@ -601,7 +601,7 @@ pub async fn list_scopes(pool: &SqlitePool) -> Result<Vec<String>> {
 
 /// Create a graph edge between two memories.
 /// Create a graph edge between two memories (backend-agnostic)
-pub async fn link_memories<D: voidm_db_trait::Database + ?Sized>(
+pub async fn link_memories<D: voidm_db::Database + ?Sized>(
     db: &D,
     from_id: &str,
     edge_type: &EdgeType,

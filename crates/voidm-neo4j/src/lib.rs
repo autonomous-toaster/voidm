@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::pin::Pin;
 use std::future::Future;
 use neo4rs::Graph;
-use voidm_db_trait::Database;
+use voidm_db::Database;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -78,7 +78,7 @@ impl Neo4jDatabase {
 }
 
 // Trait implementation
-impl voidm_db_trait::Database for Neo4jDatabase {
+impl voidm_db::Database for Neo4jDatabase {
     fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         let graph = self.graph.clone();
         Box::pin(async move {

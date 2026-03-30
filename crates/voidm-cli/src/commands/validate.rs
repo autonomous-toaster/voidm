@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Args;
-use voidm_db_trait::Database;
+use voidm_db::Database;
 use voidm_core::chunking::{chunk_smart, ChunkingStrategy};
 use voidm_core::coherence::estimate_coherence;
 use std::time::Instant;

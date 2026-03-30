@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use std::sync::Arc;
 use voidm_core::{Config, crud_trait, models::{AddMemoryRequest, EdgeType, LinkSpec, MemoryType}, validation::validate_memory_length};
-use voidm_db_trait::Database;
+use voidm_db::Database;
 
 #[derive(Args)]
 pub struct AddArgs {

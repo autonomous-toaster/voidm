@@ -1,0 +1,13 @@
+[package]
+name = "voidm-db"
+version = "0.1.0"
+edition = "2021"
+description = "voidm database abstraction: trait, models, and configuration for backend independence"
+
+[dependencies]
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

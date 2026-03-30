@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use std::sync::Arc;
 use voidm_core::crud_trait;
-use voidm_db_trait::Database;
+use voidm_db::Database;
 
 #[derive(Subcommand)]
 pub enum ScopesCommands {

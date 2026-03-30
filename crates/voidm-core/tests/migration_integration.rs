@@ -9,7 +9,7 @@
 #[cfg(test)]
 mod tests {
     use voidm_core::{Config, crud};
-    use voidm_db_trait::Database;
+    use voidm_db::Database;
     use std::sync::Arc;
 
     // Note: These tests are designed to be run with:

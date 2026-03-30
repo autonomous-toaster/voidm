@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use clap::Args;
 use voidm_core::{crud_trait, models::EdgeType};
-use voidm_db_trait::Database;
+use voidm_db::Database;
 
 #[derive(Args)]
 pub struct UnlinkArgs {

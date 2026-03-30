@@ -12,7 +12,7 @@
 use anyhow::Result;
 use clap::Args;
 use voidm_core::Config;
-use voidm_db_trait::Database;
+use voidm_db::Database;
 use tracing::info;
 use std::time::Instant;
 use std::sync::Arc;

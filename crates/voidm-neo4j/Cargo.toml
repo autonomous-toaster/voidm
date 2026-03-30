@@ -13,6 +13,6 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 neo4rs = "0.7"
-voidm-db-trait = { path = "../voidm-db-trait" }
+voidm-db = { path = "../voidm-db" }
 voidm-core = { path = "../voidm-core" }
 voidm-scoring = { path = "../voidm-scoring" }

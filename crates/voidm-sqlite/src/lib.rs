@@ -26,6 +26,7 @@ use voidm_core::query::sqlite::SqliteTranslator;
 use voidm_core::query::cypher::CypherOperation;
 
 pub mod add_memory_backend;
+pub mod utils;
 
 /// Load sqlite-vec at process level via sqlite3_auto_extension
 fn ensure_sqlite_vec_loaded() {

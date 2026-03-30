@@ -191,18 +191,18 @@ async fn intern_property_key_in_tx(
 pub async fn prepare_add_memory_data(
     pool: &SqlitePool,
     mut req: voidm_db::models::AddMemoryRequest,
-    config: &voidm_core::Config,
+    config: &crate::utils::Config,
 ) -> Result<PreTxData> {
     use uuid::Uuid;
     use chrono::Utc;
-    use voidm_core::embeddings;
+    use crate::utils;
     
     // Auto-enrich tags BEFORE creating tags_json (moved to beginning)
     // TODO: Re-enable when auto_tagger_tinyllama is fixed
     
     // Redact secrets from memory content and metadata BEFORE insertion
     let mut redaction_warnings = Vec::new();
-    if let Err(e) = voidm_core::crud::redact_memory(&mut req, config, &mut redaction_warnings) {
+    if let Err(e) = utils::redact_memory(&mut req, config, &mut redaction_warnings) {
         tracing::warn!("Failed to redact secrets: {}. Continuing without redaction.", e);
     }
     
@@ -228,7 +228,7 @@ pub async fn prepare_add_memory_data(
 
     // 1. Compute embedding OUTSIDE transaction with consistent chunking
     let embedding_result = if config.embeddings.enabled {
-        match embeddings::embed_text_chunked(&config.embeddings.model, &req.content, embeddings::DEFAULT_CHUNK_SIZE) {
+        match utils::embed_text_chunked(&config.embeddings.model, &req.content, voidm_core::embeddings::DEFAULT_CHUNK_SIZE) {
             Ok(emb) => Some(emb),
             Err(e) => {
                 tracing::warn!("Failed to compute embedding: {}. Skipping vector storage.", e);
@@ -241,13 +241,13 @@ pub async fn prepare_add_memory_data(
 
     // Compute quality score OUTSIDE transaction (will persist to DB)
     let memory_type_enum = req.memory_type.clone();
-    let quality_mt = voidm_core::crud::convert_memory_type(&memory_type_enum);
+    let quality_mt = utils::convert_memory_type(&memory_type_enum);
     let quality = voidm_scoring::compute_quality_score(&req.content, &quality_mt);
 
     // Ensure vec_memories table exists with correct dimension
     if let Some(ref emb) = embedding_result {
         let dim = emb.len();
-        voidm_core::vector::ensure_vector_table(pool, dim).await?;
+        utils::ensure_vector_table(pool, dim).await?;
         // Record in db_meta
         sqlx::query("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('embedding_model', ?)")
             .bind(&config.embeddings.model)
@@ -264,7 +264,7 @@ pub async fn prepare_add_memory_data(
     let mut resolved_link_targets = Vec::new();
     for link in &req.links {
         // Use resolve_id_sqlite to support short ID prefixes (minimum 4 chars)
-        let target_id = voidm_core::crud::resolve_id_sqlite(pool, &link.target_id).await?;
+        let target_id = utils::resolve_id_sqlite(pool, &link.target_id).await?;
         resolved_link_targets.push((link.edge_type.clone(), link.note.clone(), target_id));
         
         if link.edge_type.requires_note() && link.note.is_none() {

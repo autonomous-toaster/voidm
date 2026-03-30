@@ -263,7 +263,7 @@ impl VoidmMcpServer {
             title: params.title,
         };
 
-        let resp = crud::add_memory(&self.pool, req, &self.config)
+        let resp = crate::crud_trait::add_memory(&self.db, req, &self.config)
             .await
             .map_err(|e| e.to_string())?;
 

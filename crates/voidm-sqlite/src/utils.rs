@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 
 // Re-export core utilities used by add_memory_backend
 pub use voidm_core::embeddings::embed_text_chunked;
-pub use voidm_core::vector::ensure_vector_table;
+pub use crate::deprecated::ensure_vector_table;
 pub use voidm_core::crud::convert_memory_type;
 pub use voidm_core::crud::redact_memory;
 
@@ -29,4 +29,15 @@ pub async fn resolve_id_sqlite(pool: &SqlitePool, id: &str) -> Result<String> {
         .context("Failed to resolve ID")?;
 
     row.context("ID not found")
+}
+
+/// Get all scopes for a memory - BACKEND UTILITY
+pub async fn get_scopes(pool: &SqlitePool, memory_id: &str) -> Result<Vec<String>> {
+    let scopes: Vec<String> = sqlx::query_scalar(
+        "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+    )
+    .bind(memory_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(scopes)
 }

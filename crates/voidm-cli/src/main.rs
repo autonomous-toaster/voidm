@@ -231,7 +231,6 @@ async fn run(cli: Cli) -> Result<()> {
             let db = Arc::new(voidm_sqlite::SqliteDatabase::new(pool.clone())) as Arc<dyn voidm_db::Database>;
 
             // Migrations already run in open_pool() via ensure_schema()
-            let _ = voidm_core::vector::cleanup_stale_temp_table(&pool).await;
 
             // Check model mismatch
             if config.embeddings.enabled {

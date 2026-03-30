@@ -15,7 +15,6 @@ pub mod migration;
 pub mod graph_retrieval;
 pub mod rrf_fusion;
 pub mod fast_vector;
-pub mod vector; // Deprecated: kept for compatibility only
 pub mod query_classifier;
 pub mod context_boosting;
 pub mod importance_boosting;
@@ -48,6 +47,6 @@ pub use voidm_scoring as quality;
 #[cfg(feature = "query-expansion")]
 pub use voidm_query_expansion as query_expansion;
 
-pub use crud::{resolve_id, resolve_id_sqlite};
+pub use crud::{resolve_id};
 pub use models::{Memory, MemoryType, AddMemoryRequest, AddMemoryResponse, SuggestedLink, DuplicateWarning, MemoryEdge, validate_title};
 pub use migration_export::{VectorBackup, MigrationCheckpoint};

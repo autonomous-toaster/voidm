@@ -8,6 +8,5 @@ description = "voidm database abstraction: trait, models, and configuration for 
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
-sqlx = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }

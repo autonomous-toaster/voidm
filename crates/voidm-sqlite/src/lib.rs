@@ -29,6 +29,7 @@ pub mod add_memory_backend;
 pub mod chunk_nodes;
 pub mod migrate;
 pub mod utils;
+pub mod deprecated;
 
 /// Load sqlite-vec at process level via sqlite3_auto_extension
 fn ensure_sqlite_vec_loaded() {
@@ -133,7 +134,7 @@ impl SqliteDatabase {
         match row {
             None => Ok(None),
             Some((id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, context, created_at, updated_at)) => {
-                let scopes = voidm_core::crud::get_scopes(&self.pool, &id).await?;
+                let scopes = utils::get_scopes(&self.pool, &id).await?;
                 let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
                 let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_default();
                 
@@ -196,7 +197,7 @@ impl SqliteDatabase {
             if let Some(t) = type_filter {
                 if memory_type != t { continue; }
             }
-            let scopes = voidm_core::crud::get_scopes(&self.pool, &id).await?;
+            let scopes = utils::get_scopes(&self.pool, &id).await?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_default();
             

@@ -1,11 +1,5 @@
-//! Backend-specific vector operations
-//! 
-//! NOTE: This module is deprecated and kept for compatibility only.
-//! Vector/embedding operations should be handled through the Database trait
-//! in backend-specific crates (voidm-sqlite, voidm-neo4j, etc.).
-//! 
-//! These functions are only called from legacy code and will be removed
-//! as the codebase fully adopts trait-based database access.
+//! Deprecated vector functions - kept for backward compatibility only
+//! These are stubs that do nothing. Use Database trait methods instead.
 
 use anyhow::{Result, bail};
 use sqlx::SqlitePool;

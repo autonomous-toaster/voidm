@@ -1,5 +1,4 @@
 use anyhow::Result;
-use sqlx::SqlitePool;
 use crate::models::{Memory, SuggestedLink, edge_hint};
 use voidm_db::Database;
 
@@ -473,61 +472,6 @@ pub fn sanitize_fts_query(q: &str) -> String {
         .map(|c| if c == '"' { ' ' } else { c })
         .collect();
     format!("\"{}\"", cleaned)
-}
-
-/// Find similar memories for suggested_links and duplicate detection.
-pub async fn find_similar(
-    pool: &SqlitePool,
-    embedding: &[f32],
-    exclude_id: &str,
-    limit: usize,
-    threshold: f32,
-) -> Result<Vec<(String, f32)>> {
-    if !crate::vector::vec_table_exists(pool).await? {
-        return Ok(vec![]);
-    }
-    let all = crate::vector::ann_search(pool, embedding, limit + 1).await?;
-    let results = all.into_iter()
-        .filter(|(id, _)| id != exclude_id)
-        .map(|(id, dist)| {
-            let sim = 1.0 - (dist / 2.0).clamp(0.0, 1.0);
-            (id, sim)
-        })
-        .filter(|(_, sim)| *sim >= threshold)
-        .take(limit)
-        .collect();
-    Ok(results)
-}
-
-/// Build SuggestedLink entries from similar memories.
-pub async fn build_suggested_links(
-    pool: &SqlitePool,
-    new_memory_type: &str,
-    similar: Vec<(String, f32)>,
-) -> Result<Vec<SuggestedLink>> {
-    let mut links = Vec::new();
-    for (id, score) in similar {
-        if let Some(m) = crate::crud::get_memory_sqlite(pool, &id).await? {
-            let content_truncated = if m.content.len() > 120 {
-                format!("{}...", safe_truncate(&m.content, 120))
-            } else {
-                m.content.clone()
-            };
-            let hint = format!(
-                "High similarity ({:.2}) — consider: {}",
-                score,
-                edge_hint(new_memory_type, &m.memory_type)
-            );
-            links.push(SuggestedLink {
-                id,
-                score,
-                memory_type: m.memory_type,
-                content: content_truncated,
-                hint,
-            });
-        }
-    }
-    Ok(links)
 }
 
 /// Truncate a string at a safe Unicode char boundary.

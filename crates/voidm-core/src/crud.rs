@@ -1,6 +1,5 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chrono::Utc;
-use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::models::{
@@ -8,7 +7,7 @@ use crate::models::{
     Memory,
 };
 use voidm_scoring;
-use crate::{embeddings, search, vector, redactor};
+use crate::{embeddings, search, redactor};
 use crate::config::Config;
 
 /// Convert voidm_core MemoryType to voidm_scoring MemoryType
@@ -37,22 +36,6 @@ pub async fn resolve_id<D: voidm_db::Database + ?Sized>(db: &D, id: &str) -> Res
 
 /// Resolve a full or short (prefix) ID to a full memory ID (SQLite-specific).
 /// 
-/// # Deprecated
-/// Use `resolve_id()` with Database trait instead for backend-agnostic code.
-/// This function is kept for compatibility with existing CLI code.
-pub async fn resolve_id_sqlite(pool: &SqlitePool, id: &str) -> Result<String> {
-    if id.len() < 4 {
-        anyhow::bail!("ID prefix too short (minimum 4 characters)");
-    }
-    
-    let row = sqlx::query_scalar::<_, String>("SELECT id FROM memories WHERE id LIKE ? LIMIT 1")
-        .bind(format!("{}%", id))
-        .fetch_optional(pool)
-        .await
-        .context("Failed to resolve ID")?;
-
-    row.context("ID not found")
-}
 
 /// Add a memory — full workflow:
 /// 1. Compute embedding + quality_score (outside tx)
@@ -78,63 +61,6 @@ pub async fn get_memory<D: voidm_db::Database + ?Sized>(db: &D, id: &str) -> Res
     }
 }
 
-/// Get a memory by ID from SqlitePool (for backward compatibility during Phase 1)
-/// TODO: Remove in Phase 1.5 when add_memory is refactored
-pub async fn get_memory_sqlite(pool: &SqlitePool, id: &str) -> Result<Option<Memory>> {
-    // Resolve short IDs to full IDs (supports 4+ char prefixes)
-    let full_id = if id.len() < 4 {
-        id.to_string()
-    } else {
-        match resolve_id_sqlite(pool, id).await {
-            Ok(resolved) => resolved,
-            Err(_) => {
-                return Ok(None);
-            }
-        }
-    };
-
-    let row: Option<(String, String, String, i64, String, String, Option<f32>, Option<String>, String, String)> = sqlx::query_as(
-        "SELECT id, type, content, importance, tags, metadata, quality_score, context, created_at, updated_at
-         FROM memories WHERE id = ?"
-    )
-    .bind(&full_id)
-    .fetch_optional(pool)
-    .await?;
-
-    match row {
-        None => Ok(None),
-        Some((id, memory_type, content, importance, tags_json, metadata_json, quality_score_db, context, created_at, updated_at)) => {
-            let scopes = get_scopes(pool, &id).await?;
-            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-            let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or_default();
-            
-            // Use persisted quality_score if available, otherwise compute
-            let quality_score = if let Some(score) = quality_score_db {
-                Some(score)
-            } else {
-                let memory_type_enum: crate::models::MemoryType = memory_type.parse().unwrap_or(crate::models::MemoryType::Semantic);
-                let quality_mt = convert_memory_type(&memory_type_enum);
-                let quality_score_val = voidm_scoring::compute_quality_score(&content, &quality_mt);
-                Some(quality_score_val.score)
-            };
-            
-            Ok(Some(Memory {
-                id,
-                memory_type,
-                content,
-                importance,
-                tags,
-                metadata,
-                scopes,
-                created_at,
-                updated_at,
-                quality_score,
-                context,
-                title: None,
-            }))
-        }
-    }
-}
 
 /// List memories newest-first (backend-agnostic via Database trait)
 ///
@@ -164,27 +90,6 @@ pub async fn delete_memory<D: voidm_db::Database + ?Sized>(db: &D, id: &str) -> 
     db.delete_memory(id).await
 }
 
-
-/// Get all scopes for a memory.
-pub async fn get_scopes(pool: &SqlitePool, memory_id: &str) -> Result<Vec<String>> {
-    let scopes: Vec<String> = sqlx::query_scalar(
-        "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
-    )
-    .bind(memory_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(scopes)
-}
-
-/// List all known scope strings.
-pub async fn list_scopes(pool: &SqlitePool) -> Result<Vec<String>> {
-    let scopes: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT scope FROM memory_scopes ORDER BY scope"
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(scopes)
-}
 
 /// Create a graph edge between two memories.
 /// Create a graph edge between two memories (backend-agnostic)
@@ -219,157 +124,6 @@ pub async fn link_memories<D: voidm_db::Database + ?Sized>(
         rel,
         to,
     })
-}
-
-/// Create a graph edge between two memories using SqlitePool (for backward compatibility)
-/// TODO: Remove in Phase 1.5 when add_memory is refactored
-pub async fn link_memories_sqlite(
-    pool: &SqlitePool,
-    from_id: &str,
-    edge_type: &EdgeType,
-    to_id: &str,
-    note: Option<&str>,
-) -> Result<LinkResponse> {
-    // Validate RELATES_TO requires note
-    if edge_type.requires_note() && note.is_none() {
-        anyhow::bail!("RELATES_TO requires --note explaining why no stronger relationship applies.");
-    }
-
-    // Check both memories exist
-    // Support short ID prefixes (minimum 4 chars) for flexibility
-    let from_id = resolve_id_sqlite(pool, from_id).await?;
-    let to_id = resolve_id_sqlite(pool, to_id).await?;
-
-    // Get or create graph nodes
-    let from_node = get_or_create_node(pool, &from_id).await?;
-    let to_node = get_or_create_node(pool, &to_id).await?;
-
-    let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        "INSERT OR IGNORE INTO graph_edges (source_id, target_id, rel_type, note, created_at)
-         VALUES (?, ?, ?, ?, ?)"
-    )
-    .bind(from_node)
-    .bind(to_node)
-    .bind(edge_type.as_str())
-    .bind(note)
-    .bind(&now)
-    .execute(pool)
-    .await?;
-
-    Ok(LinkResponse {
-        created: true,
-        from: from_id.to_string(),
-        rel: edge_type.as_str().to_string(),
-        to: to_id.to_string(),
-    })
-}
-
-/// Remove a graph edge.
-pub async fn unlink_memories(
-    pool: &SqlitePool,
-    from_id: &str,
-    edge_type: &EdgeType,
-    to_id: &str,
-) -> Result<bool> {
-    // Resolve short IDs to full IDs (supports 4+ char prefixes)
-    let from_id = resolve_id_sqlite(pool, from_id).await?;
-    let to_id = resolve_id_sqlite(pool, to_id).await?;
-    
-    // Get node IDs
-    let from_node_opt: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(&from_id)
-    .fetch_optional(pool)
-    .await?;
-
-    let from_node = match from_node_opt {
-        Some(id) => id,
-        None => return Ok(false),
-    };
-
-    let to_node_opt: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM graph_nodes WHERE memory_id = ?"
-    )
-    .bind(&to_id)
-    .fetch_optional(pool)
-    .await?;
-
-    let to_node = match to_node_opt {
-        Some(id) => id,
-        None => return Ok(false),
-    };
-
-    // Delete the edge
-    let result = sqlx::query(
-        "DELETE FROM graph_edges WHERE source_id = ? AND target_id = ? AND rel_type = ?"
-    )
-    .bind(from_node)
-    .bind(to_node)
-    .bind(edge_type.as_str())
-    .execute(pool)
-    .await?;
-
-    Ok(result.rows_affected() > 0)
-}
-
-async fn get_or_create_node(pool: &SqlitePool, memory_id: &str) -> Result<i64> {
-    sqlx::query("INSERT OR IGNORE INTO graph_nodes (memory_id) VALUES (?)")
-        .bind(memory_id)
-        .execute(pool)
-        .await?;
-    let node_id: i64 = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
-        .bind(memory_id)
-        .fetch_one(pool)
-        .await?;
-    Ok(node_id)
-}
-
-async fn intern_property_key(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, key: &str) -> Result<i64> {
-    sqlx::query("INSERT OR IGNORE INTO graph_property_keys (key) VALUES (?)")
-        .bind(key)
-        .execute(&mut **tx)
-        .await?;
-    let id: i64 = sqlx::query_scalar("SELECT id FROM graph_property_keys WHERE key = ?")
-        .bind(key)
-        .fetch_one(&mut **tx)
-        .await?;
-    Ok(id)
-}
-
-/// Check model mismatch against db_meta.
-pub async fn check_model_mismatch(pool: &SqlitePool, _configured_model: &str) -> Result<Option<(String, String)>> {
-    // SQLite implementation: No persistent model metadata stored
-    // Return None (no mismatch) - model tracking would need schema addition
-    Ok(None)
-}
-
-/// List all memory-to-memory edges for migration purposes
-pub async fn list_edges(pool: &SqlitePool) -> Result<Vec<crate::models::MemoryEdge>> {
-    // Get all edges with their source and target memory IDs
-    let edges_data: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        r#"
-        SELECT gn1.memory_id, gn2.memory_id, ge.rel_type, ge.note
-        FROM graph_edges ge
-        JOIN graph_nodes gn1 ON ge.source_id = gn1.id
-        JOIN graph_nodes gn2 ON ge.target_id = gn2.id
-        ORDER BY ge.created_at
-        "#
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let edges = edges_data.into_iter().map(|(from_id, to_id, rel_type, note)| {
-        crate::models::MemoryEdge {
-            from_id,
-            to_id,
-            rel_type,
-            note,
-        }
-    }).collect();
-
-    Ok(edges)
 }
 
 /// Redact secrets from memory content, tags, and metadata in-place.
@@ -411,113 +165,6 @@ pub fn redact_memory(
         }
     }
 
-    Ok(())
-}
-
-/// Extract named entities from memory content and link to concepts.
-/// Creates INSTANCE_OF edges between the memory and extracted concepts.
-/// Optionally creates missing concepts if `auto_create` is true.
-#[cfg(feature = "ner")]
-async fn extract_and_link_concepts(
-    pool: &SqlitePool,
-    memory_id: &str,
-    content: &str,
-    min_score: f32,
-    auto_create: bool,
-) -> Result<()> {
-    use crate::ner;
-
-    // Ensure NER model is loaded (downloads on first use)
-    ner::ensure_ner_model().await?;
-
-    // Extract entities from content
-    let entities = ner::extract_entities(content)?;
-
-    // Filter by minimum score
-    let filtered_entities: Vec<_> = entities.iter()
-        .filter(|e| e.score >= min_score)
-        .collect();
-
-    if filtered_entities.is_empty() {
-        tracing::debug!("No entities above min_score {:.2} extracted from memory {}", min_score, memory_id);
-        return Ok(());
-    }
-
-    tracing::info!("Extracted {} entities from memory {} (min_score: {:.2})", filtered_entities.len(), memory_id, min_score);
-
-    // For each entity, find or create concept and link
-    for entity in filtered_entities {
-        // Try to find existing concept by name (case-insensitive)
-        let existing_concept: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM ontology_concepts WHERE lower(name) = lower(?)"
-        )
-        .bind(&entity.text)
-        .fetch_optional(pool)
-        .await?;
-
-        let concept_id = if let Some(id) = existing_concept {
-            id
-        } else if auto_create {
-            // Create new concept
-            let new_id = uuid::Uuid::new_v4().to_string();
-            let now = chrono::Utc::now().to_rfc3339();
-            
-            sqlx::query(
-                "INSERT INTO ontology_concepts (id, name, description, scope, created_at)
-                 VALUES (?, ?, ?, ?, ?)"
-            )
-            .bind(&new_id)
-            .bind(&entity.text)
-            .bind(format!("Auto-extracted from memory: {} ({:.2} confidence)", entity.entity_type, entity.score))
-            .bind::<Option<String>>(None)
-            .bind(&now)
-            .execute(pool)
-            .await?;
-
-            // Also insert into FTS for searchability
-            sqlx::query("INSERT INTO ontology_concept_fts (id, name, description) VALUES (?, ?, ?)")
-                .bind(&new_id)
-                .bind(&entity.text)
-                .bind(format!("Auto-extracted: {}", entity.entity_type))
-                .execute(pool)
-                .await?;
-
-            tracing::debug!("Created concept '{}' for memory {}", entity.text, memory_id);
-            new_id
-        } else {
-            tracing::debug!("Concept '{}' not found and auto_create disabled, skipping", entity.text);
-            continue;
-        };
-
-        // Create INSTANCE_OF edge from memory to concept
-        let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT OR IGNORE INTO ontology_edges (from_id, from_type, rel_type, to_id, to_type, note, created_at)
-             VALUES (?, 'memory', 'INSTANCE_OF', ?, 'concept', ?, ?)"
-        )
-        .bind(memory_id)
-        .bind(&concept_id)
-        .bind(format!("Extracted with {:.2} confidence", entity.score))
-        .bind(&now)
-        .execute(pool)
-        .await?;
-
-        tracing::debug!("Linked memory {} to concept '{}'", memory_id, entity.text);
-    }
-
-    Ok(())
-}
-
-/// Stub for when NER feature is disabled
-#[cfg(not(feature = "ner"))]
-async fn extract_and_link_concepts(
-    _pool: &SqlitePool,
-    _memory_id: &str,
-    _content: &str,
-    _min_score: f32,
-    _auto_create: bool,
-) -> Result<()> {
-    tracing::debug!("Concept extraction skipped (NER feature not enabled)");
     Ok(())
 }
 

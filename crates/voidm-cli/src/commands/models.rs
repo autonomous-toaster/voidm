@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
-use voidm_core::{Config, embeddings, vector};
+use voidm_core::{Config, embeddings};
 
 #[derive(Subcommand)]
 pub enum ModelsCommands {

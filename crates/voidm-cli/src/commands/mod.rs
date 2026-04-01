@@ -16,6 +16,3 @@ pub mod info;
 pub mod stats;
 pub mod init;
 pub mod update;
-pub mod validate;
-pub mod chunk;
-pub mod embed;

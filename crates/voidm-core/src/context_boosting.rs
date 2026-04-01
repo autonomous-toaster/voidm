@@ -1,6 +1,6 @@
 //! Context-aware score boosting for improved precision and recall.
 //!
-//! When a query has explicit intent/context, boost results whose memory context
+//! When a query has explicit intent/context, boost results whose memory type
 //! matches the query intent. This helps prioritize contextually relevant results.
 
 use crate::search::SearchResult;
@@ -10,9 +10,9 @@ use crate::search::SearchResult;
 pub struct ContextBoostConfig {
     /// Enable context boosting (default: true)
     pub enabled: bool,
-    /// Score multiplier for context-matching results (default: 1.3)
+    /// Score multiplier for type-matching results (default: 1.3)
     pub context_match_boost: f32,
-    /// Minimum context string length to consider (default: 3)
+    /// Minimum intent string length to consider (default: 3)
     pub min_context_length: usize,
 }
 
@@ -28,7 +28,7 @@ impl Default for ContextBoostConfig {
 
 /// Apply context-aware boosting to search results.
 ///
-/// If query has intent/context, boost scores of results whose memory context
+/// If query has intent/context, boost scores of results whose memory type
 /// matches or overlaps with the query intent.
 pub fn boost_by_context(
     results: &mut [SearchResult],
@@ -56,7 +56,9 @@ pub fn boost_by_context(
     );
 
     for result in results.iter_mut() {
-        // Check if result's memory_type overlaps with intent keywords
+        // Check if result's memory_type overlaps with intent keywords.
+        // MemoryType is now a first-class backend node, but search results still expose
+        // the resolved type string for ranking and filtering.
         if has_keyword_match(&result.memory_type, &intent_keywords) {
             result.score *= config.context_match_boost;
             tracing::trace!(
@@ -73,7 +75,7 @@ pub fn boost_by_context(
 fn extract_keywords(context: &str) -> Vec<String> {
     context
         .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .split(|c: char| !c.is_alphanumeric())
         .filter(|s| s.len() >= 3)
         .map(|s| s.to_string())
         .collect::<std::collections::HashSet<_>>()

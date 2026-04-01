@@ -426,11 +426,10 @@ mod tests {
     }
 
     #[test]
-    fn test_neo4j_translator_concept_list() {
+    fn test_neo4j_translator_memory_list() {
         let translator = Neo4jTranslator;
-        let (query, params) = translator.translate_concept_list(Some("test"), 10).unwrap();
-        assert!(query.contains("Concept"));
-        assert!(params.get("scope").is_some());
+        let (query, params) = translator.translate_memory_list(Some(10)).unwrap();
+        assert!(query.contains("Memory"));
         assert!(params.get("limit").is_some());
     }
 }

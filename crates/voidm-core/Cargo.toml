@@ -71,8 +71,9 @@ ner = ["dep:voidm-ner", "ml-core"]
 # Reranking (cross-encoder for result re-scoring)
 reranker = ["dep:voidm-reranker", "ml-core"]
 
-# TinyLLaMA auto-tagging (generates tags from memory content)
-tinyllama = []
+# TinyLLaMA strict auto-tag generation
+# Requires query-expansion for shared local ONNX LLM loading/inference utilities.
+tinyllama = ["query-expansion"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FEATURE PROFILES (recommended combinations)

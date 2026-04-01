@@ -4,7 +4,6 @@
 #[cfg(test)]
 mod comparison_benchmark {
     use voidm_core::fast_vector;
-    use voidm_core::fast_vector_iter;
     use std::time::Instant;
 
     #[test]

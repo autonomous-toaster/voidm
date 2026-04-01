@@ -279,6 +279,9 @@ pub struct QueryExpansionConfig {
     /// Uses ONNX-compatible models from HuggingFace for efficient query expansion.
     #[serde(default = "default_query_expansion_model")]
     pub model: String,
+    /// Generation backend: `onnx` (implemented), `llama_cpp`, or `mlx` (reserved for future backends).
+    #[serde(default = "default_generation_backend")]
+    pub backend: String,
     /// Maximum time to wait for expansion in milliseconds (default: 300).
     #[serde(default = "default_query_expansion_timeout_ms")]
     pub timeout_ms: u64,
@@ -292,6 +295,7 @@ impl Default for QueryExpansionConfig {
         Self {
             enabled: false,
             model: default_query_expansion_model(),
+            backend: default_generation_backend(),
             timeout_ms: default_query_expansion_timeout_ms(),
             intent: IntentConfig::default(),
         }
@@ -404,9 +408,37 @@ pub struct InsertConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoTaggingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_query_expansion_model")]
+    pub model: String,
+    #[serde(default = "default_generation_backend")]
+    pub backend: String,
+    #[serde(default = "default_auto_tagging_max_tags")]
+    pub max_tags: usize,
+}
+
+fn default_auto_tagging_max_tags() -> usize { 5 }
+fn default_generation_backend() -> String { "onnx".to_string() }
+
+impl Default for AutoTaggingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_query_expansion_model(),
+            backend: default_generation_backend(),
+            max_tags: default_auto_tagging_max_tags(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrichmentConfig {
     #[serde(default)]
     pub semantic_dedup: Option<voidm_embeddings::semantic_dedup::SemanticDedupConfig>,
+    #[serde(default)]
+    pub auto_tagging: AutoTaggingConfig,
 }
 
 impl Default for DatabaseConfig {
@@ -473,6 +505,7 @@ impl Default for EnrichmentConfig {
     fn default() -> Self {
         Self {
             semantic_dedup: Some(voidm_embeddings::semantic_dedup::SemanticDedupConfig::default()),
+            auto_tagging: AutoTaggingConfig::default(),
         }
     }
 }
@@ -491,6 +524,34 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn validate_generation_backends(&self) -> Result<()> {
+        let valid = ["onnx", "llama_cpp", "mlx"];
+
+        #[cfg(feature = "query-expansion")]
+        if let Some(qe) = &self.search.query_expansion {
+            let qe_backend = match qe.backend {
+                voidm_query_expansion::GenerationBackend::Onnx => "onnx",
+                voidm_query_expansion::GenerationBackend::LlamaCpp => "llama_cpp",
+                voidm_query_expansion::GenerationBackend::Mlx => "mlx",
+            };
+            if !valid.contains(&qe_backend) {
+                anyhow::bail!(
+                    "Unsupported search.query_expansion.backend '{}'. Expected one of: onnx, llama_cpp, mlx",
+                    qe_backend
+                );
+            }
+        }
+
+        if !valid.contains(&self.enrichment.auto_tagging.backend.as_str()) {
+            anyhow::bail!(
+                "Unsupported enrichment.auto_tagging.backend '{}'. Expected one of: onnx, llama_cpp, mlx",
+                self.enrichment.auto_tagging.backend
+            );
+        }
+
+        Ok(())
+    }
+
     /// Load config from disk, merging with defaults. Never fails — missing file = all defaults.
     pub fn load() -> Self {
         let path = config_path();
@@ -705,6 +766,30 @@ password = "neo4jneo4j"
     }
 
     #[test]
+    fn test_validate_generation_backends_accepts_known_values() {
+        let mut config = Config::default();
+        config.enrichment.auto_tagging.backend = "onnx".to_string();
+        #[cfg(feature = "query-expansion")]
+        {
+            config.search.query_expansion = Some(QueryExpansionConfig {
+                enabled: true,
+                model: "tinyllama".to_string(),
+                backend: "mlx".to_string(),
+                timeout_ms: 1000,
+                intent: IntentConfig::default(),
+            });
+        }
+        assert!(config.validate_generation_backends().is_ok());
+    }
+
+    #[test]
+    fn test_validate_generation_backends_rejects_unknown_values() {
+        let mut config = Config::default();
+        config.enrichment.auto_tagging.backend = "bad_backend".to_string();
+        assert!(config.validate_generation_backends().is_err());
+    }
+
+    #[test]
     fn test_reranker_config_defaults() {
         let toml_str = r#"
 [search]
@@ -772,6 +857,14 @@ enabled = true
     #[test]
     fn test_metadata_ranking_config() {
         let toml_str = r#"
+[search]
+default_limit = 20
+min_score = 0.3
+neighbor_decay = 0.85
+neighbor_min_score = 0.2
+default_neighbor_depth = 2
+default_edge_types = ["RELATES_TO", "SUPPORTS"]
+
 [search.metadata_ranking]
 weight_importance = 0.15
 weight_quality = 0.1

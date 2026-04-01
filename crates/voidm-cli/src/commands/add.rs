@@ -109,7 +109,9 @@ pub async fn run(args: AddArgs, db: &Arc<dyn Database>, config: &Config, json: b
     let resp = crud_trait::add_memory(db, req, config).await?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "result": resp,
+        }))?);
     } else {
         println!("Added memory: {}", resp.id);
         println!("Type: {}  Importance: {}", resp.memory_type, resp.importance);

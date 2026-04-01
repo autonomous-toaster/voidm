@@ -102,9 +102,19 @@ pub trait Database: Send + Sync {
         config_search: &serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>>;
 
-    /// BM25 full-text search (backend-specific implementation)
+    /// BM25 full-text search over memory content
     /// Returns ranked results as (id, normalized_score) tuples
     fn search_bm25(
+        &self,
+        query: &str,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>>;
+
+    /// BM25-style lexical search over titles
+    /// Returns ranked results as (memory_id, normalized_score) tuples
+    fn search_title_bm25(
         &self,
         query: &str,
         scope_filter: Option<&str>,
@@ -122,9 +132,19 @@ pub trait Database: Send + Sync {
         threshold: f32,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>>;
 
-    /// Vector ANN search using sqlite-vec
+    /// Vector ANN search using memory-level embeddings
     /// Returns ranked results as (id, similarity_score) tuples where score is in [0,1]
     fn search_ann(
+        &self,
+        embedding: Vec<f32>,
+        limit: usize,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>>;
+
+    /// Vector ANN search using chunk-level embeddings
+    /// Returns ranked results as (chunk_id, similarity_score) tuples where score is in [0,1]
+    fn search_chunk_ann(
         &self,
         embedding: Vec<f32>,
         limit: usize,
@@ -207,6 +227,17 @@ pub trait Database: Send + Sync {
         &self,
         limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>>;
+
+    /// Upsert a chunk and attach it to its owning memory.
+    fn upsert_chunk(
+        &self,
+        chunk_id: &str,
+        memory_id: &str,
+        content: &str,
+        index: usize,
+        size: usize,
+        created_at: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 
     /// Store embedding for a chunk
     /// Returns: (chunk_id, embedding_dimension)

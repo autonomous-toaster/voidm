@@ -1,18 +1,31 @@
 use anyhow::Result;
-use crate::models::{Memory, SuggestedLink, edge_hint};
-use voidm_db::Database;
+use crate::models::Memory;
+use crate::memory_policy::{
+    RETRIEVAL_MAX_CHARS_PER_CHUNK,
+    RETRIEVAL_MAX_CHUNKS_PER_MEMORY,
+    RETRIEVAL_TOTAL_CHAR_BUDGET_PER_MEMORY,
+};
 
-const NEIGHBOR_MAX_DEPTH: u8 = 3;
-const NEVER_TRAVERSE: &[&str] = &["CONTRADICTS", "INVALIDATES"];
 
 /// Search result with all signals merged.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchResult {
     pub id: String,
+    /// Result object kind. Search returns memory-level results, not raw chunks.
+    #[serde(rename = "object")]
+    pub object_type: String,
     pub score: f32,
     #[serde(rename = "type")]
     pub memory_type: String,
+    /// Assistant-facing bounded context preview assembled from top chunks or truncated memory content.
     pub content: String,
+    /// True when `content` is a bounded preview rather than the full memory body.
+    pub content_truncated: bool,
+    /// Explains where `content` came from: `context_chunks` or `memory_truncate`.
+    pub content_source: String,
+    /// Bounded chunk snippets used for context assembly
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub context_chunks: Vec<String>,
     pub scopes: Vec<String>,
     pub tags: Vec<String>,
     pub importance: i64,
@@ -69,6 +82,7 @@ pub struct SearchOptions {
     pub limit: usize,
     pub scope_filter: Option<String>,
     pub type_filter: Option<String>,
+    pub tag_filter: Option<Vec<String>>,
     /// Only applied in hybrid mode. None = use config default.
     pub min_score: Option<f32>,
     /// Minimum quality score (0.0-1.0) for results. None = no filter.
@@ -132,6 +146,36 @@ fn calculate_title_relevance(title: &Option<String>, query: &str) -> f32 {
     }
 }
 
+fn calculate_memory_type_relevance(memory_type: &str, query: &str) -> f32 {
+    let mt = memory_type.to_lowercase();
+    let q = query.to_lowercase();
+
+    if q == mt {
+        0.12
+    } else if q.split_whitespace().any(|token| token == mt) {
+        0.08
+    } else if q.contains(&mt) {
+        0.05
+    } else {
+        0.0
+    }
+}
+
+fn derive_type_intent(query: &str, explicit_intent: Option<&str>) -> Option<String> {
+    let mut haystacks = vec![query.to_lowercase()];
+    if let Some(intent) = explicit_intent {
+        haystacks.push(intent.to_lowercase());
+    }
+
+    for candidate in ["episodic", "semantic", "procedural", "conceptual", "contextual"] {
+        if haystacks.iter().any(|h| h.split_whitespace().any(|token| token == candidate) || h.contains(candidate)) {
+            return Some(candidate.to_string());
+        }
+    }
+
+    None
+}
+
 /// Rerank results by title relevance using weighted formula
 /// 
 /// Formula: (title_relevance * 0.3) + (existing_score * 0.7)
@@ -156,10 +200,9 @@ pub async fn search(
     opts: &SearchOptions,
     model_name: &str,
     embeddings_enabled: bool,
-    config_min_score: f32,
+    _config_min_score: f32,
     config_search: &crate::config::SearchConfig,
 ) -> Result<SearchResponse> {
-    use std::collections::HashMap;
 
     // RRF (Reciprocal Rank Fusion) is the ONLY ranking method.
     // All search is RRF. Configuration determines which signals to include.
@@ -192,18 +235,19 @@ pub async fn search(
     let use_vector = embeddings_enabled && config_search.signals.vector;
     let use_bm25 = config_search.signals.bm25;
     let use_fuzzy = config_search.signals.fuzzy;
+    let derived_type_intent = derive_type_intent(&opts.query, opts.intent.as_deref());
     
     tracing::info!("Search: Signals enabled - vector: {}, bm25: {}, fuzzy: {}", use_vector, use_bm25, use_fuzzy);
 
-    // ===== PARALLEL: Vector + BM25 (independent operations) =====
-    let (vector_results, bm25_results) = tokio::join!(
+    // ===== PARALLEL: Chunk vector + content BM25 + title BM25 =====
+    let (vector_results, bm25_results, title_results) = tokio::join!(
         // Vector signal (embedding + ANN)
         async {
             let mut results = Vec::new();
             if use_vector {
                 tracing::debug!("Search: Computing vector signal");
                 if let Ok(embedding) = crate::embeddings::embed_text(model_name, &opts.query) {
-                    if let Ok(rows) = db.search_ann(
+                    if let Ok(rows) = db.search_chunk_ann(
                         embedding,
                         fetch_limit,
                         opts.scope_filter.as_deref(),
@@ -243,6 +287,22 @@ pub async fn search(
                 }
             }
             results
+        },
+        // Title lexical signal
+        async {
+            let mut results = Vec::new();
+            if use_bm25 {
+                if let Ok(rows) = db.search_title_bm25(
+                    &opts.query,
+                    opts.scope_filter.as_deref(),
+                    opts.type_filter.as_deref(),
+                    fetch_limit,
+                ).await {
+                    results = rows;
+                    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                }
+            }
+            results
         }
     );
 
@@ -268,15 +328,19 @@ pub async fn search(
     let mut signals: Vec<(&str, Vec<(String, f32)>)> = Vec::new();
     let vector_len = vector_results.len();
     let bm25_len = bm25_results.len();
+    let title_len = title_results.len();
     let fuzzy_len = fuzzy_results.len();
     
-    tracing::info!("Search: Signal collection - vector: {}, bm25: {}, fuzzy: {}", vector_len, bm25_len, fuzzy_len);
+    tracing::info!("Search: Signal collection - vector(chunks): {}, bm25(content): {}, bm25(title): {}, fuzzy: {}", vector_len, bm25_len, title_len, fuzzy_len);
     
     if !vector_results.is_empty() {
         signals.push(("vector", vector_results));
     }
     if !bm25_results.is_empty() {
         signals.push(("bm25", bm25_results));
+    }
+    if !title_results.is_empty() {
+        signals.push(("title", title_results));
     }
     if !fuzzy_results.is_empty() {
         signals.push(("fuzzy", fuzzy_results));
@@ -299,7 +363,36 @@ pub async fn search(
     let rrf = crate::rrf_fusion::RRFFusion::default();
     let fused = rrf.fuse(signals);
 
-    tracing::debug!("Search: RRF fusion complete, {} results", fused.len());
+    tracing::debug!("Search: RRF fusion complete, {} grouped results", fused.len());
+
+    // Group by memory (chunk hits are chunk_ids, lexical/title hits are memory ids)
+    let mut grouped: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    let mut supporting_chunk_scores: std::collections::HashMap<String, Vec<(String, f32)>> = std::collections::HashMap::new();
+    for item in fused {
+        let is_chunk = item.id.starts_with("mchk_");
+        let memory_id = if is_chunk {
+            if let Some(chunk) = db.get_chunk(&item.id).await? {
+                chunk.get("memory_id").and_then(|v| v.as_str()).unwrap_or(&item.id).to_string()
+            } else {
+                item.id.clone()
+            }
+        } else {
+            item.id.clone()
+        };
+        grouped.entry(memory_id.clone())
+            .and_modify(|s| *s = s.max(item.rrf_score))
+            .or_insert(item.rrf_score);
+
+        if is_chunk {
+            supporting_chunk_scores
+                .entry(memory_id)
+                .or_default()
+                .push((item.id, item.rrf_score));
+        }
+    }
+
+    let mut grouped_vec: Vec<(String, f32)> = grouped.into_iter().collect();
+    grouped_vec.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     // Fetch full memory records (before reranking, fetch more results)
     let mut results = Vec::new();
@@ -307,13 +400,13 @@ pub async fn search(
     
     // RRF filter: take top (limit * 2) from RRF, then reranking will filter to final K
     let rrf_limit = if config_search.reranker.is_some() {
-        (opts.limit * 3).min(fused.len())  // Fetch 3x for reranking to choose from
+        (opts.limit * 3).min(grouped_vec.len())
     } else {
-        (opts.limit * 2).min(fused.len())
+        (opts.limit * 2).min(grouped_vec.len())
     };
 
-    for rrf_result in fused.iter().take(rrf_limit) {
-        if let Some(m) = fetch_memory_by_id(db, &rrf_result.id).await? {
+    for (memory_id, grouped_score) in grouped_vec.iter().take(rrf_limit) {
+        if let Some(m) = fetch_memory_by_id(db, memory_id).await? {
             if let Some(ref scope) = opts.scope_filter {
                 if !m.scopes.iter().any(|s| s.starts_with(scope.as_str())) {
                     continue;
@@ -324,10 +417,21 @@ pub async fn search(
                     continue;
                 }
             }
+            if let Some(ref tags) = opts.tag_filter {
+                let all_present = tags.iter().all(|tag| m.tags.iter().any(|t| t == tag));
+                if !all_present {
+                    continue;
+                }
+            }
 
-            let importance_boost = (m.importance as f32 - 5.0) * 0.02;
-            // RRF scores in [0.01, 0.2] are too small. Scale to [0.2, 0.9] for visibility.
-            let mut final_score = 0.2 + (rrf_result.rrf_score * 3.5).min(0.7) + importance_boost;
+            let importance_boost = (m.importance as f32 - 5.0) * 0.01;
+            let type_relevance_boost = calculate_memory_type_relevance(&m.memory_type, &opts.query)
+                + if derived_type_intent.as_deref() == Some(m.memory_type.as_str()) { 0.05 } else { 0.0 };
+            let tag_match_boost = opts.tag_filter.as_ref().map(|tags| {
+                if tags.iter().all(|tag| m.tags.iter().any(|t| t == tag)) { 0.03 } else { 0.0 }
+            }).unwrap_or(0.0);
+            // Keep RRF as the main retrieval signal and use only light post-fusion boosts.
+            let mut final_score = 0.15 + (*grouped_score * 2.5).min(0.55) + importance_boost + type_relevance_boost + tag_match_boost;
             
             if let Some(ref meta_config) = config_search.metadata_ranking {
                 final_score = apply_metadata_ranking(&m, final_score, meta_config);
@@ -335,11 +439,37 @@ pub async fn search(
             
             best_score = Some(best_score.unwrap_or(final_score).max(final_score));
 
+            let context_chunks = collect_context_chunks(
+                db,
+                memory_id,
+                supporting_chunk_scores.get(memory_id),
+                RETRIEVAL_MAX_CHUNKS_PER_MEMORY,
+                RETRIEVAL_MAX_CHARS_PER_CHUNK,
+                RETRIEVAL_TOTAL_CHAR_BUDGET_PER_MEMORY,
+            ).await?;
+            let (display_content, content_truncated, content_source) = if context_chunks.is_empty() {
+                (
+                    safe_truncate(&m.content, RETRIEVAL_MAX_CHARS_PER_CHUNK).to_string(),
+                    m.content.chars().count() > RETRIEVAL_MAX_CHARS_PER_CHUNK,
+                    "memory_truncate".to_string(),
+                )
+            } else {
+                (
+                    context_chunks.join("\n\n"),
+                    true,
+                    "context_chunks".to_string(),
+                )
+            };
+
             results.push(SearchResult {
-                id: rrf_result.id.clone(),
+                id: memory_id.clone(),
+                object_type: "memory".to_string(),
                 score: final_score,
                 memory_type: m.memory_type,
-                content: m.content,
+                content: display_content,
+                content_truncated,
+                content_source,
+                context_chunks,
                 scopes: m.scopes,
                 tags: m.tags,
                 importance: m.importance,
@@ -359,15 +489,10 @@ pub async fn search(
         }
     }
     
-    // Apply context-aware score boosting if query has intent
+    // Apply a light context-aware score boost if query has intent.
+    // Avoid stacking multiple heavy post-RRF heuristic boosters before reranking.
     let context_boost_config = crate::context_boosting::ContextBoostConfig::default();
     crate::context_boosting::boost_by_context(&mut results, opts.intent.as_deref(), &context_boost_config);
-    
-    // Apply importance-based boosting for better precision
-    let importance_boost_config = crate::importance_boosting::ImportanceBoostConfig::default();
-    crate::importance_boosting::boost_by_importance(&mut results, &importance_boost_config);
-    
-    // Re-sort results after boosting
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     
     // Apply reranking if configured
@@ -381,16 +506,18 @@ pub async fn search(
         }
     }
     
-    // Apply quality-based filtering to improve result reliability
+    // Apply quality-based filtering to improve result reliability.
     let quality_filter_config = crate::quality_filtering::QualityFilterConfig::default();
     crate::quality_filtering::filter_by_quality(&mut results, &quality_filter_config);
     
-    // Apply recency-based boosting to surface fresher content
+    // Apply only a light recency tiebreak after reranking/filtering.
     let recency_boost_config = crate::recency_boosting::RecencyBoostConfig::default();
     crate::recency_boosting::boost_by_recency(&mut results, &recency_boost_config);
-    
-    // Re-sort after recency boosting
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Apply title-based reranking before final truncation so lexical ties settle predictably.
+    tracing::debug!("Search: Applying title-based reranking");
+    rerank_by_title_relevance(&mut results, &opts.query);
     
     // Final filter to return only top-K results
     results.truncate(opts.limit);
@@ -407,10 +534,6 @@ pub async fn search(
         }
     }
 
-    // Apply title-based reranking to boost title matches
-    tracing::debug!("Search: Applying title-based reranking");
-    rerank_by_title_relevance(&mut results, &opts.query);
-    
     tracing::info!("Search: Returning {} results", results.len());
 
     Ok(SearchResponse {
@@ -421,8 +544,9 @@ pub async fn search(
 }
 
 /// Expand search results with graph neighbors in-place.
+#[allow(dead_code)]
 async fn expand_neighbors(
-    db: &dyn voidm_db::Database,
+    _db: &dyn voidm_db::Database,
     _results: &mut Vec<SearchResult>,
     _opts: &SearchOptions,
     _config: &crate::config::SearchConfig,
@@ -436,11 +560,17 @@ async fn fetch_memories_newest(db: &dyn voidm_db::Database, opts: &SearchOptions
     let mut results = Vec::new();
     for memory_json in memories_json {
         let memory: Memory = serde_json::from_value(memory_json)?;
+        let fallback_content = safe_truncate(&memory.content, RETRIEVAL_MAX_CHARS_PER_CHUNK).to_string();
+        let content_truncated = memory.content.chars().count() > RETRIEVAL_MAX_CHARS_PER_CHUNK;
         results.push(SearchResult {
             id: memory.id,
+            object_type: "memory".to_string(),
             score: 0.35, // Fallback score for unranked newest memories (above 0.3 threshold)
             memory_type: memory.memory_type,
-            content: memory.content,
+            content: fallback_content,
+            content_truncated,
+            content_source: "memory_truncate".to_string(),
+            context_chunks: Vec::new(),
             scopes: memory.scopes,
             tags: memory.tags,
             importance: memory.importance,
@@ -464,6 +594,52 @@ async fn fetch_memory_by_id(db: &dyn voidm_db::Database, id: &str) -> Result<Opt
     } else {
         Ok(None)
     }
+}
+
+async fn collect_context_chunks(
+    db: &dyn voidm_db::Database,
+    memory_id: &str,
+    supporting_chunks: Option<&Vec<(String, f32)>>,
+    max_chunks: usize,
+    max_chars_per_chunk: usize,
+    total_budget: usize,
+) -> Result<Vec<String>> {
+    let mut selected = Vec::new();
+    let mut total = 0usize;
+
+    if let Some(chunks) = supporting_chunks {
+        let mut ranked_chunks = chunks.clone();
+        ranked_chunks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        for (chunk_id, _) in ranked_chunks {
+            if selected.len() >= max_chunks { break; }
+            if let Some(chunk) = db.get_chunk(&chunk_id).await? {
+                let chunk_memory_id = chunk.get("memory_id").and_then(|v| v.as_str()).unwrap_or("");
+                if chunk_memory_id != memory_id {
+                    continue;
+                }
+                if let Some(text) = chunk.get("content").and_then(|v| v.as_str()) {
+                    let trimmed: String = text.chars().take(max_chars_per_chunk).collect();
+                    if total + trimmed.len() > total_budget { break; }
+                    total += trimmed.len();
+                    selected.push(trimmed);
+                }
+            }
+        }
+    }
+
+    if selected.is_empty() {
+        let all_chunks = db.fetch_chunks(10_000).await?;
+        for (_chunk_id, text, _chunk_memory_id) in all_chunks.into_iter().filter(|(_, _, mid)| mid == memory_id) {
+            if selected.len() >= max_chunks { break; }
+            let trimmed: String = text.chars().take(max_chars_per_chunk).collect();
+            if total + trimmed.len() > total_budget { break; }
+            total += trimmed.len();
+            selected.push(trimmed);
+        }
+    }
+
+    Ok(selected)
 }
 
 pub fn sanitize_fts_query(q: &str) -> String {
@@ -545,7 +721,7 @@ async fn apply_reranker(
                 original_score, 
                 rerank_score,
                 score_delta,
-                if original_score > 0.0 { (score_delta / original_score * 100.0) } else { 0.0 },
+                if original_score > 0.0 { score_delta / original_score * 100.0 } else { 0.0 },
                 &result.id[..std::cmp::min(12, result.id.len())]
             );
             
@@ -649,8 +825,8 @@ pub fn apply_metadata_ranking(
 
 /// Query citation count for a memory (references from/to graph edges)
 pub async fn query_citation_count(
-    db: &dyn voidm_db::Database,
-    memory_id: &str,
+    _db: &dyn voidm_db::Database,
+    _memory_id: &str,
 ) -> u32 {
     // TODO: Phase 4 - Implement via database trait method
     // Query: SELECT COUNT(*) FROM graph_edges WHERE target_id = ?
@@ -704,9 +880,13 @@ mod tests {
         let mut results = vec![
             SearchResult {
                 id: "1".to_string(),
+                object_type: "memory".to_string(),
                 score: 0.5,
                 memory_type: "semantic".to_string(),
                 content: "Some content".to_string(),
+                content_truncated: false,
+                content_source: "memory_truncate".to_string(),
+                context_chunks: Vec::new(),
                 scopes: vec![],
                 tags: vec![],
                 importance: 5,
@@ -721,9 +901,13 @@ mod tests {
             },
             SearchResult {
                 id: "2".to_string(),
+                object_type: "memory".to_string(),
                 score: 0.7,
                 memory_type: "semantic".to_string(),
                 content: "Other content".to_string(),
+                content_truncated: false,
+                content_source: "memory_truncate".to_string(),
+                context_chunks: Vec::new(),
                 scopes: vec![],
                 tags: vec![],
                 importance: 5,
@@ -752,9 +936,13 @@ mod tests {
         let mut results = vec![
             SearchResult {
                 id: "a".to_string(),
+                object_type: "memory".to_string(),
                 score: 0.8,
                 memory_type: "semantic".to_string(),
                 content: "Content A".to_string(),
+                content_truncated: false,
+                content_source: "memory_truncate".to_string(),
+                context_chunks: Vec::new(),
                 scopes: vec![],
                 tags: vec![],
                 importance: 5,
@@ -769,9 +957,13 @@ mod tests {
             },
             SearchResult {
                 id: "b".to_string(),
+                object_type: "memory".to_string(),
                 score: 0.6,
                 memory_type: "semantic".to_string(),
                 content: "Content B".to_string(),
+                content_truncated: false,
+                content_source: "memory_truncate".to_string(),
+                context_chunks: Vec::new(),
                 scopes: vec![],
                 tags: vec![],
                 importance: 5,
@@ -788,11 +980,15 @@ mod tests {
 
         rerank_by_title_relevance(&mut results, "Test");
         
-        // Result b has exact match: (2.0 * 0.3) + (0.6 * 0.7) = 0.6 + 0.42 = 1.02
-        // Result a has no match: (0.0 * 0.3) + (0.8 * 0.7) = 0.0 + 0.56 = 0.56
-        // Result b should rank first despite lower original score
         assert_eq!(results[0].id, "b");
         assert_eq!(results[1].id, "a");
+    }
+
+    #[test]
+    fn test_retrieval_budget_constants_are_consistent() {
+        assert!(RETRIEVAL_MAX_CHUNKS_PER_MEMORY <= crate::memory_policy::RETRIEVAL_MAX_CHUNKS);
+        assert!(RETRIEVAL_TOTAL_CHAR_BUDGET_PER_MEMORY <= crate::memory_policy::RETRIEVAL_TOTAL_CHAR_BUDGET);
+        assert!(RETRIEVAL_MAX_CHARS_PER_CHUNK > 0);
     }
 }
 

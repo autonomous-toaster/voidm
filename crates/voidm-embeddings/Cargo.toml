@@ -12,3 +12,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 dirs = { workspace = true }
 serde = { workspace = true }
+uuid = { workspace = true }
+hf-hub = { version = "0.5", features = ["tokio"], optional = true }
+
+[features]
+default = []
+ort = ["dep:hf-hub"]

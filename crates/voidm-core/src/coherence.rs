@@ -8,8 +8,6 @@
 /// - Specificity (0.15): Are claims specific vs vague?
 /// - Metadata (0.15): Are proper nouns / references included?
 
-use anyhow::Result;
-
 #[derive(Debug, Clone)]
 pub struct CoherenceScore {
     /// Completeness: 0.0-1.0 (0.3 weight)

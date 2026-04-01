@@ -17,6 +17,7 @@ pub mod rrf_fusion;
 pub mod fast_vector;
 pub mod query_classifier;
 pub mod context_boosting;
+pub mod auto_tagging;
 pub mod importance_boosting;
 pub mod quality_filtering;
 pub mod recency_boosting;
@@ -26,6 +27,7 @@ pub mod db_migration;
 pub mod chunking;
 pub mod validation;
 pub mod coherence;
+pub mod memory_policy;
 pub mod similarity;
 pub mod export;
 pub mod import;
@@ -33,7 +35,7 @@ pub mod import;
 pub use config::Config;
 pub use config::config_path_display;
 pub use validation::validate_memory_length;
-pub use chunking::{chunk_smart, ChunkingStrategy, Chunk, BreakType};
+pub use chunking::{ChunkingStrategy, Chunk, BreakType};
 pub use coherence::estimate_coherence;
 
 // Re-export from separate crates

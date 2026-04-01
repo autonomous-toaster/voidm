@@ -11,16 +11,6 @@ use std::sync::Mutex;
 
 // ─── Helper Functions ──────────────────────────────────────────────────────
 
-/// Safely truncate a string to max characters (respecting UTF-8 boundaries)
-fn truncate_for_display(s: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        s.to_string()
-    } else {
-        chars[..max_chars].iter().collect()
-    }
-}
-
 // ─── Public API ────────────────────────────────────────────────────────────
 
 /// Cross-encoder reranker for scoring (query, document) pairs.

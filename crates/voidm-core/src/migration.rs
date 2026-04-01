@@ -4,7 +4,7 @@ use crate::Config;
 use std::collections::HashSet;
 use crate::models::{Memory, MemoryType, AddMemoryRequest};
 use std::str::FromStr;
-use serde_json::{json, Value};
+use voidm_embeddings::chunking::{chunk_memory, ChunkingConfig};
 
 /// Migrate memories from source to destination database
 pub async fn migrate_memories(
@@ -46,25 +46,62 @@ pub async fn migrate_memories(
 
         let req = AddMemoryRequest {
             id: Some(mem.id.clone()),
-            content: mem.content,
+            content: mem.content.clone(),
             memory_type,
-            scopes: mem.scopes,
-            tags: mem.tags,
+            scopes: mem.scopes.clone(),
+            tags: mem.tags.clone(),
             importance: mem.importance,
-            metadata: mem.metadata,
+            metadata: mem.metadata.clone(),
             links: vec![],
-            context: mem.context,
+            context: mem.context.clone(),
             title: mem.title.clone(),
         };
 
         let req_json = serde_json::to_value(&req)?;
         let config_json = serde_json::to_value(config)?;
-        match dest.add_memory(req_json, &config_json).await {
-            Ok(_) => migrated += 1,
-            Err(e) => {
-                anyhow::bail!("Failed to create memory in destination: {}", e);
+        let resp_json = dest.add_memory(req_json, &config_json).await
+            .map_err(|e| anyhow::anyhow!("Failed to create memory {} in destination: {}", mem.id, e))?;
+        let response: crate::models::AddMemoryResponse = serde_json::from_value(resp_json)?;
+
+        let persisted_memory = dest.get_memory(&response.id).await?;
+        if persisted_memory.is_none() {
+            anyhow::bail!("Destination did not persist memory {} after add_memory", response.id);
+        }
+
+        let existing_chunks = dest.fetch_chunks(100000).await?
+            .into_iter()
+            .filter(|(_, _, memory_id)| memory_id == &response.id)
+            .count();
+        if existing_chunks == 0 {
+            let chunk_config = ChunkingConfig {
+                target_size: crate::memory_policy::CHUNK_TARGET_SIZE,
+                min_chunk_size: crate::memory_policy::CHUNK_MIN_SIZE,
+                max_chunk_size: crate::memory_policy::CHUNK_MAX_SIZE,
+                overlap: crate::memory_policy::CHUNK_OVERLAP,
+                smart_breaks: true,
+            };
+            let chunks = chunk_memory(&response.id, &mem.content, &mem.created_at, &chunk_config);
+            for chunk in chunks {
+                let embedding = if config.embeddings.enabled {
+                    crate::embeddings::embed_text(&config.embeddings.model, &chunk.content).ok()
+                } else {
+                    None
+                };
+                dest.upsert_chunk(
+                    &chunk.id,
+                    &response.id,
+                    &chunk.content,
+                    chunk.index,
+                    chunk.size,
+                    &chunk.created_at,
+                ).await?;
+                if let Some(embedding) = embedding {
+                    let _ = dest.store_chunk_embedding(chunk.id.clone(), response.id.clone(), embedding).await?;
+                }
             }
         }
+
+        migrated += 1;
 
         if migrated % 100 == 0 {
             println!("  Migrated {} memories...", migrated);
@@ -77,7 +114,7 @@ pub async fn migrate_memories(
 /// Migrate chunks from source to destination database
 pub async fn migrate_chunks(
     source: &(impl Database + ?Sized),
-    dest: &(impl Database + ?Sized),
+    _dest: &(impl Database + ?Sized),
     skip_ids: &HashSet<String>,
     dry_run: bool,
 ) -> Result<(u32, u32)> {
@@ -112,7 +149,7 @@ pub async fn migrate_chunks(
         }
 
         // Get memory_id from edge map
-        if let Some(memory_id) = edge_map.get(chunk_id) {
+        if let Some(_memory_id) = edge_map.get(chunk_id) {
             // Store chunk in destination
             // Note: Individual backends will handle chunk storage via their create_chunk equivalent
             // For now, chunks are handled via add_memory pipeline
@@ -255,8 +292,6 @@ pub async fn migrate_entities(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Note: Full migration tests require a running database backend.
     // These tests verify the migration logic structure.
     // Integration tests with real databases are in crates/voidm-core/tests/

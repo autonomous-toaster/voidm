@@ -16,3 +16,12 @@ neo4rs = "0.7"
 voidm-db = { path = "../voidm-db" }
 voidm-core = { path = "../voidm-core" }
 voidm-scoring = { path = "../voidm-scoring" }
+voidm-ner = { path = "../voidm-ner", optional = true }
+
+[features]
+default = []
+ner = ["dep:voidm-ner"]
+tinyllama = ["voidm-core/tinyllama"]
+
+[dev-dependencies]
+tokio = { workspace = true }

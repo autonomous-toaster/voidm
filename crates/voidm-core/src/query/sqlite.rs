@@ -299,18 +299,12 @@ mod tests {
     }
 
     #[test]
-    fn test_sqlite_translator_concept_create() {
+    fn test_sqlite_translator_memory_list() {
         let translator = SqliteTranslator;
-        let (query, params) = translator.translate_concept_create(
-            "id1",
-            "test",
-            Some("desc"),
-            None,
-            "2026-03-15"
-        ).unwrap();
-        assert!(query.contains("INSERT"));
-        assert!(query.contains("ontology_concepts"));
-        assert!(params.get("name").is_some());
+        let (query, params) = translator.translate_memory_list(Some(10)).unwrap();
+        assert!(query.contains("SELECT"));
+        assert!(query.contains("memories"));
+        assert!(params.get("limit").is_some());
     }
 
     #[test]

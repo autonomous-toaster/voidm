@@ -22,7 +22,9 @@ pub async fn run(args: UnlinkArgs, db: &Arc<dyn Database>, json: bool) -> Result
 
     if removed {
         if json {
-            println!("{}", serde_json::json!({ "removed": true, "from": from, "rel": args.rel, "to": to }));
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "result": { "removed": true, "from": from, "rel": args.rel, "to": to }
+            }))?);
         } else {
             println!("Unlinked: {} {} {}", from, args.rel, to);
         }

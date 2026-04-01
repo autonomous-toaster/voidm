@@ -25,7 +25,9 @@ pub async fn run(args: LinkArgs, db: &Arc<dyn Database>, json: bool) -> Result<(
     let resp: LinkResponse = serde_json::from_value(resp_json)?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "result": resp,
+        }))?);
     } else {
         println!("Linked: {} {} {}", resp.from, resp.rel, resp.to);
     }

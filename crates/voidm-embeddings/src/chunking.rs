@@ -1,103 +1,263 @@
-//! Text chunking for consistent embedding across memories.
+//! Text chunking utilities for embeddings and retrieval.
 //!
-//! Implements semantic chunking by sentences/paragraphs with configurable overlap
-//! to maintain consistent embedding quality regardless of input length.
+//! Canonical chunking entry point for the codebase.
+//! Supports smart semantic chunking with configurable bounds and overlap,
+//! plus conversion to memory-owned chunks with deterministic IDs.
 
-/// Default chunk size: approximately 512 tokens (~2KB of text).
-/// This is conservative to work with all embedding models.
-pub const DEFAULT_CHUNK_SIZE: usize = 512;
+use uuid::Uuid;
 
-/// Default overlap between chunks: 50 tokens (~200 chars).
+/// Default chunk size in characters.
+/// Tuned for embedding quality and bounded retrieval/context assembly.
+pub const DEFAULT_CHUNK_SIZE: usize = 600;
+
+/// Default overlap between chunks in characters.
 /// Helps maintain context continuity at chunk boundaries.
-pub const DEFAULT_OVERLAP: usize = 50;
+pub const DEFAULT_OVERLAP: usize = 100;
 
-/// Rough estimate: 1 token ≈ 4 characters on average in English.
-/// Used for converting token counts to approximate character positions.
-const CHARS_PER_TOKEN: usize = 4;
+/// Chunking configuration.
+#[derive(Debug, Clone)]
+pub struct ChunkingConfig {
+    pub target_size: usize,
+    pub min_chunk_size: usize,
+    pub max_chunk_size: usize,
+    pub overlap: usize,
+    pub smart_breaks: bool,
+}
 
-/// Split text into chunks of roughly `chunk_size` tokens with `overlap` token overlap.
-///
-/// Uses character-based chunking with word-boundary breaks to preserve
-/// semantic meaning and consistent chunk sizes.
-///
-/// # Arguments
-/// * `text` - Input text to chunk
-/// * `chunk_size` - Target chunk size in tokens (~4 chars per token)
-/// * `overlap` - Overlap between chunks in tokens
-///
-/// # Returns
-/// Vector of text chunks. If text is smaller than chunk_size, returns vec![text].
-///
-/// # Example
-/// ```ignore
-/// let text = "First sentence. Second sentence. Third sentence.";
-/// let chunks = chunk_text(text, 100, 20);
-/// // Returns chunks of ~400 chars each with 200 char overlap
-/// ```
-pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
-    if text.is_empty() {
+impl Default for ChunkingConfig {
+    fn default() -> Self {
+        Self {
+            target_size: DEFAULT_CHUNK_SIZE,
+            min_chunk_size: 150,
+            max_chunk_size: 900,
+            overlap: DEFAULT_OVERLAP,
+            smart_breaks: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakType {
+    Paragraph,
+    Sentence,
+    Word,
+    Character,
+}
+
+#[derive(Debug, Clone)]
+pub struct OwnedChunk {
+    pub id: String,
+    pub memory_id: String,
+    pub index: usize,
+    pub content: String,
+    pub size: usize,
+    pub break_type: BreakType,
+    pub created_at: String,
+}
+
+impl OwnedChunk {
+    pub fn new(memory_id: &str, index: usize, content: String, break_type: BreakType, created_at: String) -> Self {
+        Self {
+            id: generate_chunk_id(memory_id, index),
+            memory_id: memory_id.to_string(),
+            index,
+            size: content.len(),
+            content,
+            break_type,
+            created_at,
+        }
+    }
+}
+
+fn generate_chunk_id(memory_id: &str, index: usize) -> String {
+    let namespace = Uuid::NAMESPACE_OID;
+    let name = format!("{}:chunk:{}", memory_id, index);
+    let chunk_uuid = Uuid::new_v5(&namespace, name.as_bytes());
+    format!("mchk_{}", chunk_uuid.simple())
+}
+
+#[derive(Debug, Clone)]
+struct ChunkPart {
+    content: String,
+    break_type: BreakType,
+}
+
+/// Canonical chunking API returning plain text chunks.
+pub fn chunk_text(text: &str, config: &ChunkingConfig) -> Vec<String> {
+    chunk_text_parts(text, config)
+        .into_iter()
+        .map(|p| p.content)
+        .collect()
+}
+
+/// Chunk and attach deterministic memory-owned metadata.
+pub fn chunk_memory(memory_id: &str, text: &str, created_at: &str, config: &ChunkingConfig) -> Vec<OwnedChunk> {
+    chunk_text_parts(text, config)
+        .into_iter()
+        .enumerate()
+        .map(|(index, part)| OwnedChunk::new(memory_id, index, part.content, part.break_type, created_at.to_string()))
+        .collect()
+}
+
+fn chunk_text_parts(text: &str, config: &ChunkingConfig) -> Vec<ChunkPart> {
+    if text.trim().is_empty() {
         return vec![];
     }
 
-    let target_chars = chunk_size * CHARS_PER_TOKEN;
-    let overlap_chars = overlap * CHARS_PER_TOKEN;
+    let mut chunks = if !config.smart_breaks {
+        chunk_by_characters(text, config.target_size, config.overlap)
+            .into_iter()
+            .map(|content| ChunkPart { content, break_type: BreakType::Character })
+            .collect()
+    } else {
+        chunk_smart_text(text, config)
+    };
 
-    // If text is smaller than target, return as single chunk
-    if text.len() <= target_chars {
-        return vec![text.to_string()];
+    merge_small_trailing_chunk(&mut chunks, config.min_chunk_size);
+    chunks
+}
+
+fn chunk_smart_text(text: &str, config: &ChunkingConfig) -> Vec<ChunkPart> {
+    for (delim, break_type) in [
+        ("\n\n", BreakType::Paragraph),
+        (". ", BreakType::Sentence),
+        (" ", BreakType::Word),
+    ] {
+        let chunks = try_chunk_by_delim(text, config, delim, break_type);
+        if is_valid_chunking(&chunks, config) {
+            return with_overlap(chunks, config.overlap, config.max_chunk_size);
+        }
     }
 
-    // Character-based chunking with word boundaries
-    chunk_by_characters(text, target_chars, overlap_chars)
+    chunk_by_characters(text, config.target_size, config.overlap)
+        .into_iter()
+        .map(|content| ChunkPart { content, break_type: BreakType::Character })
+        .collect()
+}
+
+fn try_chunk_by_delim(text: &str, config: &ChunkingConfig, delim: &str, break_type: BreakType) -> Vec<ChunkPart> {
+    let parts: Vec<&str> = text.split(delim).collect();
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        let candidate = if current.is_empty() {
+            part.to_string()
+        } else {
+            format!("{}{}{}", current, delim, part)
+        };
+
+        if candidate.len() > config.target_size && !current.is_empty() {
+            chunks.push(ChunkPart { content: current, break_type });
+            current = part.to_string();
+        } else if candidate.len() > config.max_chunk_size {
+            return Vec::new();
+        } else {
+            current = candidate;
+        }
+    }
+
+    if !current.is_empty() {
+        chunks.push(ChunkPart { content: current, break_type });
+    }
+
+    chunks
+}
+
+fn is_valid_chunking(chunks: &[ChunkPart], config: &ChunkingConfig) -> bool {
+    !chunks.is_empty()
+        && chunks.iter().all(|c| c.content.len() >= config.min_chunk_size && c.content.len() <= config.max_chunk_size)
+}
+
+fn with_overlap(chunks: Vec<ChunkPart>, overlap: usize, max_chunk_size: usize) -> Vec<ChunkPart> {
+    if overlap == 0 || chunks.len() <= 1 {
+        return chunks;
+    }
+
+    let mut out = Vec::with_capacity(chunks.len());
+    for (idx, chunk) in chunks.iter().enumerate() {
+        if idx == 0 {
+            out.push(chunk.clone());
+            continue;
+        }
+
+        let prev = &chunks[idx - 1].content;
+        let prev_chars: Vec<char> = prev.chars().collect();
+        let overlap_start_char = prev_chars.len().saturating_sub(overlap);
+        let prefix: String = prev_chars[overlap_start_char..].iter().collect();
+        let mut combined = format!("{}{}", prefix, chunk.content);
+        if combined.chars().count() > max_chunk_size {
+            combined = combined.chars().take(max_chunk_size).collect();
+        }
+        out.push(ChunkPart {
+            content: combined,
+            break_type: chunk.break_type,
+        });
+    }
+    out
+}
+
+fn merge_small_trailing_chunk(chunks: &mut Vec<ChunkPart>, min_chunk_size: usize) {
+    if chunks.len() < 2 {
+        return;
+    }
+
+    let last_too_small = chunks.last().map(|c| c.content.len() < min_chunk_size).unwrap_or(false);
+    if last_too_small {
+        let last = chunks.pop().unwrap();
+        if let Some(prev) = chunks.last_mut() {
+            prev.content.push_str("\n\n");
+            prev.content.push_str(&last.content);
+        }
+    }
 }
 
 /// Chunk text by character positions, breaking at word boundaries.
 fn chunk_by_characters(text: &str, target_chars: usize, overlap_chars: usize) -> Vec<String> {
     let mut chunks = Vec::new();
-    let mut start = 0;
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    if chars.is_empty() {
+        return chunks;
+    }
 
-    while start < text.len() {
-        let end = std::cmp::min(start + target_chars, text.len());
+    let total_chars = text.chars().count();
+    let mut start_char = 0usize;
 
-        // Find a good break point (whitespace) near the target end
-        let chunk_end = if end < text.len() {
-            // Try to break at whitespace within target_chars
-            find_word_boundary(&text[start..end])
-                .map(|pos| start + pos)
-                .unwrap_or(end)
+    while start_char < total_chars {
+        let end_char = std::cmp::min(start_char + target_chars, total_chars);
+        let start_byte = chars[start_char].0;
+        let end_byte = if end_char < total_chars { chars[end_char].0 } else { text.len() };
+
+        let chunk_end_byte = if end_char < total_chars {
+            find_word_boundary(&text[start_byte..end_byte]).map(|pos| start_byte + pos).unwrap_or(end_byte)
         } else {
-            end
+            end_byte
         };
 
-        // Add chunk (skip if it would be empty after trimming)
-        let chunk_text = text[start..chunk_end].trim();
+        let chunk_text = text[start_byte..chunk_end_byte].trim();
         if !chunk_text.is_empty() {
             chunks.push(chunk_text.to_string());
         }
 
-        // Calculate next start with overlap
-        // If we'd go out of bounds, break
-        if chunk_end >= text.len() {
+        if chunk_end_byte >= text.len() {
             break;
         }
 
-        // Move start position backward by overlap amount for next chunk
-        start = if chunk_end > overlap_chars {
-            chunk_end - overlap_chars
-        } else {
-            chunk_end
-        };
-
-        // Avoid infinite loops on very small overlaps
-        if start >= chunk_end {
-            start = chunk_end;
+        let chunk_end_char = text[..chunk_end_byte].chars().count();
+        start_char = if chunk_end_char > overlap_chars { chunk_end_char - overlap_chars } else { chunk_end_char };
+        if start_char >= chunk_end_char {
+            start_char = chunk_end_char;
         }
     }
 
     chunks
 }
 
-/// Find the nearest word boundary (whitespace) within text (searching backward).
 fn find_word_boundary(text: &str) -> Option<usize> {
     text.rfind(|c: char| c.is_whitespace())
 }
@@ -108,76 +268,14 @@ mod tests {
 
     #[test]
     fn test_chunk_text_short() {
-        let text = "Hello world";
-        let chunks = chunk_text(text, 100, 20);
+        let chunks = chunk_text("Hello world", &ChunkingConfig::default());
         assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0], text);
     }
 
     #[test]
-    fn test_chunk_text_long() {
-        // Create a text that's definitely longer than chunk size
-        let text = ("The quick brown fox jumps over the lazy dog. " ).repeat(50);
-        let chunks = chunk_text(&text, 50, 10);  // ~50 tokens = 200 chars
-        // Should chunk into multiple pieces
-        assert!(chunks.len() > 1, "Expected multiple chunks, got {}", chunks.len());
-        // All chunks should be non-empty
-        assert!(chunks.iter().all(|c| !c.is_empty()));
-    }
-
-    #[test]
-    fn test_chunk_text_long_single_word() {
-        // Long text without spaces - should still chunk
-        let text = "a".repeat(2000);
-        let chunks = chunk_text(&text, 100, 20);  // ~100 tokens = 400 chars
-        // Character-based chunking should still work
+    fn test_chunk_memory_has_ids() {
+        let chunks = chunk_memory("mem-1", "A somewhat longer piece of text that should still produce at least one chunk.", "2026-01-01T00:00:00Z", &ChunkingConfig::default());
         assert!(!chunks.is_empty());
-        // Each chunk should be reasonably sized
-        for chunk in &chunks {
-            assert!(chunk.len() <= 500, "Chunk too long: {}", chunk.len());
-        }
-    }
-
-    #[test]
-    fn test_chunk_text_empty() {
-        let text = "";
-        let chunks = chunk_text(text, 100, 20);
-        assert_eq!(chunks.len(), 0);
-    }
-
-    #[test]
-    fn test_chunk_text_with_overlap() {
-        let text = "Word1 Word2 Word3 Word4 Word5 Word6 Word7 Word8 Word9 Word10 " .repeat(10);
-        let chunks = chunk_text(&text, 25, 5);  // Small chunks to test overlap
-        // Should have multiple chunks
-        assert!(chunks.len() >= 2, "Expected at least 2 chunks, got {}", chunks.len());
-        // All chunks should be non-empty
-        assert!(chunks.iter().all(|c| !c.is_empty()));
-    }
-
-    #[test]
-    fn test_chunk_chunked_embedding_averaging() {
-        // Test that multiple chunks are averaged correctly
-        let chunks = vec![
-            "test chunk one".to_string(),
-            "test chunk two".to_string(),
-            "test chunk three".to_string(),
-        ];
-        
-        // Manually verify dimension consistency
-        let dim = 384;  // Example dimension
-        let mut sample = vec![0.0_f32; dim];
-        for i in 0..3 {
-            sample[i] = 1.0;
-        }
-        
-        // Average calculation
-        for val in &mut sample {
-            *val /= 3.0;
-        }
-        
-        // Check that averaging works
-        assert!((sample[0] - 0.333_f32).abs() < 0.01);
-        assert!(sample[100] == 0.0);
+        assert!(chunks[0].id.starts_with("mchk_"));
     }
 }

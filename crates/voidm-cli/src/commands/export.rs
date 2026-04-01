@@ -2,7 +2,6 @@ use anyhow::Result;
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use voidm_core::{Config, crud_trait, models::MemoryEdge};
-use std::sync::Arc;
 
 #[derive(Args)]
 pub struct ExportArgs {
@@ -43,7 +42,7 @@ pub struct ExportMetadata {
     pub scopes_included: Vec<String>,
 }
 
-pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db::Database>, _config: &Config, _json: bool) -> Result<()> {
+pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db::Database>, _config: &Config, json: bool) -> Result<()> {
     
     let memories = crud_trait::list_memories_filtered(db, args.scope.as_deref(), None, Some(args.limit)).await?;
     let mut edges = Vec::new();
@@ -76,7 +75,13 @@ pub async fn run(args: ExportArgs, db: &std::sync::Arc<dyn voidm_db::Database>, 
                     scopes_included: scopes,
                 }),
             };
-            serde_json::to_string_pretty(&export_data)?
+            if json {
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "result": export_data,
+                }))?
+            } else {
+                serde_json::to_string_pretty(&export_data)?
+            }
         }
         "markdown" => {
             let mut md = String::new();

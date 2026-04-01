@@ -2,20 +2,26 @@
 
 #[cfg(test)]
 mod tests {
-    use voidm_core::chunking::{chunk_smart, ChunkingStrategy, BreakType};
+    use voidm_core::chunking::{ChunkingStrategy, BreakType};
     use voidm_core::validation::{validate_memory_length, MEMORY_SOFT_LIMIT, MEMORY_HARD_LIMIT};
     use voidm_core::coherence::{estimate_coherence, CoherenceScore};
 
     #[test]
     fn test_phase_a_chunking() {
-        let strategy = ChunkingStrategy::default();
+        let strategy = ChunkingStrategy {
+            target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+            min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+            max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+            overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+            smart_breaks: true,
+        };
         // Use content large enough to require multiple chunks
         let content = "First paragraph with more content to make it longer. This paragraph should be substantial enough to test chunking properly.\n\nSecond paragraph with more details and additional content. This should also be large enough to trigger chunking behavior.\n\nThird paragraph with additional information and context. Making sure it's long enough to push past the target size.\n\nFourth paragraph to ensure multiple chunks. More text here.";
         
         // Use a test memory ID
         let memory_id = "test-mem-123";
         let created_at = "2026-03-28T00:00:00Z";
-        let chunks = chunk_smart(memory_id, content, &strategy, created_at).unwrap();
+        let chunks = voidm_core::embeddings::chunk_memory(memory_id, content, created_at, &strategy);
         
         println!("Content length: {} chars", content.len());
         println!("Chunks: {}", chunks.len());
@@ -28,7 +34,7 @@ mod tests {
         assert!(chunks.iter().all(|c| c.id.starts_with("mchk_")), "All chunk IDs should have mchk_ prefix");
         
         // Test determinism: same memory_id + content = same chunk IDs
-        let chunks2 = chunk_smart(memory_id, content, &strategy, created_at).unwrap();
+        let chunks2 = voidm_core::embeddings::chunk_memory(memory_id, content, created_at, &strategy);
         for (c1, c2) in chunks.iter().zip(chunks2.iter()) {
             assert_eq!(c1.id, c2.id, "Same input should produce same chunk ID");
         }
@@ -43,13 +49,13 @@ mod tests {
         assert!(result.warning_message.is_none());
         
         // Optimal memory
-        let content = "a".repeat(5000);
+        let content = "a".repeat(2000);
         let result = validate_memory_length(&content).unwrap();
         assert!(result.is_within_soft_limit);
         assert!(result.is_within_target);
         
         // Over soft limit
-        let content = "a".repeat(15000);
+        let content = "a".repeat(3000);
         let result = validate_memory_length(&content).unwrap();
         assert!(!result.is_within_soft_limit);
         assert!(result.warning_message.is_some());
@@ -85,8 +91,14 @@ mod tests {
         println!("✓ Length validation: {} chars", validation.content_length);
         
         // 2. Chunk memory
-        let strategy = ChunkingStrategy::default();
-        let chunks = chunk_smart(memory_id, memory, &strategy, created_at).unwrap();
+        let strategy = ChunkingStrategy {
+            target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+            min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+            max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+            overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+            smart_breaks: true,
+        };
+        let chunks = voidm_core::embeddings::chunk_memory(memory_id, memory, created_at, &strategy);
         println!("✓ Chunked into {} chunks", chunks.len());
         
         // 3. Score each chunk

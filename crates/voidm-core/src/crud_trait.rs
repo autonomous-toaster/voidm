@@ -131,8 +131,6 @@ pub async fn list_scopes(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[tokio::test]
     async fn test_trait_crud_functions_exist() {
         // This test just verifies the functions compile and are callable

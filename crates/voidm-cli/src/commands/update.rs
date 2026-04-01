@@ -261,7 +261,9 @@ pub async fn check_update(args: CheckUpdateArgs) -> Result<()> {
     };
 
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "result": result,
+        }))?);
     } else {
         println!("Current version: {}", result.current_version);
         println!("Latest version:  {}", result.latest_version);

@@ -31,6 +31,10 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
         .as_ref()
         .map(|qe| qe.model.clone())
         .unwrap_or_else(|| "tinyllama".to_string());
+    let qe_backend = qe_config
+        .as_ref()
+        .map(|qe| qe.backend.clone())
+        .unwrap_or_default();
     let qe_enabled = qe_config
         .as_ref()
         .map(|qe| qe.enabled)
@@ -119,9 +123,15 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
     #[cfg(feature = "query-expansion")]
     {
         if qe_enabled {
-            print!("[4/5] Initializing query expansion model: {} ... ", qe_model);
+            print!("[4/5] Initializing query expansion model: {} ({:?}) ... ", qe_model, qe_backend);
             std::io::Write::flush(&mut std::io::stdout())?;
-            match query_expansion::ensure_llm_model(&qe_model).await {
+            match query_expansion::LocalGenerator::new(query_expansion::QueryExpansionConfig {
+                enabled: true,
+                model: qe_model.clone(),
+                backend: qe_backend,
+                timeout_ms: qe_config.as_ref().map(|qe| qe.timeout_ms).unwrap_or(10_000),
+                intent: query_expansion::IntentConfig::default(),
+            }).ensure_model().await {
                 Ok(_) => {
                     println!("✓");
                     initialized += 1;

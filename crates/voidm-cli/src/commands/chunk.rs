@@ -69,48 +69,47 @@ pub async fn run(args: ChunkArgs, db: &std::sync::Arc<dyn Database>) -> Result<(
     let mut total_chunks = 0;
     let mut total_coherence = 0.0;
     let mut memory_count = 0;
-    let mut failed_count = 0;
+    let failed_count = 0;
     let mut quality_dist = std::collections::HashMap::new();
 
-    let strategy = voidm_core::chunking::ChunkingStrategy::default();
+    let strategy = voidm_core::chunking::ChunkingStrategy {
+        target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+        min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+        max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+        overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+        smart_breaks: true,
+    };
 
     for (idx, (memory_id, content, created_at)) in memories.iter().enumerate() {
         debug!("[{}/{}] Chunking memory {}", idx + 1, memories.len(), memory_id);
 
-        match voidm_core::chunking::chunk_smart(&memory_id, &content, &strategy, &created_at) {
-            Ok(chunks) => {
-                let chunk_count = chunks.len();
-                let mut memory_coherence = 0.0;
+        let chunks = voidm_core::embeddings::chunk_memory(&memory_id, &content, &created_at, &strategy);
+        let chunk_count = chunks.len();
+        let mut memory_coherence = 0.0;
 
-                for chunk in chunks.iter() {
-                    let score = voidm_core::coherence::estimate_coherence(&chunk.content);
-                    memory_coherence += score.final_score();
-                    
-                    // Track quality distribution
-                    let quality = score.quality_level().to_string();
-                    *quality_dist.entry(quality).or_insert(0) += 1;
-                }
+        for chunk in chunks.iter() {
+            let score = voidm_core::coherence::estimate_coherence(&chunk.content);
+            memory_coherence += score.final_score();
 
-                let avg_coherence = if chunk_count > 0 {
-                    memory_coherence / chunk_count as f32
-                } else {
-                    0.0
-                };
-
-                info!(
-                    "[CHUNKING] Memory {}: {} chunks, coherence {:.2}",
-                    memory_id, chunk_count, avg_coherence
-                );
-
-                total_chunks += chunk_count;
-                total_coherence += avg_coherence;
-                memory_count += 1;
-            }
-            Err(e) => {
-                warn!("[CHUNKING] Failed to chunk memory {}: {}", memory_id, e);
-                failed_count += 1;
-            }
+            // Track quality distribution
+            let quality = score.quality_level().to_string();
+            *quality_dist.entry(quality).or_insert(0) += 1;
         }
+
+        let avg_coherence = if chunk_count > 0 {
+            memory_coherence / chunk_count as f32
+        } else {
+            0.0
+        };
+
+        info!(
+            "[CHUNKING] Memory {}: {} chunks, coherence {:.2}",
+            memory_id, chunk_count, avg_coherence
+        );
+
+        total_chunks += chunk_count;
+        total_coherence += avg_coherence;
+        memory_count += 1;
 
         // Progress indicator
         if (idx + 1) % 100 == 0 {

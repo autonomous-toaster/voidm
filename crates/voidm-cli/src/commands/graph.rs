@@ -74,7 +74,7 @@ pub struct ExportArgs {
 pub async fn run(cmd: GraphCommands, db: &std::sync::Arc<dyn voidm_db::Database>, json: bool) -> Result<()> {
     let graph_ops = db.graph_ops();
     match cmd {
-        GraphCommands::Cypher(args) => run_cypher(args, graph_ops.as_ref(), json).await,
+        GraphCommands::Cypher(args) => run_cypher(args, db, json).await,
         GraphCommands::Neighbors(args) => run_neighbors(args, db, graph_ops.as_ref(), json).await,
         GraphCommands::Path(args) => run_path(args, db, graph_ops.as_ref(), json).await,
         GraphCommands::Pagerank(args) => run_pagerank(args, graph_ops.as_ref(), json).await,
@@ -83,16 +83,39 @@ pub async fn run(cmd: GraphCommands, db: &std::sync::Arc<dyn voidm_db::Database>
     }
 }
 
-async fn run_cypher(args: CypherArgs, ops: &dyn voidm_db::graph_ops::GraphQueryOps, json: bool) -> Result<()> {
-    let rows = voidm_graph::cypher_read(ops, &args.query).await?;
+fn ensure_read_only_cypher(query: &str) -> Result<()> {
+    let upper = query.to_uppercase();
+    let forbidden = [
+        "CREATE ", "MERGE ", "DELETE ", "DETACH ", "SET ", "REMOVE ", "DROP ",
+        "CALL DBMS", "CALL DB.", "LOAD CSV", "FOREACH ", "WRITE",
+    ];
+    if forbidden.iter().any(|token| upper.contains(token)) {
+        anyhow::bail!("Only read-only Cypher is allowed (MATCH/OPTIONAL MATCH/WHERE/RETURN/WITH/ORDER BY/LIMIT)");
+    }
+    Ok(())
+}
+
+async fn run_cypher(args: CypherArgs, db: &std::sync::Arc<dyn voidm_db::Database>, json: bool) -> Result<()> {
+    ensure_read_only_cypher(&args.query)?;
+    let rows = db.query_cypher(&args.query, &serde_json::json!({})).await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
-    } else {
-        for row in &rows {
-            let line: Vec<String> = row.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
-            println!("{}", line.join("  |  "));
+        let count = rows.as_array().map(|a| a.len()).unwrap_or(0);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "count": count,
+            "results": rows,
+        }))?);
+    } else if let Some(items) = rows.as_array() {
+        for row in items {
+            if let Some(obj) = row.as_object() {
+                let line: Vec<String> = obj.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
+                println!("{}", line.join("  |  "));
+            } else {
+                println!("{}", row);
+            }
         }
-        println!("{} row(s)", rows.len());
+        println!("{} row(s)", items.len());
+    } else {
+        println!("{}", rows);
     }
     Ok(())
 }
@@ -111,7 +134,10 @@ async fn run_neighbors(args: NeighborsArgs, db: &Arc<dyn Database>, ops: &dyn vo
     };
     let results = voidm_graph::neighbors(ops, &id, args.depth, args.rel.as_deref()).await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&results)?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "count": results.len(),
+            "results": results,
+        }))?);
     } else {
         if results.is_empty() {
             println!("No neighbors found for '{}' at depth {}.", id, args.depth);
@@ -158,7 +184,10 @@ async fn run_path(args: PathArgs, db: &Arc<dyn Database>, ops: &dyn voidm_db::gr
         }
         Some(path) => {
             if json {
-                println!("{}", serde_json::to_string_pretty(&path)?);
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                    "count": path.len(),
+                    "results": path,
+                }))?);
             } else {
                 let parts: Vec<String> = path.iter().map(|s| {
                     if let Some(ref r) = s.rel_type {
@@ -181,7 +210,10 @@ async fn run_pagerank(args: PagerankArgs, ops: &dyn voidm_db::graph_ops::GraphQu
         let v: Vec<_> = results.iter()
             .map(|(id, score)| serde_json::json!({"id": id, "score": score}))
             .collect();
-        println!("{}", serde_json::to_string_pretty(&v)?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "count": v.len(),
+            "results": v,
+        }))?);
     } else {
         if results.is_empty() {
             println!("No memories in graph yet. Use 'voidm add' and 'voidm link' to build the graph.");
@@ -198,9 +230,11 @@ async fn run_stats(db: &Arc<dyn Database>, json: bool) -> Result<()> {
     let stats = db.get_graph_stats().await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "node_count": stats.node_count,
-            "edge_count": stats.edge_count,
-            "rel_type_counts": stats.edges_by_type.iter().map(|(t, c)| (t.clone(), c)).collect::<std::collections::HashMap<_, _>>()
+            "result": {
+                "node_count": stats.node_count,
+                "edge_count": stats.edge_count,
+                "rel_type_counts": stats.edges_by_type.iter().map(|(t, c)| (t.clone(), c)).collect::<std::collections::HashMap<_, _>>()
+            }
         }))?);
     } else {
         println!("Nodes: {}", stats.node_count);
@@ -287,9 +321,11 @@ async fn export_json(db: &Arc<dyn Database>, _args: ExportArgs) -> Result<()> {
     let data = db.get_graph_export_data().await?;
 
     let result = json!({
-        "memories": data.memories.iter().map(|m| json!({"id": m.id, "type": m.mem_type})).collect::<Vec<_>>(),
-        "concepts": data.concepts.iter().map(|c| json!({"id": c.id, "name": c.name})).collect::<Vec<_>>(),
-        "edges": data.edges.iter().map(|e| json!({"from": e.from_id, "to": e.to_id, "type": e.rel_type})).collect::<Vec<_>>(),
+        "result": {
+            "memories": data.memories.iter().map(|m| json!({"id": m.id, "type": m.mem_type})).collect::<Vec<_>>(),
+            "concepts": data.concepts.iter().map(|c| json!({"id": c.id, "name": c.name})).collect::<Vec<_>>(),
+            "edges": data.edges.iter().map(|e| json!({"from": e.from_id, "to": e.to_id, "type": e.rel_type})).collect::<Vec<_>>()
+        }
     });
 
     println!("{}", serde_json::to_string_pretty(&result)?);

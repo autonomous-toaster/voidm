@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
-use voidm_core::{Config, embeddings};
+use voidm_core::embeddings;
 
 #[derive(Subcommand)]
 pub enum ModelsCommands {
@@ -11,20 +11,15 @@ pub enum ModelsCommands {
         /// Model name
         model: String,
     },
-    /// Re-embed all memories with the current (or specified) model
-    Reembed {
-        /// Model to use (default: configured model)
-        #[arg(long)]
-        model: Option<String>,
-        #[arg(long, default_value = "32")]
-        batch_size: usize,
-    },
 }
 
 pub fn run_list(json: bool) -> Result<()> {
     let models = embeddings::list_models();
     if json {
-        println!("{}", serde_json::to_string_pretty(&models)?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "count": models.len(),
+            "results": models,
+        }))?);
     } else {
         println!("{:<35} {:>6}  {}", "Model", "Dims", "Description");
         println!("{}", "-".repeat(70));
@@ -35,18 +30,24 @@ pub fn run_list(json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn run(cmd: ModelsCommands, db: &std::sync::Arc<dyn voidm_db::Database>, config: &Config, json: bool) -> Result<()> {
+pub async fn run(cmd: ModelsCommands, json: bool) -> Result<()> {
     match cmd {
         ModelsCommands::List => run_list(json),
         ModelsCommands::Download { model } => {
             eprintln!("Downloading model '{}'...", model);
             // fastembed downloads automatically on first use
             let _ = embeddings::embed_text(&model, "warmup")?;
-            eprintln!("Model '{}' ready.", model);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                    "result": {
+                        "downloaded": true,
+                        "model": model,
+                    }
+                }))?);
+            } else {
+                eprintln!("Model '{}' ready.", model);
+            }
             Ok(())
-        }
-        ModelsCommands::Reembed { model: _, batch_size: _ } => {
-            Err(anyhow::anyhow!("Reembed requires Phase 1.3 implementation (backend trait methods)"))
         }
     }
 }

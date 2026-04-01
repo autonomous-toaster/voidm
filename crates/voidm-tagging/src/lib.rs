@@ -24,6 +24,7 @@ pub async fn find_memories_with_shared_tags(
         .collect();
 
     // Get all memories with their tags
+    //FIXME: use cypher instead of fetching all and filtering in memory
     let all_memories = db.fetch_memories_raw(None, None, 10000).await?;
 
     let mut results = vec![];
@@ -80,6 +81,7 @@ pub async fn link_exists(
     target_id: &str,
 ) -> Result<bool> {
     // Try to get edges between the two memories
+    //FIXME: use cypher instead of fetching all and filtering in memory
     let edges = db.list_edges().await?;
     
     for edge in edges {

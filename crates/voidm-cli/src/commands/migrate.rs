@@ -7,11 +7,11 @@ use std::io::Write;
 #[derive(Parser, Clone)]
 pub struct MigrateArgs {
     /// Source backend: 'sqlite' or 'neo4j'
-    #[arg(value_name = "SOURCE")]
+    #[arg(long, value_name = "SOURCE")]
     pub from: String,
 
     /// Destination backend: 'sqlite' or 'neo4j'
-    #[arg(value_name = "DEST")]
+    #[arg(long, value_name = "DEST")]
     pub to: String,
 
     /// Only migrate scopes matching this pattern (optional)
@@ -189,16 +189,18 @@ pub async fn run(args: MigrateArgs, config: &voidm_core::Config, cli_db: Option<
         println!("  Entity Edges:   {} migrated, {} skipped", entity_edge_migrated, entity_edge_skipped);
         println!("\n✓ Migration complete!");
     } else {
-        println!("{}", serde_json::json!({
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
             "status": "success",
+            "source_backend": from_backend,
+            "destination_backend": to_backend,
             "memories": {"migrated": mem_migrated, "skipped": mem_skipped},
             "chunks": {"migrated": chunk_migrated, "skipped": chunk_skipped},
             "tags": {"migrated": tag_migrated, "skipped": tag_skipped},
             "entities": {"migrated": entity_migrated, "skipped": entity_skipped},
             "edges": {"migrated": edge_migrated, "skipped": edge_skipped},
             "tag_edges": {"migrated": tag_edge_migrated, "skipped": tag_edge_skipped},
-            "entity_edges": {"migrated": entity_edge_migrated, "skipped": entity_edge_skipped},
-        }));
+            "entity_edges": {"migrated": entity_edge_migrated, "skipped": entity_edge_skipped}
+        }))?);
     }
 
     Ok(())
@@ -211,7 +213,7 @@ async fn migrate_memories(
     scope_filter: &Option<String>,
     skip_ids: &std::collections::HashSet<String>,
     dry_run: bool,
-    update_all: bool,
+    _update_all: bool,
     json: bool,
 ) -> Result<(u32, u32)> {
     let memories_json = source.list_memories(Some(10000)).await?;
@@ -263,7 +265,46 @@ async fn migrate_memories(
 
         let req_json = serde_json::to_value(&req)?;
         let config_json = serde_json::to_value(config)?;
-        let _ = dest.add_memory(req_json, &config_json).await?;
+        let resp_json = dest.add_memory(req_json, &config_json).await?;
+        let response: voidm_db::models::AddMemoryResponse = serde_json::from_value(resp_json)
+            .context("Failed to parse add_memory response during migration")?;
+        let persisted = dest.get_memory(&response.id).await?
+            .and_then(|v| v.get("id").and_then(|id| id.as_str()).map(|s| s == response.id))
+            .unwrap_or(false);
+        if !persisted {
+            anyhow::bail!("Destination did not persist memory {} after add_memory", response.id);
+        }
+
+        let existing_chunks = dest.fetch_chunks(100000).await?
+            .into_iter()
+            .filter(|(_, _, memory_id)| memory_id == &response.id)
+            .count();
+        if existing_chunks == 0 {
+            let chunk_config = voidm_core::embeddings::ChunkingConfig {
+                target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+                min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+                max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+                overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+                smart_breaks: true,
+            };
+            let chunks = voidm_core::embeddings::chunk_memory(&response.id, &mem.content, &mem.created_at, &chunk_config);
+            for chunk in chunks {
+                dest.upsert_chunk(
+                    &chunk.id,
+                    &response.id,
+                    &chunk.content,
+                    chunk.index,
+                    chunk.size,
+                    &chunk.created_at,
+                ).await?;
+                if config.embeddings.enabled {
+                    if let Ok(embedding) = voidm_core::embeddings::embed_text(&config.embeddings.model, &chunk.content) {
+                        let _ = dest.store_chunk_embedding(chunk.id.clone(), response.id.clone(), embedding).await?;
+                    }
+                }
+            }
+        }
+
         migrated += 1;
 
         if !json && migrated % 100 == 0 {
@@ -492,34 +533,64 @@ async fn validate_migration(
 ) -> Result<()> {
     let src_mem = source.count_nodes("Memory").await.unwrap_or(0);
     let dst_mem = dest.count_nodes("Memory").await.unwrap_or(0);
-    
+
+    let src_memories = source.list_memories(Some(100_000)).await.unwrap_or_default();
+    let dst_memories = dest.list_memories(Some(100_000)).await.unwrap_or_default();
+    let src_memory_ids: std::collections::HashSet<String> = src_memories.iter()
+        .filter_map(|v| v.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+        .collect();
+    let dst_memory_ids: std::collections::HashSet<String> = dst_memories.iter()
+        .filter_map(|v| v.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+        .collect();
+    let missing_memory_ids: Vec<String> = src_memory_ids.difference(&dst_memory_ids).take(10).cloned().collect();
+    let extra_memory_ids: Vec<String> = dst_memory_ids.difference(&src_memory_ids).take(10).cloned().collect();
+
     let src_chunk = source.count_nodes("MemoryChunk").await.unwrap_or(0);
     let dst_chunk = dest.count_nodes("MemoryChunk").await.unwrap_or(0);
-    
+    let chunk_backfilled = src_chunk == 0 && dst_chunk >= src_mem;
+
     let src_tag = source.count_nodes("Tag").await.unwrap_or(0);
     let dst_tag = dest.count_nodes("Tag").await.unwrap_or(0);
-    
+    let src_tag_edges = source.count_edges(Some("HAS_TAG")).await.unwrap_or(0);
+    let dst_tag_edges = dest.count_edges(Some("HAS_TAG")).await.unwrap_or(0);
+    let tags_reconstructed = src_tag == 0 && src_tag_edges == 0 && dst_tag > 0 && dst_tag_edges > 0;
+
     let src_entity = source.count_nodes("Entity").await.unwrap_or(0);
     let dst_entity = dest.count_nodes("Entity").await.unwrap_or(0);
 
-    let mut all_match = true;
+    let mem_ok = src_mem == dst_mem && missing_memory_ids.is_empty() && extra_memory_ids.is_empty();
+    let chunk_ok = src_chunk == dst_chunk || chunk_backfilled;
+    let tag_ok = src_tag == dst_tag || tags_reconstructed;
+    let entity_ok = src_entity == dst_entity;
 
     if !json {
-        println!("  Memory:       {} → {} {}", src_mem, dst_mem, if src_mem == dst_mem { "✓" } else { "✗" });
-        println!("  Chunks:       {} → {} {}", src_chunk, dst_chunk, if src_chunk == dst_chunk { "✓" } else { "✗" });
-        println!("  Tags:         {} → {} {}", src_tag, dst_tag, if src_tag == dst_tag { "✓" } else { "✗" });
-        println!("  Entities:     {} → {} {}", src_entity, dst_entity, if src_entity == dst_entity { "✓" } else { "✗" });
+        println!("  Memory:       {} → {} {}", src_mem, dst_mem, if mem_ok { "✓" } else { "✗" });
+        if !missing_memory_ids.is_empty() {
+            println!("    Missing IDs (sample): {}", missing_memory_ids.join(", "));
+        }
+        if !extra_memory_ids.is_empty() {
+            println!("    Extra IDs (sample): {}", extra_memory_ids.join(", "));
+        }
+        if chunk_backfilled {
+            println!("  Chunks:       {} → {} ✓ (backfilled during migration)", src_chunk, dst_chunk);
+        } else {
+            println!("  Chunks:       {} → {} {}", src_chunk, dst_chunk, if chunk_ok { "✓" } else { "✗" });
+        }
+        if tags_reconstructed {
+            println!("  Tags:         {} → {} ✓ (reconstructed from memory tags/add-flow)", src_tag, dst_tag);
+        } else {
+            println!("  Tags:         {} → {} {}", src_tag, dst_tag, if tag_ok { "✓" } else { "✗" });
+        }
+        println!("  Entities:     {} → {} {}", src_entity, dst_entity, if entity_ok { "✓" } else { "✗" });
     }
 
-    if src_mem != dst_mem || src_chunk != dst_chunk || src_tag != dst_tag || src_entity != dst_entity {
-        all_match = false;
-        if !json {
-            println!("\n⚠️  Warning: Count mismatch detected!");
-        }
+    let all_match = mem_ok && chunk_ok && tag_ok && entity_ok;
+    if !all_match && !json {
+        println!("\n⚠️  Warning: Count mismatch detected!");
     }
 
     if all_match && !json {
-        println!("\n✓ All counts match!");
+        println!("\n✓ All counts match or were intentionally reconstructed!");
     }
 
     Ok(())

@@ -8,12 +8,16 @@ pub struct StatsArgs {}
 pub async fn run(_args: StatsArgs, db: &std::sync::Arc<dyn voidm_db::Database>, config: &Config, json: bool) -> Result<()> {
     // Get all statistics from database trait method (no sqlx here!)
     let mut stats = db.get_statistics().await?;
-    
-    // Add DB file size
-    let db_path = config.db_path(None);
-    stats.db_size_bytes = std::fs::metadata(&db_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+
+    // Add DB file size only for SQLite backend. Neo4j is not path-backed here.
+    if config.database.backend == "sqlite" {
+        let db_path = config.db_path(None);
+        stats.db_size_bytes = std::fs::metadata(&db_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+    } else {
+        stats.db_size_bytes = 0;
+    }
 
     if json {
         let mut type_map = serde_json::Map::new();
@@ -25,20 +29,22 @@ pub async fn run(_args: StatsArgs, db: &std::sync::Arc<dyn voidm_db::Database>, 
             .collect();
 
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "memories": {
-                "total": stats.total_memories,
-                "by_type": type_map,
-                "embedded": stats.embedding_coverage.total_embeddings,
-                "embedding_coverage_pct": stats.embedding_coverage.coverage_percentage.round() as i64
-            },
-            "scopes": stats.scopes_count,
-            "tags": stats.top_tags.iter().map(|(t, c)| serde_json::json!({"tag": t, "count": c})).collect::<Vec<_>>(),
-            "graph": {
-                "nodes": stats.graph.node_count,
-                "edges": stats.graph.edge_count,
-                "by_rel_type": edge_map
-            },
-            "db_size_bytes": stats.db_size_bytes,
+            "result": {
+                "memories": {
+                    "total": stats.total_memories,
+                    "by_type": type_map,
+                    "embedded": stats.embedding_coverage.total_embeddings,
+                    "embedding_coverage_pct": stats.embedding_coverage.coverage_percentage.round() as i64
+                },
+                "scopes": stats.scopes_count,
+                "tags": stats.top_tags.iter().map(|(t, c)| serde_json::json!({"tag": t, "count": c})).collect::<Vec<_>>(),
+                "graph": {
+                    "nodes": stats.graph.node_count,
+                    "edges": stats.graph.edge_count,
+                    "by_rel_type": edge_map
+                },
+                "db_size_bytes": stats.db_size_bytes
+            }
         }))?);
     } else {
         println!("Memories:  {} total", stats.total_memories);

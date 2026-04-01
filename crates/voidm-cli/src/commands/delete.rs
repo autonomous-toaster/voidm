@@ -39,7 +39,9 @@ pub async fn run(args: DeleteArgs, db: &Arc<dyn Database>, json: bool) -> Result
     let deleted = crud_trait::delete_memory(db, &id).await?;
     if deleted {
         if json {
-            println!("{}", serde_json::json!({ "deleted": true, "id": id }));
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "result": { "deleted": true, "id": id }
+            }))?);
         } else {
             println!("Deleted memory '{}'", id);
         }

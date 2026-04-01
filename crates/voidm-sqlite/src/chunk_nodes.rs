@@ -7,7 +7,6 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
-use uuid::Uuid;
 
 /// Compute character positions for chunks with proper byte offsets
 ///
@@ -29,8 +28,8 @@ pub fn compute_chunk_positions(text: &str, chunks: &[String]) -> Vec<(usize, usi
                 chunk.clone(),
             ));
 
-            // Move position forward (but keep overlap region for next search)
-            current_pos = absolute_end.saturating_sub(100); // Rough overlap of ~100 chars
+            // Move position forward (but keep configured default overlap region for next search)
+            current_pos = absolute_end.saturating_sub(voidm_core::embeddings::DEFAULT_OVERLAP);
         } else {
             // Fallback: just add sequential positions
             let start = current_pos;
@@ -70,7 +69,7 @@ pub async fn store_chunks_as_nodes(
             "INSERT OR IGNORE INTO nodes (id, type, properties, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
         )
         .bind(&chunk_id)
-        .bind("Chunk")
+        .bind("MemoryChunk")
         .bind(properties.to_string())
         .bind(&now)
         .bind(&now)
@@ -106,9 +105,8 @@ pub async fn reconstruct_from_chunks(
     pool: &SqlitePool,
     memory_id: &str,
 ) -> Result<String> {
-    // Get all HAS_CHUNK edges ordered by sequence_num
     let rows = sqlx::query_as::<_, (String,)>(
-        "SELECT properties FROM edges WHERE from_id = ? AND edge_type = 'HAS_CHUNK' ORDER BY json_extract(properties, '$.sequence_num') ASC"
+        "SELECT to_id FROM edges WHERE from_id = ? AND edge_type = 'HAS_CHUNK' ORDER BY json_extract(properties, '$.sequence_num') ASC"
     )
     .bind(memory_id)
     .fetch_all(pool)
@@ -117,21 +115,16 @@ pub async fn reconstruct_from_chunks(
 
     let mut chunks = Vec::new();
 
-    for (props_json,) in rows {
-        if let Ok(props) = serde_json::from_str::<Value>(&props_json) {
-            if let Some(to_id) = props.get("chunk_id").and_then(|v| v.as_str()) {
-                // Get chunk node content
-                if let Ok(Some((node_props,))) = sqlx::query_as::<_, (String,)>(
-                    "SELECT properties FROM nodes WHERE id = ? AND type = 'Chunk'"
-                )
-                .bind(to_id)
-                .fetch_optional(pool)
-                .await {
-                    if let Ok(node) = serde_json::from_str::<Value>(&node_props) {
-                        if let Some(content) = node.get("content").and_then(|v| v.as_str()) {
-                            chunks.push(content.to_string());
-                        }
-                    }
+    for (to_id,) in rows {
+        if let Ok(Some((node_props,))) = sqlx::query_as::<_, (String,)>(
+            "SELECT properties FROM nodes WHERE id = ? AND type = 'MemoryChunk'"
+        )
+        .bind(&to_id)
+        .fetch_optional(pool)
+        .await {
+            if let Ok(node) = serde_json::from_str::<Value>(&node_props) {
+                if let Some(content) = node.get("content").and_then(|v| v.as_str()) {
+                    chunks.push(content.to_string());
                 }
             }
         }

@@ -95,8 +95,12 @@ mod tests {
         let mut results = vec![
             SearchResult {
                 id: "test1".to_string(),
+                object_type: "memory".to_string(),
                 memory_type: "test".to_string(),
                 content: "test".to_string(),
+                content_truncated: false,
+                content_source: "memory_truncate".to_string(),
+                context_chunks: Vec::new(),
                 score: 1.0,
                 importance: 10,
                 tags: vec![],
@@ -128,8 +132,12 @@ mod tests {
         let mut results = vec![
             SearchResult {
                 id: "high".to_string(),
+                object_type: "memory".to_string(),
                 memory_type: "test".to_string(),
                 content: "test".to_string(),
+                content_truncated: false,
+                content_source: "memory_truncate".to_string(),
+                context_chunks: Vec::new(),
                 score: 1.0,
                 importance: 9,
                 tags: vec![],
@@ -145,8 +153,12 @@ mod tests {
             },
             SearchResult {
                 id: "low".to_string(),
+                object_type: "memory".to_string(),
                 memory_type: "test".to_string(),
                 content: "test".to_string(),
+                content_truncated: false,
+                content_source: "memory_truncate".to_string(),
+                context_chunks: Vec::new(),
                 score: 1.0,
                 importance: 5,
                 tags: vec![],

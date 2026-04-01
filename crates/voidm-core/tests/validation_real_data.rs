@@ -4,7 +4,7 @@
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use voidm_core::chunking::{chunk_smart, ChunkingStrategy};
+    use voidm_core::chunking::ChunkingStrategy;
     use voidm_core::coherence::estimate_coherence;
 
     #[derive(Debug, Clone)]
@@ -12,6 +12,7 @@ mod tests {
         id: String,
         content: String,
         memory_type: String,
+        created_at: String,
     }
 
     fn get_db_path() -> PathBuf {
@@ -26,7 +27,7 @@ mod tests {
         // Use sqlite3 command-line tool to query
         let output = std::process::Command::new("sqlite3")
             .arg(&db_path)
-            .arg(&format!("SELECT id, content, type FROM memories ORDER BY RANDOM() LIMIT {};", limit))
+            .arg(&format!("SELECT id, content, type, created_at FROM memories ORDER BY RANDOM() LIMIT {};", limit))
             .output()?;
 
         if !output.status.success() {
@@ -37,12 +38,13 @@ mod tests {
         let stdout = String::from_utf8(output.stdout)?;
         
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.splitn(3, '|').collect();
-            if parts.len() == 3 {
+            let parts: Vec<&str> = line.splitn(4, '|').collect();
+            if parts.len() == 4 {
                 memories.push(Memory {
                     id: parts[0].to_string(),
                     content: parts[1].to_string(),
                     memory_type: parts[2].to_string(),
+                    created_at: parts[3].to_string(),
                 });
             }
         }
@@ -77,7 +79,13 @@ mod tests {
         println!("Loaded {} real memories from SQLite", memories.len());
         println!("{}\n", "=".repeat(70));
 
-        let strategy = ChunkingStrategy::default();
+        let strategy = ChunkingStrategy {
+            target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+            min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+            max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+            overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+            smart_breaks: true,
+        };
         let mut smart_stats = Vec::new();
         let mut total_smart_coherence = 0.0;
         let mut total_chunks = 0usize;
@@ -90,7 +98,7 @@ mod tests {
                 &memory.content[..60.min(memory.content.len())].replace('\n', " "));
 
             // Smart chunking
-            match chunk_smart(&memory.id, &memory.content, &strategy, &memory.created_at) {
+            match Ok(voidm_core::embeddings::chunk_memory(&memory.id, &memory.content, &memory.created_at, &strategy)) {
                 Ok(chunks) => {
                     println!("  ✅ Smart chunking: {} chunks", chunks.len());
                     
@@ -201,7 +209,13 @@ mod tests {
             return;
         }
 
-        let strategy = ChunkingStrategy::default();
+        let strategy = ChunkingStrategy {
+            target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+            min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+            max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+            overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+            smart_breaks: true,
+        };
         let mut smart_total = 0.0;
         let mut naive_total = 0.0;
         let mut count = 0;
@@ -210,7 +224,7 @@ mod tests {
             println!("\nMemory: {} ({} chars)", memory.id, memory.content.len());
 
             // Smart chunking
-            if let Ok(smart_chunks) = chunk_smart(&memory.id, &memory.content, &strategy, &memory.created_at) {
+            if let Ok(smart_chunks) = Ok(voidm_core::embeddings::chunk_memory(&memory.id, &memory.content, &memory.created_at, &strategy)) {
                 let smart_avg: f32 = smart_chunks.iter()
                     .map(|c| estimate_coherence(&c.content).final_score())
                     .sum::<f32>() / smart_chunks.len().max(1) as f32;
@@ -220,8 +234,14 @@ mod tests {
             }
 
             // Naive chunking  
-            if let Ok(naive_chunks) = chunk_smart(&memory.id, &memory.content, 
-                &ChunkingStrategy { smart_breaks: false, ..Default::default() }) {
+            if let Ok(naive_chunks) = Ok(voidm_core::embeddings::chunk_memory(&memory.id, &memory.content, &memory.created_at,
+                &ChunkingStrategy {
+                    target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+                    min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+                    max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+                    overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+                    smart_breaks: false,
+                })) {
                 let naive_avg: f32 = naive_chunks.iter()
                     .map(|c| estimate_coherence(&c.content).final_score())
                     .sum::<f32>() / naive_chunks.len().max(1) as f32;

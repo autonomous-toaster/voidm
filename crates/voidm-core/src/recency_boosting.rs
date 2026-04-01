@@ -76,14 +76,14 @@ pub fn boost_by_recency(
 /// Parse ISO 8601 timestamp to Unix seconds.
 fn parse_timestamp(ts_str: &str) -> Result<u64, Box<dyn std::error::Error>> {
     // Simple ISO 8601 parser for format: "2026-03-24T12:34:56Z"
-    use chrono::DateTime;
+    use chrono::{DateTime, TimeZone};
     
     let dt = DateTime::parse_from_rfc3339(ts_str)
         .or_else(|_| {
             // Fallback: try parsing without timezone
             chrono::NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H:%M:%S")
                 .map(|ndt| {
-                    let dt = DateTime::<chrono::Utc>::from_utc(ndt, chrono::Utc);
+                    let dt = chrono::Utc.from_utc_datetime(&ndt);
                     dt.with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())
                 })
         })?;
@@ -123,8 +123,12 @@ mod tests {
         
         let mut results = vec![SearchResult {
             id: "test1".to_string(),
+            object_type: "memory".to_string(),
             memory_type: "test".to_string(),
             content: "test".to_string(),
+            content_truncated: false,
+            content_source: "memory_truncate".to_string(),
+            context_chunks: Vec::new(),
             score: 1.0,
             importance: 5,
             tags: vec![],

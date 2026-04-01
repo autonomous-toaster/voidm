@@ -8,10 +8,7 @@
 //! Inference is fast (~0.8ms per text on CPU).
 
 use anyhow::{Context, Result};
-use once_cell::sync::OnceCell;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -38,32 +35,22 @@ impl Default for SemanticDedupConfig {
 
 // ─── Model state ──────────────────────────────────────────────────────────────
 
-/// Cached embedding model (using tokenizer + inference).
-struct SemanticModel {
-    // Model state - currently unused as we delegate to system embeddings
-    // Future: will hold ONNX session for faster inference
-}
-
-static SEMANTIC_MODEL: OnceCell<Arc<Mutex<SemanticModel>>> = OnceCell::new();
-
+#[cfg(feature = "ort")]
 const SEMANTIC_MODEL_ID: &str = "sentence-transformers/all-MiniLM-L6-v2";
+#[cfg(feature = "ort")]
 const SEMANTIC_TOKENIZER_FILE: &str = "tokenizer.json";
 
 // ─── Init & download ──────────────────────────────────────────────────────────
 
-/// Load the semantic dedup model (download on first use). Idempotent.
+/// Load the semantic dedup support files (download on first use). Idempotent.
 #[cfg(feature = "ort")]
 pub async fn ensure_semantic_model() -> Result<()> {
-    if SEMANTIC_MODEL.get().is_some() {
-        return Ok(());
-    }
-    let model = load_or_download().await?;
-    let _ = SEMANTIC_MODEL.set(Arc::new(Mutex::new(model)));
+    load_or_download().await?;
     Ok(())
 }
 
 #[cfg(feature = "ort")]
-async fn load_or_download() -> Result<SemanticModel> {
+async fn load_or_download() -> Result<()> {
     let cache_dir = semantic_cache_dir();
     std::fs::create_dir_all(&cache_dir)
         .with_context(|| format!("Cannot create semantic dedup cache dir: {}", cache_dir.display()))?;
@@ -85,7 +72,8 @@ async fn load_or_download() -> Result<SemanticModel> {
         eprintln!("✅ Semantic dedup model ready at: {}\n", cache_dir.display());
     }
 
-    build_model(&tokenizer_path)
+    let _ = tokenizer_path;
+    Ok(())
 }
 
 #[cfg(feature = "ort")]
@@ -108,13 +96,6 @@ async fn download_model_files(cache_dir: &PathBuf) -> Result<()> {
         .context("Failed to copy tokenizer to cache")?;
 
     Ok(())
-}
-
-fn build_model(_tokenizer_path: &PathBuf) -> Result<SemanticModel> {
-    // For now, we don't need to load anything here
-    // The tokenizer is cached but embeddings come from the system embeddings model
-    // Future: load ONNX model here for faster inference
-    Ok(SemanticModel {})
 }
 
 // ─── Cache directory ──────────────────────────────────────────────────────────

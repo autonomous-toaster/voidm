@@ -14,7 +14,6 @@ use tracing::{info, debug, warn};
 /// Neo4j database connection wrapper
 pub struct Neo4jDb {
     graph: Arc<Graph>,
-    url: String,
 }
 
 impl Neo4jDb {
@@ -30,10 +29,7 @@ impl Neo4jDb {
 
         info!("✅ Connected to Neo4j");
 
-        Ok(Neo4jDb {
-            graph,
-            url: uri.to_string(),
-        })
+        Ok(Neo4jDb { graph })
     }
 
     /// Create schema (constraints and indexes)

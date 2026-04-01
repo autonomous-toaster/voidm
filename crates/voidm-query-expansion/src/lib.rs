@@ -50,6 +50,20 @@ fn default_intent_use_scope_as_fallback() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationBackend {
+    Onnx,
+    LlamaCpp,
+    Mlx,
+}
+
+impl Default for GenerationBackend {
+    fn default() -> Self {
+        Self::Onnx
+    }
+}
+
 /// Query expansion configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryExpansionConfig {
@@ -60,6 +74,9 @@ pub struct QueryExpansionConfig {
     /// Uses ONNX-compatible models from HuggingFace for efficient query expansion.
     #[serde(default = "default_query_expansion_model")]
     pub model: String,
+    /// Generation backend. Current implemented runtime is ONNX; other values are reserved for future backends.
+    #[serde(default)]
+    pub backend: GenerationBackend,
     /// Maximum time to wait for expansion in milliseconds (default: 300).
     #[serde(default = "default_query_expansion_timeout_ms")]
     pub timeout_ms: u64,
@@ -81,9 +98,22 @@ impl Default for QueryExpansionConfig {
         Self {
             enabled: false,
             model: default_query_expansion_model(),
+            backend: GenerationBackend::Onnx,
             timeout_ms: default_query_expansion_timeout_ms(),
             intent: IntentConfig::default(),
         }
+    }
+}
+
+pub fn parse_generation_backend(name: &str) -> Result<GenerationBackend> {
+    match name {
+        "onnx" => Ok(GenerationBackend::Onnx),
+        "llama_cpp" => Ok(GenerationBackend::LlamaCpp),
+        "mlx" => Ok(GenerationBackend::Mlx),
+        other => Err(anyhow::anyhow!(
+            "Unsupported generation backend '{}'. Expected: onnx, llama_cpp, mlx",
+            other
+        )),
     }
 }
 
@@ -536,6 +566,44 @@ pub struct QueryExpander {
     config: QueryExpansionConfig,
 }
 
+pub struct LocalGenerator {
+    config: QueryExpansionConfig,
+}
+
+impl LocalGenerator {
+    pub fn new(config: QueryExpansionConfig) -> Self {
+        Self { config }
+    }
+
+    pub async fn ensure_model(&self) -> Result<()> {
+        match self.config.backend {
+            GenerationBackend::Onnx => ensure_llm_model(&self.config.model).await,
+            GenerationBackend::LlamaCpp => Err(anyhow::anyhow!(
+                "llama_cpp generation backend not implemented yet for model '{}'",
+                self.config.model
+            )),
+            GenerationBackend::Mlx => Err(anyhow::anyhow!(
+                "mlx generation backend not implemented yet for model '{}'",
+                self.config.model
+            )),
+        }
+    }
+
+    pub async fn generate_once(&self, prompt: &str) -> Result<String> {
+        match self.config.backend {
+            GenerationBackend::Onnx => QueryExpander::run_inference(prompt, &self.config.model).await,
+            GenerationBackend::LlamaCpp => Err(anyhow::anyhow!(
+                "llama_cpp generation backend not implemented yet for model '{}'",
+                self.config.model
+            )),
+            GenerationBackend::Mlx => Err(anyhow::anyhow!(
+                "mlx generation backend not implemented yet for model '{}'",
+                self.config.model
+            )),
+        }
+    }
+}
+
 impl QueryExpander {
     /// Create a new query expander with the given configuration.
     pub fn new(config: QueryExpansionConfig) -> Self {
@@ -900,10 +968,10 @@ impl QueryExpander {
         let model = self.config.model.clone();
         
         // Use ONNX backend for query expansion
-        tracing::debug!("Query expansion: Using ONNX backend for model: '{}'", model);
+        tracing::debug!("Query expansion: Using {:?} backend for model: '{}'", self.config.backend, model);
         
         // FIRST: Ensure model is loaded (outside timeout, can take time for download)
-        ensure_llm_model(&model).await?;
+        LocalGenerator::new(self.config.clone()).ensure_model().await?;
         
         // NOW: Apply timeout only to inference (should be fast)
         let timeout_duration = Duration::from_millis(self.config.timeout_ms);
@@ -989,12 +1057,10 @@ impl QueryExpander {
         const MAX_NEW_TOKENS: usize = 10;  // Optimized: 10 tokens for ~3-4 synonyms
         const MAX_SEQ_LEN: usize = 512;    // Sequence length limit
         const EOS_TOKEN: i64 = 2;          // End-of-sequence token ID
-        const COMMA_TOKEN: i64 = 29892;    // Token ID for comma (typical for LLMs)
-        
         let mut generated_tokens = Vec::new();
         
         // Autoregressive text generation (greedy decoding)
-        for step in 0..MAX_NEW_TOKENS {
+        for _step in 0..MAX_NEW_TOKENS {
             if input_ids.len() >= MAX_SEQ_LEN {
                 break;
             }

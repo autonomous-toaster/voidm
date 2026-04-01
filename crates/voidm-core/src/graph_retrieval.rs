@@ -177,11 +177,17 @@ pub async fn find_related_by_tags(
                 let overlap_pct = (overlap_count as f32 / query_tags_strs.len().max(memory.tags.len()) as f32) * 100.0;
                 let score = (overlap_pct / 100.0) * config.decay_factor;
 
+                let content = memory.content;
+                let content_truncated = !content.is_empty();
                 related.push(SearchResult {
                     id: memory.id,
+                    object_type: "memory".to_string(),
                     score,
                     memory_type: memory.memory_type,
-                    content: memory.content,
+                    content,
+                    content_truncated,
+                    content_source: "memory_truncate".to_string(),
+                    context_chunks: Vec::new(),
                     scopes: memory.scopes,
                     tags: memory.tags,
                     importance: memory.importance,
@@ -421,9 +427,13 @@ mod tests {
     fn create_search_result(id: &str, tags: Vec<String>) -> SearchResult {
         SearchResult {
             id: id.to_string(),
+            object_type: "memory".to_string(),
             score: 0.9,
             memory_type: "note".to_string(),
             content: format!("Memory {}", id),
+            content_truncated: false,
+            content_source: "memory_truncate".to_string(),
+            context_chunks: Vec::new(),
             scopes: vec![],
             tags,
             importance: 0,

@@ -76,31 +76,24 @@ voidm search "auth" --verbose  # Shows tag-based and concept-based results
 
 ---
 
-### 📝 Auto-Tagging (Fully Functional)
+### 📝 Auto-Tagging (TinyLLaMA Feature-Gated)
 
-Automatic tag generation from memory content using NER + TF + type-specific rules.
+Strict content→tags auto-generation is now implemented behind the `tinyllama` feature.
 
-```bash
-$ voidm add "Attended Docker conference in San Francisco" --type episodic --tags "conference"
+What is implemented and proved:
+- strict TinyLLaMA-backed tag generation in normal SQLite add flow
+- generated tags persisted as normal memory tags
+- generated tags also stored in `metadata.auto_generated_tags`
+- canonical `Memory -> HAS_TAG -> Tag` persistence is proved in SQLite
 
-Tags:       conference, attended, docker, san, francisco
-Auto-Tags:  attended, docker, san, francisco (4 from NER, 3 from TF)
-Quality:    ~65% (good for suggestions, user-filterable)
-```
+What remains caveated:
+- Neo4j auto-tagging is feature-gated and proved via integration coverage against the dev/test database
+- TinyLLaMA generation still depends on local model/runtime availability and is not a zero-dependency path
 
-**What it does:**
-- **NER**: Extracts people, organizations, locations (~50ms)
-- **TF**: Finds frequent keywords excluding stopwords (~10ms)
-- **Type-specific rules**: Domain patterns based on memory type (~10ms)
-
-**Configuration** (in `~/.config/voidm/config.toml`):
-```toml
-[tagging]
-enabled = true
-ner_enabled = true              # Entity extraction
-tf_enabled = true               # Keyword frequency
-min_tf_score = 0.3              # Threshold for keywords
-```
+Usage notes:
+- enable the `tinyllama` feature to turn on strict local generation
+- if disabled, explicit `--tags` remain the safe/default path
+- tag-based auto-linking still works once tags exist
 
 ---
 
@@ -122,7 +115,7 @@ voidm add "SOAP for APIs" --tags "api,soap,xml"
 - Bidirectional linking (discoverable from either direction)
 - Case-insensitive tag matching
 - Configurable limit (default: 5 links per memory)
-- Uses both user-provided and auto-generated tags
+- Uses user-provided tags for linking
 - Deduplicates redundant edges
 
 **Configuration**:
@@ -174,9 +167,10 @@ suffix_length = 2
 
 Text is automatically chunked before embedding to ensure consistent quality for all memory sizes.
 
-- **Default chunk size**: 512 tokens (~2KB)
-- **Default overlap**: 50 tokens (~200 chars, maintains context)
-- **Method**: Character-based with word-boundary breaks (no mid-word splits)
+- **Default chunk target**: 600 characters
+- **Chunk bounds**: 150-900 characters
+- **Default overlap**: 100 characters
+- **Method**: Smart semantic chunking (paragraph → sentence → word → character fallback)
 - **Aggregation**: Average embeddings of all chunks
 
 **Benefits:**
@@ -609,7 +603,7 @@ Choose which features to enable based on your use case:
 | **Knowledge Organization** |
 | Knowledge Graph | ✅ Always | <1ms edges | <1MB per 1K edges | Typed relationships |
 | Ontology (Concepts + IS-A) | ✅ Default | <10ms | <1MB per 100 concepts | Hierarchical classes |
-| Auto-Tagging (NER + TF) | ✅ Default | +75ms | Minimal | Saves manual work |
+| Auto-Tagging | ✅ Feature-gated (`tinyllama`) | model-dependent | local LLM model/runtime | Strict generated tags in normal add flow |
 | Auto-Linking | ✅ Optional | +50-100ms | Minimal | Discoverable graph |
 | **Advanced Features** |
 | NER (Named Entity Recognition) | ✅ Optional | 150-170ms | 103MB model | Entity extraction |
@@ -805,12 +799,12 @@ voidm/
 **Backend Selection** (in config.toml):
 ```toml
 [database]
-backend = "sqlite"    # Options: sqlite, postgres, neo4j
+backend = "sqlite"    # Options: sqlite, neo4j
 ```
 
 **Environment Variables**:
 - `VOIDM_CONFIG` — Override config location (useful for testing multiple backends)
-- `VOIDM_DATABASE` — Override database path (SQLite only)
+- `VOIDM_DB` — Override SQLite database path (SQLite backend only)
 
 **Search Pipeline:**
 ```
@@ -866,7 +860,7 @@ where:
 
 ## Recent Improvements (Session 2026-03-20 to 2026-03-23)
 
-✅ **Text Chunking**: Consistent 512-token chunks with 50-token overlap for large memories  
+✅ **Text Chunking**: Consistent smart chunks (target 600 chars, 100-char overlap) for large memories  
 ✅ **HyDE Query Expansion**: Hypothetical document generation for better semantic search  
 ✅ **Graph Retrieval in RRF**: Tag and concept-based result expansion integrated into search  
 ✅ **NER Feature Gating**: Optional dependency handling with clean builds  

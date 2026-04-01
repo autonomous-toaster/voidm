@@ -31,10 +31,18 @@ pub async fn resolve_id_sqlite(pool: &SqlitePool, id: &str) -> Result<String> {
     row.context("ID not found")
 }
 
-/// Get all scopes for a memory - BACKEND UTILITY
+/// Get all scopes for a memory from canonical graph truth.
+/// `memory_scopes` is compatibility-only and must not be treated as canonical.
 pub async fn get_scopes(pool: &SqlitePool, memory_id: &str) -> Result<Vec<String>> {
     let scopes: Vec<String> = sqlx::query_scalar(
-        "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+        "SELECT json_extract(n.properties, '$.name')
+         FROM edges e
+         JOIN nodes n ON n.id = e.to_id
+         WHERE e.from_id = ?
+           AND e.edge_type = 'HAS_SCOPE'
+           AND n.type = 'Scope'
+           AND json_extract(n.properties, '$.name') IS NOT NULL
+         ORDER BY json_extract(n.properties, '$.name')"
     )
     .bind(memory_id)
     .fetch_all(pool)

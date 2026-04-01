@@ -19,17 +19,27 @@ pub async fn run(cmd: &ConfigCommands, json: bool) -> Result<()> {
     match cmd {
         ConfigCommands::Show => {
             let config = Config::load();
+            let mut redacted = serde_json::to_value(&config)?;
+            crate::output::redact_secret_values(&mut redacted);
             if json {
-                println!("{}", serde_json::to_string_pretty(&config)?);
+                crate::output::print_result(&redacted)?;
             } else {
-                println!("{}", toml::to_string_pretty(&config)?);
+                println!("{}", serde_json::to_string_pretty(&redacted)?);
             }
         }
         ConfigCommands::Set { key, value } => {
             let mut config = Config::load();
             apply_config_key(&mut config, key, value)?;
             save_config(&config)?;
-            eprintln!("Set {} = {}", key, value);
+            if json {
+                crate::output::print_result(&serde_json::json!({
+                    "updated": true,
+                    "key": key,
+                    "value": value,
+                }))?;
+            } else {
+                eprintln!("Set {} = {}", key, value);
+            }
         }
     }
     Ok(())
@@ -42,13 +52,33 @@ fn apply_config_key(config: &mut Config, key: &str, value: &str) -> Result<()> {
         "search.mode" => config.search.mode = value.to_string(),
         "search.default_limit" => config.search.default_limit = value.parse()?,
         "search.min_score" => config.search.min_score = value.parse()?,
+        "search.query_expansion.backend" => {
+            if value == "onnx" || value == "llama_cpp" || value == "mlx" {
+                #[cfg(feature = "query-expansion")]
+                {
+                    let qe = config.search.query_expansion.get_or_insert_with(Default::default);
+                    qe.backend = voidm_core::query_expansion::parse_generation_backend(value)?;
+                }
+                #[cfg(not(feature = "query-expansion"))]
+                anyhow::bail!("query-expansion feature is not enabled in this build");
+            } else {
+                anyhow::bail!("Invalid search.query_expansion.backend '{}'. Valid: onnx, llama_cpp, mlx", value)
+            }
+        }
+        "enrichment.auto_tagging.backend" => {
+            if value == "onnx" || value == "llama_cpp" || value == "mlx" {
+                config.enrichment.auto_tagging.backend = value.to_string();
+            } else {
+                anyhow::bail!("Invalid enrichment.auto_tagging.backend '{}'. Valid: onnx, llama_cpp, mlx", value)
+            }
+        },
         "insert.auto_link_threshold" => config.insert.auto_link_threshold = value.parse()?,
         "insert.duplicate_threshold" => config.insert.duplicate_threshold = value.parse()?,
         "insert.auto_link_limit" => config.insert.auto_link_limit = value.parse()?,
         "database.backend" => config.database.backend = value.to_string(),
         "database.sqlite_path" => config.database.sqlite_path = value.to_string(),
         "database.path" => config.database.path = Some(value.to_string()), // legacy
-        other => anyhow::bail!("Unknown config key: '{}'. Valid keys: embeddings.model, embeddings.enabled, search.mode, search.default_limit, search.min_score, insert.auto_link_threshold, insert.duplicate_threshold, insert.auto_link_limit, database.backend, database.sqlite_path, database.path", other),
+        other => anyhow::bail!("Unknown config key: '{}'. Valid keys: embeddings.model, embeddings.enabled, search.mode, search.default_limit, search.min_score, search.query_expansion.backend, enrichment.auto_tagging.backend, insert.auto_link_threshold, insert.duplicate_threshold, insert.auto_link_limit, database.backend, database.sqlite_path, database.path", other),
     }
     Ok(())
 }

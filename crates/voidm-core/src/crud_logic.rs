@@ -52,7 +52,7 @@ impl MemoryCreationPreparer {
     /// Prepare the request by applying all business logic
     pub fn prepare(self) -> Result<PreparedMemory> {
         // Generate ID if not provided
-        let id = self.req.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let id = self.req.id.unwrap_or_else(|| format!("mem_{}", Uuid::new_v4()));
 
         // Generate timestamp
         let created_at = chrono::Utc::now().to_rfc3339();
@@ -97,9 +97,10 @@ fn compute_quality_score(content: &str, memory_type: &MemoryType) -> f32 {
         MemoryType::Contextual => voidm_scoring::MemoryType::Contextual,
     };
 
-    // Use voidm_scoring to compute
+    // Use voidm_scoring to compute, then apply oversized-memory penalty
     let quality = voidm_scoring::compute_quality_score(content, &quality_mt);
-    quality.score
+    let penalty = crate::memory_policy::large_memory_quality_penalty(content.len());
+    (quality.score - penalty).max(0.0)
 }
 
 /// Extract string field from metadata JSON object
@@ -131,7 +132,7 @@ mod tests {
 
         let prepared = MemoryCreationPreparer::new(req).prepare().unwrap();
         assert!(!prepared.id.is_empty());
-        assert!(prepared.id.len() == 36); // UUID v4 length
+        assert!(prepared.id.starts_with("mem_"));
     }
 
     #[test]
@@ -253,6 +254,25 @@ mod tests {
         let prepared = MemoryCreationPreparer::new(req).prepare().unwrap();
         assert!(prepared.quality_score > 0.0);
         assert!(prepared.quality_score <= 1.0);
+    }
+
+    #[test]
+    fn test_large_memory_penalizes_quality() {
+        let req = AddMemoryRequest {
+            id: None,
+            memory_type: MemoryType::Semantic,
+            content: "a ".repeat(2000),
+            scopes: vec![],
+            tags: vec![],
+            importance: 5,
+            metadata: serde_json::json!({}),
+            links: vec![],
+            context: None,
+            title: None,
+        };
+
+        let prepared = MemoryCreationPreparer::new(req).prepare().unwrap();
+        assert!(prepared.quality_score < 0.95);
     }
 
     #[test]

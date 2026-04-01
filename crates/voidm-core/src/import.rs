@@ -4,7 +4,6 @@
 
 use anyhow::{anyhow, Result};
 use std::io::{BufRead, BufReader, Read};
-use std::collections::HashSet;
 
 use crate::export::{ExportRecord, MemoryRecord, ChunkRecord, RelationshipRecord, ConceptRecord};
 
@@ -304,6 +303,29 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_memory_accepts_procedural_type() {
+        let mem = MemoryRecord {
+            id: "typed".to_string(),
+            content: "content".to_string(),
+            memory_type: "procedural".to_string(),
+            created_at: "2026-03-31T00:00:00Z".to_string(),
+            updated_at: None,
+            title: None,
+            scope: None,
+            scopes: None,
+            tags: None,
+            metadata: None,
+            provenance: None,
+            context: None,
+            importance: Some(5),
+            quality_score: Some(0.8),
+        };
+
+        let result = validate_memory(&mem);
+        assert!(result.is_valid);
+    }
+
+    #[test]
     fn test_validate_chunk_with_embedding() {
         let chunk = ChunkRecord {
             id: "chunk-id".to_string(),
@@ -348,6 +370,7 @@ mod tests {
             target_id: "tgt".to_string(),
             note: None,
             created_at: None,
+            properties: None,
         };
 
         let result = validate_relationship(&rel);
@@ -362,6 +385,7 @@ mod tests {
             target_id: "tgt".to_string(),
             note: None,
             created_at: None,
+            properties: None,
         };
 
         let result = validate_relationship(&rel);

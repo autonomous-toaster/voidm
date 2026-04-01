@@ -28,7 +28,10 @@ pub async fn run(args: ListArgs, db: &Arc<dyn Database>, _config: &Config, json:
     ).await?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&memories)?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "count": memories.len(),
+            "results": memories,
+        }))?);
     } else {
         if memories.is_empty() {
             println!("No memories found.");

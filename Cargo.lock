@@ -4824,10 +4824,12 @@ dependencies = [
  "anyhow",
  "dirs 6.0.0",
  "fastembed",
+ "hf-hub 0.5.0",
  "once_cell",
  "serde",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4866,10 +4868,12 @@ dependencies = [
  "neo4rs",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "uuid",
  "voidm-core",
  "voidm-db",
+ "voidm-ner",
  "voidm-scoring",
 ]
 
@@ -4976,6 +4980,7 @@ dependencies = [
  "uuid",
  "voidm-core",
  "voidm-db",
+ "voidm-embeddings",
  "voidm-scoring",
 ]
 

@@ -1,3 +1,5 @@
+#![cfg(feature = "ner")]
+
 use voidm_core::ner::{extract_entities, NamedEntity};
 
 /// Golden labels for diverse entity extraction test cases

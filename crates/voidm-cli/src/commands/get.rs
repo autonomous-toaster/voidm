@@ -32,7 +32,9 @@ pub async fn run(args: GetArgs, db: &std::sync::Arc<dyn Database>, json: bool) -
         }
         Some(m) => {
             if json {
-                println!("{}", serde_json::to_string_pretty(&m)?);
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                    "result": m,
+                }))?);
             } else {
                 println!("ID:         {}", m.id);
                 println!("Type:       {}", m.memory_type);

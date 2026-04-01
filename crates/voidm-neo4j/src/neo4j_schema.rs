@@ -15,7 +15,6 @@
 /// graph.execute(constraint_query).await?;
 /// ```
 
-use anyhow::Result;
 use std::collections::HashMap;
 
 /// Neo4j schema definition for MemoryChunk

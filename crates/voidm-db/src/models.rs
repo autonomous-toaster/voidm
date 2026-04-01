@@ -449,6 +449,7 @@ pub struct GraphStats {
 pub struct GraphExportData {
     pub memories: Vec<GraphMemory>,
     pub concepts: Vec<GraphConcept>,
+    pub nodes: Vec<GenericGraphNode>,
     pub edges: Vec<GraphEdge>,
 }
 
@@ -466,10 +467,19 @@ pub struct GraphConcept {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenericGraphNode {
+    pub id: String,
+    pub node_type: String,
+    pub properties: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphEdge {
     pub from_id: String,
     pub to_id: String,
     pub rel_type: String,
+    #[serde(default)]
+    pub properties: serde_json::Value,
 }
 
 #[cfg(test)]

@@ -99,9 +99,12 @@ mod tests {
         // Verify that SearchResult has source field that can be set to graph_tags/graph_concepts
         let mut result = voidm_core::search::SearchResult {
             id: "test".to_string(),
+            object_type: "memory".to_string(),
             score: 0.8,
             memory_type: "semantic".to_string(),
             content: "test content".to_string(),
+            content_truncated: false,
+            content_source: "memory_truncate".to_string(),
             scopes: vec![],
             tags: vec![],
             importance: 5,

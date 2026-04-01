@@ -62,6 +62,8 @@ pub struct RelationshipRecord {
     pub target_id: String,
     pub note: Option<String>,
     pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<serde_json::Value>,
 }
 
 /// Concept export record
@@ -188,6 +190,7 @@ mod tests {
             target_id: "tgt".to_string(),
             note: Some("supports this".to_string()),
             created_at: Some("2026-03-28T00:00:00Z".to_string()),
+            properties: None,
         });
 
         let json = record_to_jsonl(&record).unwrap();
@@ -222,6 +225,33 @@ mod tests {
                 assert_eq!(c.id, "concept-id");
             }
             _ => panic!("Expected Concept record"),
+        }
+    }
+
+    #[test]
+    fn test_memory_record_type_roundtrip() {
+        let record = ExportRecord::Memory(MemoryRecord {
+            id: "mem-type-test".to_string(),
+            content: "typed memory".to_string(),
+            memory_type: "procedural".to_string(),
+            created_at: "2026-03-31T00:00:00Z".to_string(),
+            updated_at: Some("2026-03-31T00:00:00Z".to_string()),
+            title: None,
+            scope: None,
+            scopes: Some(vec!["work".to_string()]),
+            tags: Some(vec!["ops".to_string()]),
+            metadata: Some(serde_json::json!({"a": 1})),
+            provenance: None,
+            context: None,
+            importance: Some(5),
+            quality_score: Some(0.7),
+        });
+
+        let json = record_to_jsonl(&record).unwrap();
+        let parsed = jsonl_to_record(&json).unwrap();
+        match parsed {
+            ExportRecord::Memory(m) => assert_eq!(m.memory_type, "procedural"),
+            _ => panic!("Expected memory record"),
         }
     }
 

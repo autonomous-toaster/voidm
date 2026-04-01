@@ -1,22 +1,11 @@
 /// Memory length validation with soft and hard limits.
-///
-/// Constraints:
-/// - Soft limit: 6,000 chars (warning, just above target)
-/// - Hard limit: 15,000 chars (absolute maximum)
-/// - Target: 3,000-8,000 chars (optimal range)
-///
-/// Rationale:
-/// - Phase A targets 350 chars per chunk
-/// - Memory > 8K creates 20+ chunks (coherence degrades)
-/// - Memory > 15K becomes unwieldy for embedding/NLI
-/// - Soft limit at 6K catches oversized memories early
 
 use anyhow::{anyhow, Result};
+use crate::memory_policy::{MEMORY_HARD_LIMIT, MEMORY_WARNING_LENGTH};
 
-pub const MEMORY_SOFT_LIMIT: usize = 6_000;      // Just above target, catches oversized
-pub const MEMORY_HARD_LIMIT: usize = 15_000;     // Absolute max before embedding issues
-pub const MEMORY_TARGET_MIN: usize = 3_000;      // Minimum for meaningful content
-pub const MEMORY_TARGET_MAX: usize = 8_000;      // Maximum for good coherence
+pub const MEMORY_SOFT_LIMIT: usize = MEMORY_WARNING_LENGTH;
+pub const MEMORY_TARGET_MIN: usize = 150;
+pub const MEMORY_TARGET_MAX: usize = 2_500;
 
 #[derive(Debug, Clone)]
 pub struct MemoryLengthValidation {
@@ -31,8 +20,8 @@ pub struct MemoryLengthValidation {
 ///
 /// # Returns
 /// - Ok(validation) if within hard limit
-/// - Err if exceeds hard limit (50K)
-/// - validation.warning_message contains soft limit warning if 10K+ exceeded
+/// - Err if exceeds hard limit
+/// - validation.warning_message contains soft limit warning if 2.5K+ exceeded
 ///
 /// # Example
 /// ```
@@ -59,9 +48,10 @@ pub fn validate_memory_length(content: &str) -> Result<MemoryLengthValidation> {
 
     let warning_message = if !is_within_soft_limit {
         Some(format!(
-            "⚠️  Memory is {} chars (soft limit: {} chars). \
-             Target: {}-{} chars. Consider splitting for better coherence.",
-            length, MEMORY_SOFT_LIMIT, MEMORY_TARGET_MIN, MEMORY_TARGET_MAX
+            "Memory is {} chars (soft limit: {} chars). \
+             Retrieval will stay chunk-based and quality score will be penalized. \
+             Consider splitting into more focused memories.",
+            length, MEMORY_SOFT_LIMIT
         ))
     } else {
         None
@@ -102,7 +92,7 @@ mod tests {
 
     #[test]
     fn test_validate_optimal_content() {
-        let content = "a".repeat(5000); // 5000 chars, within target
+        let content = "a".repeat(2000); // 2000 chars, within target
         let result = validate_memory_length(&content).unwrap();
         assert!(result.is_within_soft_limit);
         assert!(result.is_within_hard_limit);
@@ -112,7 +102,7 @@ mod tests {
 
     #[test]
     fn test_validate_soft_limit_warning() {
-        let content = "a".repeat(15000); // 15K chars, exceeds soft limit
+        let content = "a".repeat(3000); // exceeds soft limit, below hard limit
         let result = validate_memory_length(&content).unwrap();
         assert!(!result.is_within_soft_limit);
         assert!(result.is_within_hard_limit);
@@ -173,13 +163,13 @@ mod tests {
 
     #[test]
     fn test_is_optimal_length_yes() {
-        let content = "a".repeat(5000);
+        let content = "a".repeat(600);
         assert!(is_optimal_length(&content));
     }
 
     #[test]
     fn test_is_optimal_length_no() {
-        let content = "a".repeat(1000); // Too short
+        let content = "a".repeat(100); // Too short
         assert!(!is_optimal_length(&content));
     }
 }

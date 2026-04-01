@@ -6,8 +6,10 @@
 //!
 //! Run with: cargo test --test semantic_dedup_twopass_benchmark -- --nocapture --ignored
 
+#![cfg(feature = "ml-core")]
+
 use std::time::Instant;
-use voidm_core::semantic_dedup;
+use voidm_embeddings::semantic_dedup;
 
 #[derive(Debug, Clone)]
 struct ConceptPair {

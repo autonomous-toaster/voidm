@@ -69,8 +69,12 @@ mod tests {
     fn create_test_result(id: &str, quality: Option<f32>) -> SearchResult {
         SearchResult {
             id: id.to_string(),
+            object_type: "memory".to_string(),
             memory_type: "test".to_string(),
             content: "test".to_string(),
+            content_truncated: false,
+            content_source: "memory_truncate".to_string(),
+            context_chunks: Vec::new(),
             score: 1.0,
             importance: 5,
             tags: vec![],

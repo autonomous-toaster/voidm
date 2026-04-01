@@ -7,7 +7,7 @@ pub mod passage;
 pub mod semantic_dedup;
 
 // Re-export configs and chunking utilities
-pub use chunking::{chunk_text, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP};
+pub use chunking::{chunk_text, chunk_memory, ChunkingConfig, OwnedChunk, BreakType, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP};
 pub use passage::PassageExtractionConfig;
 pub use semantic_dedup::SemanticDedupConfig;
 
@@ -85,14 +85,14 @@ pub fn embed_batch(model_name: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> 
 
 /// Embed text with consistent chunking for large memories.
 ///
-/// Automatically chunks text into `chunk_size` token segments with overlap,
+/// Automatically chunks text into `chunk_size` character segments with overlap,
 /// embeds each chunk, and returns the average embedding.
 /// This ensures consistent embedding quality regardless of input length.
 ///
 /// # Arguments
 /// * `model_name` - Name of the embedding model to use
 /// * `text` - Text to embed
-/// * `chunk_size` - Target chunk size in tokens (default: 512)
+/// * `chunk_size` - Target chunk size in characters (default: 600)
 ///
 /// # Returns
 /// Average embedding vector across all chunks
@@ -101,7 +101,10 @@ pub fn embed_text_chunked(
     text: &str,
     chunk_size: usize,
 ) -> Result<Vec<f32>> {
-    let chunks = chunk_text(text, chunk_size, DEFAULT_OVERLAP);
+    let chunks = chunk_text(text, &ChunkingConfig {
+        target_size: chunk_size,
+        ..ChunkingConfig::default()
+    });
 
     if chunks.is_empty() {
         // Empty text should still return a valid embedding

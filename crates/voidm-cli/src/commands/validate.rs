@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use voidm_db::Database;
-use voidm_core::chunking::{chunk_smart, ChunkingStrategy};
+use voidm_core::chunking::ChunkingStrategy;
 use voidm_core::coherence::estimate_coherence;
 use std::time::Instant;
 use tracing::{info, warn, debug};
@@ -33,7 +33,13 @@ pub async fn run(args: ValidationArgs, db: &std::sync::Arc<dyn Database>) -> Res
     info!("Loaded {} memories from backend", memories_raw.len());
     info!("───────────────────────────────────────────────────────────────────");
 
-    let strategy = ChunkingStrategy::default();
+    let strategy = ChunkingStrategy {
+        target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+        min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+        max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+        overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+        smart_breaks: true,
+    };
     let mut smart_stats = Vec::new();
     let mut total_smart_coherence = 0.0;
     let mut total_chunks = 0usize;
@@ -46,45 +52,39 @@ pub async fn run(args: ValidationArgs, db: &std::sync::Arc<dyn Database>) -> Res
 
         // Smart chunking with timing
         let start = Instant::now();
-        match chunk_smart(&id, &content, &strategy, &created_at) {
-            Ok(chunks) => {
-                let elapsed = start.elapsed();
-                total_time += elapsed;
-                
-                info!("[Memory {}] Smart chunking: {} chunks ({:.1}ms)", 
-                    idx + 1, chunks.len(), elapsed.as_secs_f32() * 1000.0);
-                
-                let mut memory_coherence = 0.0;
+        let chunks = voidm_core::embeddings::chunk_memory(&id, &content, &created_at, &strategy);
+        let elapsed = start.elapsed();
+        total_time += elapsed;
 
-                for (chunk_idx, chunk) in chunks.iter().enumerate() {
-                    let score = estimate_coherence(&chunk.content);
-                    let final_score = score.final_score();
-                    memory_coherence += final_score;
-                    
-                    let level = score.quality_level();
-                    debug!("  Chunk {}: {} chars, coherence {:.2} {}", 
-                        chunk_idx, chunk.size, final_score, level);
-                }
+        info!("[Memory {}] Smart chunking: {} chunks ({:.1}ms)", 
+            idx + 1, chunks.len(), elapsed.as_secs_f32() * 1000.0);
 
-                let avg_coherence = if chunks.is_empty() { 
-                    0.0 
-                } else { 
-                    memory_coherence / chunks.len() as f32 
-                };
+        let mut memory_coherence = 0.0;
 
-                info!("[Memory {}] Avg coherence: {:.2}", idx + 1, avg_coherence);
-                smart_stats.push((id.clone(), avg_coherence, chunks.len()));
-                total_smart_coherence += avg_coherence;
-                total_chunks += chunks.len();
+        for (chunk_idx, chunk) in chunks.iter().enumerate() {
+            let score = estimate_coherence(&chunk.content);
+            let final_score = score.final_score();
+            memory_coherence += final_score;
 
-                // Alert if low coherence
-                if avg_coherence < 0.75 {
-                    warn!("[Memory {}] Low coherence (< 0.75)", idx + 1);
-                }
-            }
-            Err(e) => {
-                warn!("[Memory {}] Smart chunking failed: {}", idx + 1, e);
-            }
+            let level = score.quality_level();
+            debug!("  Chunk {}: {} chars, coherence {:.2} {}", 
+                chunk_idx, chunk.size, final_score, level);
+        }
+
+        let avg_coherence = if chunks.is_empty() { 
+            0.0 
+        } else { 
+            memory_coherence / chunks.len() as f32 
+        };
+
+        info!("[Memory {}] Avg coherence: {:.2}", idx + 1, avg_coherence);
+        smart_stats.push((id.clone(), avg_coherence, chunks.len()));
+        total_smart_coherence += avg_coherence;
+        total_chunks += chunks.len();
+
+        // Alert if low coherence
+        if avg_coherence < 0.75 {
+            warn!("[Memory {}] Low coherence (< 0.75)", idx + 1);
         }
     }
 

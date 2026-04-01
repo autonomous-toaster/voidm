@@ -17,7 +17,7 @@ pub struct Cli {
     #[arg(long, global = true, env = "VOIDM_CONFIG")]
     pub config: Option<String>,
 
-    /// Override database path [env: VOIDM_DB]
+    /// Override SQLite database path [env: VOIDM_DB] (SQLite backend only)
     #[arg(long, global = true, env = "VOIDM_DB")]
     pub db: Option<String>,
 
@@ -75,12 +75,6 @@ pub enum Commands {
     Migrate(commands::migrate::MigrateArgs),
     /// Check for new releases on GitHub
     CheckUpdate(commands::update::CheckUpdateArgs),
-    /// Validate Phase A chunking algorithm on real data
-    Validate(commands::validate::ValidationArgs),
-    /// Part D: Chunk memories and store in Neo4j
-    Chunk(commands::chunk::ChunkArgs),
-    /// Part E: Generate embeddings for all chunks
-    Embed(commands::embed::EmbedArgs),
 }
 
 #[tokio::main]
@@ -117,8 +111,8 @@ async fn main() {
             }
         }
         Err(_) => {
-            // Default: suppress ORT logs, show info level for app
-            "info,ort=off,ort::logging=off".to_string()
+            // Default: keep command stdout clean for humans/agents; logs only when explicitly requested.
+            "error,ort=off,ort::logging=off".to_string()
         }
     };
     
@@ -144,7 +138,7 @@ async fn main() {
 /// Emit an error. In JSON mode: `{"error": "..."}` on stdout. Otherwise: `Error: ...` on stderr.
 pub fn emit_error(msg: &str, json: bool) {
     if json {
-        println!("{}", serde_json::json!({ "error": msg }));
+        crate::output::print_error(msg);
     } else {
         eprintln!("Error: {msg}");
     }
@@ -183,6 +177,7 @@ async fn run(cli: Cli) -> Result<()> {
 
     // Load config
     let config = Config::load_from(cli.config.as_deref());
+    config.validate_generation_backends()?;
     
     // Route to appropriate backend - independent paths, no pool mixing
     match config.database.backend.as_str() {
@@ -208,20 +203,17 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Delete(args) => commands::delete::run(args, &db, cli.json).await,
                 Commands::Link(args) => commands::link::run(args, &db, cli.json).await,
                 Commands::Unlink(args) => commands::unlink::run(args, &db, cli.json).await,
-                Commands::Graph(_) => Err(anyhow::anyhow!("Graph commands require Phase 1.3 implementation (voidm-graph backend abstraction)")),
+                Commands::Graph(cmd) => commands::graph::run(cmd, &db, cli.json).await,
                 Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, cli.json).await,
                 Commands::Export(args) => commands::export::run(args, &db, &config, cli.json).await,
                 Commands::Config(_) => unreachable!(),
-                Commands::Models(cmd) => commands::models::run(cmd, &db, &config, cli.json).await,
+                Commands::Models(cmd) => commands::models::run(cmd, cli.json).await,
                 Commands::Instructions(_) => unreachable!(),
                 Commands::Info(_) => unreachable!(),
                 Commands::Init(_) => unreachable!(),
                 Commands::Migrate(_) => unreachable!(),
                 Commands::CheckUpdate(_) => unreachable!(),
-                Commands::Validate(args) => commands::validate::run(args, &db).await,
-                Commands::Chunk(args) => commands::chunk::run(args, &db).await,
-                Commands::Embed(args) => commands::embed::run(args, &db).await,
-                Commands::Stats(_) => Err(anyhow::anyhow!("Stats require Phase 1.3 implementation (backend trait methods)")),
+                Commands::Stats(args) => commands::stats::run(args, &db, &config, cli.json).await,
             }
         }
         "sqlite" | _ => {
@@ -257,15 +249,12 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Scopes(cmd) => commands::scopes::run(cmd, &db, cli.json).await,
                 Commands::Export(args) => commands::export::run(args, &db, &config, cli.json).await,
                 Commands::Config(_) => unreachable!(),
-                Commands::Models(cmd) => commands::models::run(cmd, &db, &config, cli.json).await,
+                Commands::Models(cmd) => commands::models::run(cmd, cli.json).await,
                 Commands::Instructions(_) => unreachable!(),
                 Commands::Info(_) => unreachable!(),
                 Commands::Init(_) => unreachable!(),
                 Commands::Migrate(_) => unreachable!(),
                 Commands::CheckUpdate(_) => unreachable!(),
-                Commands::Validate(args) => commands::validate::run(args, &db).await,
-                Commands::Chunk(args) => commands::chunk::run(args, &db).await,
-                Commands::Embed(args) => commands::embed::run(args, &db).await,
                 Commands::Stats(args) => commands::stats::run(args, &db, &config, cli.json).await,
             };
 

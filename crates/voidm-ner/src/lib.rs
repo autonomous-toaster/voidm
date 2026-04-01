@@ -10,7 +10,6 @@ use anyhow::{Context, Result};
 use once_cell::sync::OnceCell;
 use ort::session::Session;
 use ort::value::Tensor;
-use std::path::PathBuf;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -394,9 +393,9 @@ fn extract_technical_entities(text: &str) -> Vec<NamedEntity> {
             let end = start + word.len();
             
             // Check multiple patterns:
-            let is_constant = (
+            let is_constant =
                 // Pattern 1: ALL_CAPS_WITH_UNDERSCORES (most reliable)
-                (word.len() > 2 
+                (word.len() > 2
                     && word.chars().all(|c| c.is_uppercase() || c == '_' || c.is_numeric())
                     && word.contains('_'))
                 // Pattern 2: lowercase_with_underscores (often config/db params)
@@ -405,11 +404,10 @@ fn extract_technical_entities(text: &str) -> Vec<NamedEntity> {
                     && word.contains('_')
                     && word.chars().filter(|c| c.is_lowercase()).count() > 1)
                 // Pattern 3: COMMON_CONSTANTS (DEBUG, INFO, WARN, ERROR, etc. without underscore)
-                || (word.len() >= 3 
+                || (word.len() >= 3
                     && word.len() <= 10
                     && word.chars().all(|c| c.is_uppercase())
-                    && ["DEBUG", "INFO", "WARN", "ERROR", "TRACE", "FATAL", "TEST", "PROD", "DEV", "STAGING"].contains(word))
-            );
+                    && ["DEBUG", "INFO", "WARN", "ERROR", "TRACE", "FATAL", "TEST", "PROD", "DEV", "STAGING"].contains(word));
             
             // Filter out common false positives
             let is_false_positive = [

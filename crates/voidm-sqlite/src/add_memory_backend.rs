@@ -3,9 +3,10 @@
 
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
-use voidm_db::models::{AddMemoryRequest, AddMemoryResponse, EdgeType};
+use voidm_db::models::{AddMemoryResponse, EdgeType};
 use voidm_scoring::QualityScore;
 use serde_json::json;
+use voidm_embeddings::{chunk_memory, ChunkingConfig};
 
 /// Data prepared before transaction begins
 /// Separates pre-transaction logic (in voidm-core) from transaction execution (backend-only)
@@ -20,6 +21,7 @@ pub struct PreTxData {
     pub scopes: Vec<String>,
     pub quality: QualityScore,
     pub embedding_result: Option<Vec<f32>>,
+    pub chunk_embeddings: Vec<(String, Vec<f32>)>,
     pub resolved_link_targets: Vec<(EdgeType, Option<String>, String)>,
     pub now: String,
     pub title: Option<String>,
@@ -62,18 +64,10 @@ pub async fn execute_add_memory_transaction(
     .await
     .context("Failed to insert memory")?;
 
-    // Insert scopes
-    for scope in &pre_tx.scopes {
-        sqlx::query("INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)")
-            .bind(&pre_tx.id)
-            .bind(scope)
-            .execute(&mut *tx)
-            .await?;
-    }
-
     // Insert FTS
-    sqlx::query("INSERT INTO memories_fts (id, content) VALUES (?, ?)")
+    sqlx::query("INSERT INTO memories_fts (id, title, content) VALUES (?, ?, ?)")
         .bind(&pre_tx.id)
+        .bind(pre_tx.title.as_deref().unwrap_or(""))
         .bind(&pre_tx.content)
         .execute(&mut *tx)
         .await?;
@@ -91,49 +85,148 @@ pub async fn execute_add_memory_transaction(
         .context("Failed to insert into vec_memories")?;
     }
 
-    // Graph node upsert
-    sqlx::query("INSERT OR IGNORE INTO graph_nodes (memory_id) VALUES (?)")
+    sqlx::query(
+        "INSERT OR IGNORE INTO nodes (id, type, properties, created_at, updated_at) VALUES (?, 'Memory', ?, ?, ?)"
+    )
         .bind(&pre_tx.id)
-        .execute(&mut *tx)
-        .await?;
-    let node_id: i64 = sqlx::query_scalar("SELECT id FROM graph_nodes WHERE memory_id = ?")
-        .bind(&pre_tx.id)
-        .fetch_one(&mut *tx)
-        .await?;
-    sqlx::query("INSERT OR IGNORE INTO graph_node_labels (node_id, label) VALUES (?, 'Memory')")
-        .bind(node_id)
+        .bind(serde_json::json!({
+            "title": pre_tx.title,
+            "context": pre_tx.context,
+            "importance": pre_tx.importance,
+        }).to_string())
+        .bind(&pre_tx.now)
+        .bind(&pre_tx.now)
         .execute(&mut *tx)
         .await?;
 
-    // Store memory_type as a text property on the graph node
-    let key_id = intern_property_key_in_tx(&mut tx, "memory_type").await?;
+    // Canonical chunk lifecycle: store chunks for every memory
+    let chunk_config = ChunkingConfig {
+        target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+        min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+        max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+        overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+        smart_breaks: true,
+    };
+    let chunks = chunk_memory(&pre_tx.id, &pre_tx.content, &pre_tx.now, &chunk_config);
+    for chunk in &chunks {
+        let maybe_chunk_embedding = pre_tx
+            .chunk_embeddings
+            .iter()
+            .find(|(chunk_id, _)| chunk_id == &chunk.id)
+            .map(|(_, emb)| emb);
+        let embedding_bytes = maybe_chunk_embedding.map(|emb| {
+            emb.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>()
+        });
+        let embedding_dim = maybe_chunk_embedding.map(|emb| emb.len() as i64);
+
+        sqlx::query(
+            "INSERT INTO memory_chunks (id, memory_id, text, \"index\", size, break_type, created_at, embedding, embedding_dim)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&chunk.id)
+        .bind(&pre_tx.id)
+        .bind(&chunk.content)
+        .bind(chunk.index as i64)
+        .bind(chunk.size as i64)
+        .bind(format!("{:?}", chunk.break_type))
+        .bind(&chunk.created_at)
+        .bind(embedding_bytes)
+        .bind(embedding_dim)
+        .execute(&mut *tx)
+        .await
+        .context("Failed to insert memory chunk")?;
+
+        sqlx::query(
+            "INSERT OR IGNORE INTO nodes (id, type, properties, created_at, updated_at) VALUES (?, 'MemoryChunk', ?, ?, ?)"
+        )
+            .bind(&chunk.id)
+            .bind(serde_json::json!({
+                "memory_id": pre_tx.id,
+                "index": chunk.index,
+                "size": chunk.size,
+                "break_type": format!("{:?}", chunk.break_type),
+                "content": chunk.content,
+            }).to_string())
+            .bind(&chunk.created_at)
+            .bind(&chunk.created_at)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to insert generic chunk node")?;
+
+        sqlx::query(
+            "INSERT OR IGNORE INTO edges (id, from_id, edge_type, to_id, properties, created_at) VALUES (?, ?, 'HAS_CHUNK', ?, ?, ?)"
+        )
+            .bind(format!("{}:HAS_CHUNK:{}", pre_tx.id, chunk.id))
+            .bind(&pre_tx.id)
+            .bind(&chunk.id)
+            .bind(serde_json::json!({"sequence_num": chunk.index}).to_string())
+            .bind(&chunk.created_at)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to insert generic has-chunk edge")?;
+    }
+
+    // Insert first-class scopes in canonical graph after the Memory node exists.
+    for scope in &pre_tx.scopes {
+        let scope_node_id = ensure_special_node_in_tx(&mut tx, "Scope", scope, &pre_tx.now).await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO edges (id, from_id, edge_type, to_id, properties, created_at)
+             VALUES (?, ?, 'HAS_SCOPE', ?, '{}', ?)"
+        )
+        .bind(format!("{}:HAS_SCOPE:{}", pre_tx.id, scope_node_id))
+        .bind(&pre_tx.id)
+        .bind(&scope_node_id)
+        .bind(&pre_tx.now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let type_node_id = ensure_special_node_in_tx(&mut tx, "MemoryType", &pre_tx.memory_type_str, &pre_tx.now).await?;
     sqlx::query(
-        "INSERT OR REPLACE INTO graph_node_props_text (node_id, key_id, value) VALUES (?, ?, ?)"
+        "INSERT OR IGNORE INTO edges (id, from_id, edge_type, to_id, properties, created_at)
+         VALUES (?, ?, 'HAS_TYPE', ?, '{}', ?)"
     )
-    .bind(node_id)
-    .bind(key_id)
-    .bind(&pre_tx.memory_type_str)
+    .bind(format!("{}:HAS_TYPE:{}", pre_tx.id, type_node_id))
+    .bind(&pre_tx.id)
+    .bind(&type_node_id)
+    .bind(&pre_tx.now)
     .execute(&mut *tx)
     .await?;
 
+    // Canonical tag graph edges.
+    let tags: Vec<String> = serde_json::from_str(&pre_tx.tags_json).unwrap_or_default();
+    for tag in &tags {
+        let tag_node_id = ensure_special_node_in_tx(&mut tx, "Tag", tag, &pre_tx.now).await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO edges (id, from_id, edge_type, to_id, properties, created_at)
+             VALUES (?, ?, 'HAS_TAG', ?, '{}', ?)"
+        )
+        .bind(format!("{}:HAS_TAG:{}", pre_tx.id, tag_node_id))
+        .bind(&pre_tx.id)
+        .bind(&tag_node_id)
+        .bind(&pre_tx.now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     // Create --link edges
     for (edge_type, note, target_id) in &pre_tx.resolved_link_targets {
-        let target_node: i64 = sqlx::query_scalar(
-            "SELECT n.id FROM graph_nodes n WHERE n.memory_id = ?"
-        )
-        .bind(&target_id)
-        .fetch_one(&mut *tx)
-        .await
-        .with_context(|| format!("Graph node not found for target '{}'", target_id))?;
+        sqlx::query("INSERT OR IGNORE INTO nodes (id, type, properties, created_at, updated_at) VALUES (?, 'Memory', '{}', ?, ?)")
+            .bind(target_id)
+            .bind(&pre_tx.now)
+            .bind(&pre_tx.now)
+            .execute(&mut *tx)
+            .await?;
 
         sqlx::query(
-            "INSERT OR IGNORE INTO graph_edges (source_id, target_id, rel_type, note, created_at)
-             VALUES (?, ?, ?, ?, ?)"
+            "INSERT OR IGNORE INTO edges (id, from_id, edge_type, to_id, properties, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)"
         )
-        .bind(node_id)
-        .bind(target_node)
+        .bind(format!("{}:{}:{}", pre_tx.id, edge_type.as_str(), target_id))
+        .bind(&pre_tx.id)
         .bind(edge_type.as_str())
-        .bind(&note)
+        .bind(target_id)
+        .bind(note.as_ref().map(|n| serde_json::json!({"note": n})).unwrap_or_else(|| serde_json::json!({})).to_string())
         .bind(&pre_tx.now)
         .execute(&mut *tx)
         .await?;
@@ -141,14 +234,10 @@ pub async fn execute_add_memory_transaction(
 
     tx.commit().await.context("Transaction commit failed")?;
 
-    // Build response
-    let scopes: Vec<String> = sqlx::query_scalar(
-        "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
-    )
-    .bind(&pre_tx.id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    // Build response from canonical scope graph truth.
+    let scopes = crate::utils::get_scopes(pool, &pre_tx.id)
+        .await
+        .unwrap_or_default();
 
     let tags: Vec<String> = serde_json::from_str(&pre_tx.tags_json).unwrap_or_default();
     let metadata: serde_json::Value = serde_json::from_str(&pre_tx.metadata_json).unwrap_or(json!({}));
@@ -170,20 +259,38 @@ pub async fn execute_add_memory_transaction(
     })
 }
 
-/// Transaction-scoped property key interning
-async fn intern_property_key_in_tx(
+/// Ensure a synthetic special node exists in the canonical generic graph.
+async fn ensure_special_node_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    key: &str,
-) -> Result<i64> {
-    sqlx::query("INSERT OR IGNORE INTO graph_property_keys (key) VALUES (?)")
-        .bind(key)
+    label: &str,
+    value: &str,
+    now: &str,
+) -> Result<String> {
+    let synthetic_memory_id = format!("__{}__:{}", label.to_lowercase(), value);
+
+    sqlx::query(
+        "INSERT OR IGNORE INTO memories (id, type, content, importance, tags, metadata, created_at, updated_at)
+         VALUES (?, 'semantic', ?, 1, '[]', '{}', ?, ?)"
+    )
+        .bind(&synthetic_memory_id)
+        .bind(format!("synthetic {} carrier for {}", label, value))
+        .bind(now)
+        .bind(now)
         .execute(&mut **tx)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT id FROM graph_property_keys WHERE key = ?")
-        .bind(key)
-        .fetch_one(&mut **tx)
+
+    sqlx::query(
+        "INSERT OR IGNORE INTO nodes (id, type, properties, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+    )
+        .bind(&synthetic_memory_id)
+        .bind(label)
+        .bind(serde_json::json!({"name": value, "created_at": now}).to_string())
+        .bind(now)
+        .bind(now)
+        .execute(&mut **tx)
         .await?;
-    Ok(id)
+
+    Ok(synthetic_memory_id)
 }
 
 /// Prepare pre-transaction data from request
@@ -197,8 +304,26 @@ pub async fn prepare_add_memory_data(
     use chrono::Utc;
     use crate::utils;
     
-    // Auto-enrich tags BEFORE creating tags_json (moved to beginning)
-    // TODO: Re-enable when auto_tagger_tinyllama is fixed
+    // Strict auto-tag generation via TinyLLaMA, when enabled.
+    if req.tags.is_empty() {
+        match voidm_core::auto_tagging::generate_tags(&req.content, &crate::utils::Config {
+            database: config.database.clone(),
+            embeddings: config.embeddings.clone(),
+            search: config.search.clone(),
+            insert: config.insert.clone(),
+            enrichment: config.enrichment.clone(),
+            redaction: config.redaction.clone(),
+        }).await {
+            Ok(generated) if !generated.is_empty() => {
+                req.metadata["auto_generated_tags"] = serde_json::json!(generated.clone());
+                req.tags = generated;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("Strict auto-tag generation failed: {}", e);
+            }
+        }
+    }
     
     // Redact secrets from memory content and metadata BEFORE insertion
     let mut redaction_warnings = Vec::new();
@@ -239,10 +364,36 @@ pub async fn prepare_add_memory_data(
         None
     };
 
+    let chunk_config = ChunkingConfig {
+        target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+        min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+        max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+        overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+        smart_breaks: true,
+    };
+    let chunk_embeddings = if config.embeddings.enabled {
+        let chunks = chunk_memory(&id, &req.content, &now, &chunk_config);
+        let chunk_texts: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
+        match voidm_embeddings::embed_batch(&config.embeddings.model, &chunk_texts) {
+            Ok(embeddings) => chunks
+                .into_iter()
+                .zip(embeddings.into_iter())
+                .map(|(chunk, emb)| (chunk.id, emb))
+                .collect(),
+            Err(e) => {
+                tracing::warn!("Failed to compute chunk embeddings: {}. Skipping chunk vector storage.", e);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
     // Compute quality score OUTSIDE transaction (will persist to DB)
     let memory_type_enum = req.memory_type.clone();
     let quality_mt = utils::convert_memory_type(&memory_type_enum);
-    let quality = voidm_scoring::compute_quality_score(&req.content, &quality_mt);
+    let mut quality = voidm_scoring::compute_quality_score(&req.content, &quality_mt);
+    quality.score = (quality.score - voidm_core::memory_policy::large_memory_quality_penalty(req.content.len())).max(0.0);
 
     // Ensure vec_memories table exists with correct dimension
     if let Some(ref emb) = embedding_result {
@@ -285,6 +436,7 @@ pub async fn prepare_add_memory_data(
         scopes: req.scopes,
         quality,
         embedding_result,
+        chunk_embeddings,
         resolved_link_targets,
         now,
         title: req.title,

@@ -51,12 +51,14 @@ default = ["standard"]
 # Build: cargo build --release --no-default-features --features minimal
 minimal = ["database-sqlite"]
 
-# STANDARD (100MB): Core + auto-tagging [DEFAULT]
+# STANDARD (100MB): Core ML features [DEFAULT]
+# Note: `tinyllama` now enables strict feature-gated auto-tag generation in normal add flow.
 # Use: CLI, personal use, everything by default (RECOMMENDED)
 # Build: cargo build --release (default)
 standard = ["embeddings", "query-expansion", "nli", "ner", "reranker", "tinyllama", "redactor", "database-sqlite"]
 
 # ENHANCED (150MB): Reduced ML features + vector search
+# Note: `tinyllama` now enables strict feature-gated auto-tag generation in normal add flow.
 # Use: knowledge work, faster builds, fewer dependencies
 # Build: cargo build --release --no-default-features --features enhanced
 enhanced = ["database-sqlite", "embeddings", "vector-search", "query-expansion", "tinyllama"]

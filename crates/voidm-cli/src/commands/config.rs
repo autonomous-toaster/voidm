@@ -1,11 +1,17 @@
 use anyhow::Result;
 use clap::Subcommand;
-use voidm_core::{Config, config::save_config};
+use voidm_core::{Config, config::{save_config, save_config_template}};
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {
     /// Show current config
     Show,
+    /// Create an initial config file from defaults
+    Init {
+        /// Overwrite an existing config file
+        #[arg(long)]
+        force: bool,
+    },
     /// Set a config value (key=value dot-notation)
     Set {
         /// Config key (e.g. embeddings.model)
@@ -25,6 +31,27 @@ pub async fn run(cmd: &ConfigCommands, json: bool) -> Result<()> {
                 crate::output::print_result(&redacted)?;
             } else {
                 println!("{}", serde_json::to_string_pretty(&redacted)?);
+            }
+        }
+        ConfigCommands::Init { force } => {
+            let path = voidm_core::config::config_path_for_write()?;
+            let existed = path.exists();
+            if existed && !force {
+                anyhow::bail!(
+                    "Config file already exists at {}. Use 'voidm config init --force' to overwrite it.",
+                    path.display()
+                );
+            }
+            let config = Config::default();
+            save_config_template(&config)?;
+            if json {
+                crate::output::print_result(&serde_json::json!({
+                    "initialized": true,
+                    "path": path.display().to_string(),
+                    "overwritten": existed && *force,
+                }))?;
+            } else {
+                println!("Initialized config: {}", path.display());
             }
         }
         ConfigCommands::Set { key, value } => {

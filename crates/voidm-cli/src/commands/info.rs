@@ -34,6 +34,11 @@ pub fn run(_args: InfoArgs, config: &Config, db_override: Option<&str>, json: bo
     let embedding_model = &config.embeddings.model;
     let embeddings_enabled = config.embeddings.enabled;
 
+    #[cfg(feature = "query-expansion")]
+    let qe_backend_json = config.search.query_expansion.as_ref().map(|qe| format!("{:?}", qe.backend).to_lowercase());
+    #[cfg(not(feature = "query-expansion"))]
+    let qe_backend_json: Option<String> = None;
+
     if json {
         crate::output::print_result(&serde_json::json!({
             "database": if let Some((db_path, db_exists, db_size, active_source)) = &sqlite_info {
@@ -66,7 +71,7 @@ pub fn run(_args: InfoArgs, config: &Config, db_override: Option<&str>, json: bo
                 "default_mode": config.search.mode,
                 "min_score": (config.search.min_score as f64 * 100.0).round() / 100.0,
                 "default_limit": config.search.default_limit,
-                "query_expansion_backend": config.search.query_expansion.as_ref().map(|qe| qe.backend.clone())
+                "query_expansion_backend": qe_backend_json
             },
             "enrichment": {
                 "auto_tagging_backend": config.enrichment.auto_tagging.backend
@@ -100,6 +105,7 @@ pub fn run(_args: InfoArgs, config: &Config, db_override: Option<&str>, json: bo
         println!("  Mode:      {}", config.search.mode);
         println!("  Min score: {} (hybrid only)", config.search.min_score);
         println!("  Limit:     {}", config.search.default_limit);
+        #[cfg(feature = "query-expansion")]
         if let Some(qe) = &config.search.query_expansion {
             println!("  QE backend: {:?}", qe.backend);
         }

@@ -17,7 +17,7 @@ voidm-core       = { path = "../voidm-core", default-features = false }
 voidm-db   = { path = "../voidm-db" }
 voidm-graph      = { path = "../voidm-graph" }
 voidm-sqlite     = { path = "../voidm-sqlite" }
-voidm-neo4j      = { path = "../voidm-neo4j" }
+voidm-neo4j      = { path = "../voidm-neo4j", default-features = false }
 voidm-ner        = { path = "../voidm-ner", optional = true }
 voidm-nli        = { path = "../voidm-nli", optional = true }
 voidm-redactor   = { path = "../voidm-redactor", optional = true }
@@ -42,56 +42,29 @@ rmcp = { version = "1.1", features = ["server", "macros", "transport-io", "schem
 [features]
 default = ["standard"]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FEATURE PROFILES (choose one)
-# ─────────────────────────────────────────────────────────────────────────────
-
-# MINIMAL (50MB): Database + BM25 only
-# Use: embedded tools, edge devices, minimal deployments
-# Build: cargo build --release --no-default-features --features minimal
+# Supported high-level build profiles:
+# - minimal  : lean local CLI
+# - standard : recommended default
+# - full     : maximal curated profile
 minimal = ["database-sqlite"]
-
-# STANDARD (100MB): Core ML features [DEFAULT]
-# Note: `tinyllama` now enables strict feature-gated auto-tag generation in normal add flow.
-# Use: CLI, personal use, everything by default (RECOMMENDED)
-# Build: cargo build --release (default)
 standard = ["embeddings", "query-expansion", "nli", "ner", "reranker", "tinyllama", "redactor", "database-sqlite"]
-
-# ENHANCED (150MB): Reduced ML features + vector search
-# Note: `tinyllama` now enables strict feature-gated auto-tag generation in normal add flow.
-# Use: knowledge work, faster builds, fewer dependencies
-# Build: cargo build --release --no-default-features --features enhanced
-enhanced = ["database-sqlite", "embeddings", "vector-search", "query-expansion", "tinyllama"]
-
-# SMART (220MB): All ML features + all backends
-# Use: research, production, full capabilities
-# Build: cargo build --release --no-default-features --features smart
-smart = ["standard", "mcp"]
-
-# FULL (250MB+): Everything (same as --all-features)
-# Use: enterprise, complete system
-# Build: cargo build --release --features full
-full = ["smart"]
+full = ["standard", "database-neo4j", "mcp", "llama-cpp"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # INDIVIDUAL FEATURES (compose your own)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ─ Storage Backends ────────────────────────────────────────────────────────
+# Lower-level feature toggles are kept for local/dev composition,
+# but public docs should prefer the three profiles above.
 database-sqlite = []
 database-neo4j  = []
-
-# ─ Embeddings & Vector Search ─────────────────────────────────────────────
 embeddings      = []
 vector-search   = ["embeddings"]
 query-expansion = ["voidm-core/query-expansion"]
-
-# ─ NLP & Intelligence ─────────────────────────────────────────────────────
+llama-cpp       = ["voidm-core/llama-cpp"]
 nli             = ["voidm-nli"]
-ner             = ["voidm-core/ner", "voidm-ner"]
+ner             = ["voidm-core/ner", "voidm-ner", "voidm-neo4j/ner"]
 reranker        = ["voidm-core/reranker", "voidm-reranker"]
-
-# ─ Integration & Safety ───────────────────────────────────────────────────
 mcp             = []
 redactor        = []
-tinyllama       = ["voidm-core/tinyllama"]
+tinyllama       = ["voidm-core/tinyllama", "voidm-neo4j/tinyllama"]

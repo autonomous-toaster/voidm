@@ -6,6 +6,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use voidm_db::models::{Memory, LinkResponse};
+use voidm_embeddings::chunking::{chunk_memory, ChunkingConfig};
 
 pub mod neo4j_db;
 pub mod neo4j_schema;
@@ -128,6 +129,7 @@ impl voidm_db::Database for Neo4jDatabase {
         let graph = self.graph.clone();
         let config = config.clone();
         let database = self.database.clone();
+        let db = self.clone();
 
         Box::pin(async move {
             // Deserialize the request
@@ -261,6 +263,31 @@ impl voidm_db::Database for Neo4jDatabase {
                     .param("confidence", entity.score as f64),
                 ).await.map_err(|e| anyhow::anyhow!("Failed to persist Neo4j entity mention: {}", e))?;
                 let _ = entity_result.next().await;
+            }
+
+            let chunk_config = ChunkingConfig {
+                target_size: voidm_core::memory_policy::CHUNK_TARGET_SIZE,
+                min_chunk_size: voidm_core::memory_policy::CHUNK_MIN_SIZE,
+                max_chunk_size: voidm_core::memory_policy::CHUNK_MAX_SIZE,
+                overlap: voidm_core::memory_policy::CHUNK_OVERLAP,
+                smart_breaks: true,
+            };
+            let chunks = chunk_memory(&prepared.id, &prepared.content, &prepared.created_at, &chunk_config);
+            for chunk in chunks {
+                db.upsert_chunk(
+                    &chunk.id,
+                    &prepared.id,
+                    &chunk.content,
+                    chunk.index,
+                    chunk.size,
+                    &chunk.created_at,
+                ).await?;
+
+                if config.embeddings.enabled {
+                    if let Ok(embedding) = voidm_core::embeddings::embed_text(&config_model, &chunk.content) {
+                        let _ = db.store_chunk_embedding(chunk.id.clone(), prepared.id.clone(), embedding).await?;
+                    }
+                }
             }
 
             // Build response with tags from prepared data
@@ -1311,7 +1338,7 @@ impl voidm_db::Database for Neo4jDatabase {
                           SET c.embedding = $embedding, c.embedding_dim = $dim
                           RETURN c.id as chunk_id";
             
-            let _ = graph
+            let mut result = graph
                 .execute_on(&database, 
                     neo4rs::query(cypher)
                         .param("id", chunk_id.clone())
@@ -1320,6 +1347,7 @@ impl voidm_db::Database for Neo4jDatabase {
                 )
                 .await
                 .context("Failed to store chunk embedding")?;
+            let _ = result.next().await;
 
             tracing::debug!("Neo4j: Stored {}D embedding for chunk {}", dim, chunk_id);
             Ok((chunk_id, dim))

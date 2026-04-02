@@ -2,7 +2,7 @@
 
 **Local-first persistent memory for LLM agents.**
 
-`voidm` is a single-binary CLI that gives AI agents a durable, searchable, knowledge graph-backed memory store. Add typed memories, search them with hybrid vector+BM25+fuzzy retrieval enhanced by query expansion and reranking, link them in a knowledge graph, define ontology concepts with IS-A hierarchies, extract and link entities with local NER/NLI models, and query with Cypher — all offline, no API keys required.
+`voidm` is a single-binary CLI that gives AI agents a durable, searchable, knowledge graph-backed memory store. Add typed memories, search them with hybrid chunk-semantic + BM25/title retrieval enhanced by optional query expansion and reranking, link memories in a graph, persist tags/scopes/types as first-class graph entities, and run practical read-only Cypher queries on Neo4j — all offline, no API keys required.
 
 **Status**: Production-ready. Quality score 0.9392 (SOTA-competitive). 94% feature parity with state-of-the-art memory engines.
 
@@ -15,7 +15,10 @@
 git clone https://github.com/autonomous-toaster/voidm
 cd voidm && cargo install --path crates/voidm-cli
 
-# Initialize (pre-download models for offline use)
+# Create a fresh default config (safe first-run bootstrap)
+voidm config init
+
+# Initialize models (pre-download models for offline use)
 voidm init
 
 # Add memories
@@ -32,11 +35,7 @@ voidm search "deployment strategy" --verbose
 
 # Explore graph
 voidm graph neighbors <id> --depth 2
-voidm graph cypher "MATCH (a:Memory)-[:SUPPORTS]->(b:Memory) RETURN a.memory_id LIMIT 10"
-
-# Link to ontology
-voidm ontology concept add "DevOps"
-voidm ontology link <memory-id> INSTANCE_OF <concept-id>
+voidm graph cypher "MATCH (a:Memory)-[:SUPPORTS]->(b:Memory) RETURN a.id as from_id, b.id as to_id LIMIT 10"
 ```
 
 ---
@@ -47,13 +46,13 @@ voidm ontology link <memory-id> INSTANCE_OF <concept-id>
 
 **Multiple retrieval methods with automatic signal fusion:**
 
-- **Semantic search**: Vector similarity (7 embedding models via fastembed)
-- **Keyword search**: BM25 full-text indexing (SQLite FTS5)
-- **Fuzzy matching**: Levenshtein distance for typo tolerance
-- **Query expansion**: Automatic synonym/related-term expansion (HyDE template)
-- **Reranking**: Cross-encoder re-scoring for precision
-- **Graph-aware retrieval**: Tag overlap + concept hierarchy traversal
-- **RRF fusion**: Reciprocal Rank Fusion merges all signals
+- **Chunk semantic search**: vector similarity over memory chunks
+- **Keyword search**: BM25 full-text indexing
+- **Title search**: title-aware lexical retrieval
+- **Query expansion**: optional local related-term expansion
+- **Reranking**: optional cross-encoder re-scoring
+- **Graph-aware filtering**: scope/type/tag-aware retrieval inputs
+- **RRF fusion**: Reciprocal Rank Fusion merges the main signals
 
 ```bash
 # Default: hybrid with all signals
@@ -68,8 +67,8 @@ voidm search "docker" --mode bm25
 # With query expansion and reranking
 voidm search "deployment" --query-expand true --reranker true
 
-# Graph-aware (tags + concepts)
-voidm search "auth" --verbose  # Shows tag-based and concept-based results
+# Filter by scope, type, or tag
+voidm search "auth" --scope work/projectx --type semantic --tag oauth,jwt
 ```
 
 **Performance**: Semantic 200ms, BM25 50ms, fuzzy 30ms, reranking +1000ms (optional). Typical total: 300-500ms.
@@ -938,79 +937,19 @@ voidm init
 
 ---
 
-## Build Profiles: Minimal / Enhanced / Smart / Full
+## Build Profiles: Minimal / Standard / Full
 
-Choose a feature profile matching your deployment needs:
+Use one of the three supported CLI profiles:
 
-### Feature Profiles
+| Profile | Summary | Build Command |
+|---------|---------|---------------|
+| **minimal** | Lean local CLI with SQLite | `cargo build --release --no-default-features --features minimal` |
+| **standard** | Recommended default profile | `cargo build --release` |
+| **full** | Standard + Neo4j + MCP + experimental llama.cpp | `cargo build --release --no-default-features --features full` |
 
-| Profile | Size | Features | Use Case | Build Command |
-|---------|------|----------|----------|---------------|
-| **MINIMAL** | 50MB | SQLite + BM25 only | Edge devices, embedded | `cargo build --release --no-default-features --features minimal` |
-| **STANDARD** | 100MB | All defaults (RECOMMENDED) | CLI, personal use, everything | `cargo build --release` |
-| **ENHANCED** | 150MB | Core + vector search + query expansion | Knowledge work, semantic search | `cargo build --release --no-default-features --features enhanced` |
-| **SMART** | 220MB | All ML features (NER, NLI, reranking) | Production, research, full AI | `cargo build --release --no-default-features --features smart` |
-| **FULL** | 250MB+ | Everything + MCP server | Enterprise, complete system | `cargo build --release --features full` |
+Public docs should prefer these profiles. Lower-level feature toggles still exist for local/dev composition.
 
-### What Each Profile Includes
-
-**MINIMAL** ⚡
-```
-✅ Memory CRUD (SQLite)
-✅ Hybrid search (BM25 + basic keyword)
-✅ Knowledge graph
-✅ Ontology layer
-❌ Vector embeddings
-❌ Query expansion
-❌ NER/NLI
-❌ Reranking
-```
-
-**STANDARD** ⭐ (DEFAULT - RECOMMENDED)
-```
-✅ Everything in MINIMAL
-✅ Vector embeddings (all 7 models)
-✅ Semantic search
-✅ Query expansion (HyDE)
-✅ Auto-tagging (TinyLLaMA)
-✅ Auto-linking
-✅ NER (entity extraction)
-✅ NLI (relation classification)
-✅ Reranking (cross-encoder)
-✅ Secrets redaction
-✅ PostgreSQL support
-```
-
-**ENHANCED** 🎯
-```
-✅ Everything in MINIMAL
-✅ Vector embeddings
-✅ Semantic search
-✅ Query expansion (HyDE)
-✅ Auto-tagging (TinyLLaMA)
-❌ NER/NLI (saves 300MB models)
-❌ Reranking
-```
-
-**SMART** 🧠
-```
-✅ Everything in ENHANCED
-✅ NER (entity extraction)
-✅ NLI (contradictions, relations)
-✅ Reranking (cross-encoder)
-✅ Secrets redaction
-✅ MCP server (AI integration)
-```
-
-**FULL** 🚀
-```
-✅ Everything
-✅ All backends (SQLite, PostgreSQL, Neo4j)
-✅ All ML models
-✅ MCP server
-```
-
-### Quick Install (Default = STANDARD)
+### Quick Install (Default = standard)
 
 ```bash
 # Default build (STANDARD profile, all recommended features)
@@ -1023,8 +962,8 @@ cargo install --path crates/voidm-cli
 # For minimal deployments
 cargo build --release --no-default-features --features minimal
 
-# For production with all ML
-cargo build --release --no-default-features --features smart
+# For the maximal curated CLI profile
+cargo build --release --no-default-features --features full
 ```
 
 ### Individual Features (Advanced)
@@ -1059,7 +998,7 @@ cargo build --release --no-default-features --features "" 2>&1 | grep "unknown f
 | `voidm add <text>` | Add memory. Returns `suggested_links`, `duplicate_warning`. |
 | `voidm get <id>` | Retrieve by ID or 4+ char prefix. |
 | `voidm list` | List all, filterable by scope/type/quality. |
-| `voidm search <query>` | Hybrid search. Modes: hybrid/semantic/bm25/fuzzy/keyword. |
+| `voidm search <query>` | Hybrid search. Modes: hybrid/semantic/bm25/fuzzy/keyword/vector. |
 | `voidm delete <id>` | Delete memory. |
 | `voidm link <from> <EDGE> <to>` | Create graph edge. `RELATES_TO` needs `--note`. |
 | `voidm export` | Export memories as JSON. |
@@ -1073,25 +1012,15 @@ cargo build --release --no-default-features --features "" 2>&1 | grep "unknown f
 | `voidm graph cypher "<query>"` | Read-only Cypher traversal. |
 | `voidm graph export --format html` | Interactive visualization (html/dot/json/csv). |
 
-### Ontology
-
-| Command | Description |
-|---------|-------------|
-| `voidm ontology concept add <name>` | Create concept. |
-| `voidm ontology concept get <id>` | Get with instances + hierarchy. |
-| `voidm ontology link <from> <EDGE> <to>` | Link memories/concepts. |
-| `voidm ontology extract <id>` | Run NER on memory. |
-| `voidm ontology enrich-memories` | Batch NER enrichment. |
-| `voidm ontology concept merge <src> <tgt>` | Merge duplicate concepts. |
-
 ### System
 
 | Command | Description |
 |---------|-------------|
-| `voidm init` | Pre-download models. |
-| `voidm config show/set` | Manage configuration. |
-| `voidm stats` | Memory counts, tag frequency, DB size. |
-| `voidm mcp --transport stdio` | Start MCP server. |
+| `voidm init` | Pre-download configured local models. |
+| `voidm config init/show/set` | Create and manage configuration. |
+| `voidm info` | Show backend, config and runtime settings. |
+| `voidm stats` | Memory and graph statistics. |
+| `voidm migrate --from <backend> --to <backend>` | Migrate data between sqlite and neo4j. |
 
 Use `--json` for machine-readable output. Use `--help` for full flag details.
 
@@ -1143,29 +1072,12 @@ voidm add "Auth uses OAuth2 with JWT tokens" --type semantic --scope work/projec
 
 # Define ontology
 voidm ontology concept add "ProjectX" --description "Internal web platform"
-voidm ontology concept add "Authentication" --description "OAuth2 + JWT"
-
-# Extract and link entities
-voidm ontology enrich-memories --scope work/projectx --add
-
-# Search with context
-voidm search "how do we authenticate" --intent "oauth2" --scope work/projectx --verbose
+# Search with bounded context and stricter filtering
+voidm search "how do we authenticate" --scope work/projectx --tag oauth,jwt --min-score 0.7
 
 # Visualize
 voidm graph export --format html > projectx-graph.html
 open projectx-graph.html
-```
-
-### Use with Claude (MCP)
-
-```bash
-# Start voidm MCP server
-voidm mcp --transport stdio &
-
-# Claude can now call:
-# - search_memories(query: "deployment patterns", intent: "devops")
-# - add_memory(content: "...", type: "procedural", quality_score: 0.85)
-# - search_concepts(query: "authentication")
 ```
 
 ### Query Complex Relationships

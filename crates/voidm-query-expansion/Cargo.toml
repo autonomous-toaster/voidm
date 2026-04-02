@@ -17,5 +17,10 @@ ort = "2.0.0-rc.10"
 hf-hub = { version = "0.5", features = ["tokio"] }
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 voidm-models = { path = "../voidm-models" }
+llama_cpp = { version = "0.3.2", optional = true }
+
+[features]
+default = []
+llama-cpp = ["dep:llama_cpp"]
 
 [dev-dependencies]

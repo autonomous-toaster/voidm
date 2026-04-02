@@ -61,6 +61,7 @@ ml-core = ["dep:ort", "dep:hf-hub", "dep:tokenizers"]
 
 # Query Expansion (HyDE template + local LLM inference)
 query-expansion = ["dep:voidm-query-expansion", "ml-core"]
+llama-cpp = ["query-expansion", "voidm-query-expansion/llama-cpp"]
 
 # Natural Language Inference (relation classification + contradiction detection)
 nli = ["ml-core"]

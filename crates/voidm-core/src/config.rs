@@ -648,6 +648,10 @@ pub fn config_path_display() -> String {
         .unwrap_or_else(|| "<unknown>".into())
 }
 
+pub fn config_path_for_write() -> Result<PathBuf> {
+    config_path().context("Cannot determine config path")
+}
+
 fn config_path() -> Option<PathBuf> {
     // VOIDM_CONFIG environment variable (highest priority)
     if let Ok(config_env) = std::env::var("VOIDM_CONFIG") {
@@ -680,6 +684,21 @@ pub fn save_config(config: &Config) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let s = toml::to_string_pretty(config)?;
+    std::fs::write(&path, s)?;
+    Ok(())
+}
+
+pub fn save_config_template(config: &Config) -> Result<()> {
+    let path = config_path().context("Cannot determine config path")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut s = toml::to_string_pretty(config)?;
+    s.push_str(
+        "\n# Example Neo4j configuration\n# Uncomment and edit this section to use Neo4j instead of SQLite.\n#\n# [database]\n# backend = \"neo4j\"\n#\n# [database.neo4j]\n# uri = \"bolt://localhost:7687\"\n# username = \"neo4j\"\n# password = \"password\"\n# database = \"neo4j\"\n",
+    );
+
     std::fs::write(&path, s)?;
     Ok(())
 }

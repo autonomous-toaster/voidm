@@ -15,6 +15,7 @@ uuid = { workspace = true }
 neo4rs = "0.7"
 voidm-db = { path = "../voidm-db" }
 voidm-core = { path = "../voidm-core" }
+voidm-embeddings = { path = "../voidm-embeddings" }
 voidm-scoring = { path = "../voidm-scoring" }
 voidm-ner = { path = "../voidm-ner", optional = true }
 

@@ -351,11 +351,15 @@ pub async fn search(
     if signals.is_empty() {
         // Fallback: return newest memories
         tracing::warn!("Search: No signals collected, falling back to newest memories");
-        let memories = fetch_memories_newest(db, opts).await?;
+        let mut memories = fetch_memories_newest(db, opts).await?;
+        let best_score = memories.iter().map(|r| r.score).reduce(f32::max);
+        if let Some(min_score) = opts.min_score {
+            memories.retain(|r| r.score >= min_score);
+        }
         return Ok(SearchResponse {
             results: memories,
-            threshold_applied: None,
-            best_score: None,
+            threshold_applied: opts.min_score,
+            best_score,
         });
     }
 
@@ -515,10 +519,16 @@ pub async fn search(
     crate::recency_boosting::boost_by_recency(&mut results, &recency_boost_config);
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Apply title-based reranking before final truncation so lexical ties settle predictably.
+    // Apply title-based reranking before thresholding/final truncation so lexical ties settle predictably.
     tracing::debug!("Search: Applying title-based reranking");
     rerank_by_title_relevance(&mut results, &opts.query);
-    
+
+    let min_score_threshold = opts.min_score;
+    let pre_threshold_best_score = results.iter().map(|r| r.score).reduce(f32::max);
+    if let Some(min_score) = min_score_threshold {
+        results.retain(|r| r.score >= min_score);
+    }
+
     // Final filter to return only top-K results
     results.truncate(opts.limit);
 
@@ -538,8 +548,8 @@ pub async fn search(
 
     Ok(SearchResponse {
         results,
-        threshold_applied: None,
-        best_score,
+        threshold_applied: min_score_threshold,
+        best_score: pre_threshold_best_score.or(best_score),
     })
 }
 

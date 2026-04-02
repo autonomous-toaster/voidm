@@ -28,6 +28,11 @@ use ort::value::Tensor;
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "llama-cpp")]
+use llama_cpp::{LlamaModel, LlamaParams, SessionParams};
+#[cfg(feature = "llama-cpp")]
+use llama_cpp::standard_sampler::StandardSampler;
+
 /// Intent-aware query expansion configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntentConfig {
@@ -317,6 +322,72 @@ item   : [a-zA-Z] [a-zA-Z \-._]*
 
 // ─── Grammar-guided parsing ───────────────────────────────────────────────
 
+fn singularize_simple_plural(term: &str) -> String {
+    if term.contains(' ') {
+        return term.to_string();
+    }
+    if let Some(stripped) = term.strip_suffix("ies") {
+        if stripped.len() >= 3 {
+            return format!("{}y", stripped);
+        }
+    }
+    if term == "services" {
+        return "service".to_string();
+    }
+    term.to_string()
+}
+
+fn normalize_expansion_term(term: &str) -> Option<String> {
+    let cleaned = term
+        .trim()
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '`'))
+        .trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '-' | '_' | '/' | ' '))
+        .replace(['\n', '\r', '\t'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+
+    if cleaned.len() < 2 || cleaned.len() > 40 {
+        return None;
+    }
+    if cleaned.chars().count() == 1 || cleaned.chars().all(|c| c.is_numeric()) {
+        return None;
+    }
+    if cleaned.ends_with('-') || cleaned.ends_with('_') || cleaned.ends_with('/') {
+        return None;
+    }
+    if cleaned.contains("--") || cleaned.contains("__") || cleaned.contains("//") {
+        return None;
+    }
+    if cleaned.contains("cache-all") || cleaned.ends_with("-all") || cleaned.ends_with("-all-") {
+        return None;
+    }
+    if !cleaned.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '/')) {
+        return None;
+    }
+
+    let singular = singularize_simple_plural(&cleaned);
+    Some(singular)
+}
+
+fn clean_expansion_terms(csv_like: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut unique_parts = Vec::new();
+
+    for raw in csv_like.split(',') {
+        let Some(part) = normalize_expansion_term(raw) else {
+            continue;
+        };
+        if seen.insert(part.clone()) {
+            unique_parts.push(part);
+        }
+    }
+
+    unique_parts.truncate(8);
+    unique_parts.join(", ")
+}
+
 /// Parse structured grammar-guided output.
 /// Expects format: "term1, term2, term3" (comma-separated terms)
 fn parse_grammar_guided_output(output: &str) -> Result<String> {
@@ -356,8 +427,11 @@ fn parse_with_fallback(output: &str) -> Result<String> {
     // Try strict grammar parsing on (potentially first line of) output
     match parse_grammar_guided_output(output_to_parse) {
         Ok(parsed) => {
-            tracing::debug!("Successfully parsed grammar-guided output");
-            return Ok(parsed);
+            let cleaned = clean_expansion_terms(&parsed);
+            if !cleaned.is_empty() {
+                tracing::debug!("Successfully parsed grammar-guided output");
+                return Ok(cleaned);
+            }
         }
         Err(e) => {
             tracing::debug!("Grammar parsing failed, attempting fallback: {}", e);
@@ -371,14 +445,20 @@ fn parse_with_fallback(output: &str) -> Result<String> {
             // First line looks like comma-separated, try to parse it
             match parse_grammar_guided_output(trimmed) {
                 Ok(parsed) => {
-                    tracing::debug!("Using comma-separated fallback format from first line");
-                    return Ok(parsed);
+                    let cleaned = clean_expansion_terms(&parsed);
+                    if !cleaned.is_empty() {
+                        tracing::debug!("Using comma-separated fallback format from first line");
+                        return Ok(cleaned);
+                    }
                 }
                 Err(_) => {
                     // Return the first line as-is if it's not empty
                     if !trimmed.is_empty() {
-                        tracing::debug!("Using first-line content as fallback");
-                        return Ok(trimmed.to_string());
+                        let cleaned = clean_expansion_terms(trimmed);
+                        if !cleaned.is_empty() {
+                            tracing::debug!("Using first-line content as fallback");
+                            return Ok(cleaned);
+                        }
                     }
                 }
             }
@@ -386,8 +466,11 @@ fn parse_with_fallback(output: &str) -> Result<String> {
         
         // Just return first line if not empty
         if !trimmed.is_empty() {
-            tracing::debug!("Using first-line fallback format");
-            return Ok(trimmed.to_string());
+            let cleaned = clean_expansion_terms(trimmed);
+            if !cleaned.is_empty() {
+                tracing::debug!("Using first-line fallback format");
+                return Ok(cleaned);
+            }
         }
     }
 
@@ -448,6 +531,14 @@ fn get_model_spec(name: &str) -> Option<&'static str> {
     MODEL_SPECS.iter()
         .find(|(model_name, _)| model_name == &name)
         .map(|(_, hf_id)| *hf_id)
+}
+
+#[cfg(feature = "llama-cpp")]
+fn get_llama_cpp_hf_id(name: &str) -> Option<&'static str> {
+    match name {
+        "prism-ml/Bonsai-1.7B-gguf" => Some("prism-ml/Bonsai-1.7B-gguf"),
+        _ => None,
+    }
 }
 
 fn llm_cache_dir() -> PathBuf {
@@ -559,6 +650,70 @@ async fn download_llm_files(hf_id: &str, model_dir: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+async fn ensure_llama_cpp_model(model_name: &str) -> Result<()> {
+    #[cfg(not(feature = "llama-cpp"))]
+    {
+        anyhow::bail!(
+            "llama_cpp backend requested for model '{}' but voidm-query-expansion was built without the 'llama-cpp' feature",
+            model_name
+        );
+    }
+
+    #[cfg(feature = "llama-cpp")]
+    {
+        let hf_id = get_llama_cpp_hf_id(model_name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown llama_cpp model: {}", model_name))?;
+        let cache_dir = voidm_models::ensure_model_dir(model_name).await?;
+        let gguf_path = cache_dir.join("model.gguf");
+        if gguf_path.exists() {
+            return Ok(());
+        }
+
+        let api = hf_hub::api::tokio::ApiBuilder::new()
+            .with_cache_dir(voidm_models::model_cache_dir())
+            .build()
+            .context("Failed to build hf-hub API")?;
+        let repo = api.model(hf_id.to_string());
+        let src = repo
+            .get("Bonsai-1.7B.gguf")
+            .await
+            .with_context(|| format!("Failed to download GGUF for {}", model_name))?;
+        tokio::fs::copy(&src, &gguf_path).await
+            .with_context(|| format!("Failed to copy GGUF to {}", gguf_path.display()))?;
+        Ok(())
+    }
+}
+
+async fn generate_with_llama_cpp(model_name: &str, _prompt: &str) -> Result<String> {
+    #[cfg(not(feature = "llama-cpp"))]
+    {
+        anyhow::bail!(
+            "llama_cpp backend requested for model '{}' but voidm-query-expansion was built without the 'llama-cpp' feature",
+            model_name
+        );
+    }
+
+    #[cfg(feature = "llama-cpp")]
+    {
+        ensure_llama_cpp_model(model_name).await?;
+        let model_dir = voidm_models::model_dir(model_name);
+        let gguf_path = model_dir.join("model.gguf");
+        let prompt = _prompt.to_string();
+        let output = tokio::task::spawn_blocking(move || -> Result<String> {
+            let model = LlamaModel::load_from_file(&gguf_path, LlamaParams::default())
+                .map_err(|e| anyhow::anyhow!("Failed to load llama.cpp model: {}", e))?;
+            let mut session = model.create_session(SessionParams::default())
+                .map_err(|e| anyhow::anyhow!("Failed to create llama.cpp session: {}", e))?;
+            session.advance_context(&prompt)
+                .map_err(|e| anyhow::anyhow!("Failed to advance llama.cpp context: {}", e))?;
+            let handle = session.start_completing_with(StandardSampler::default(), 32)
+                .map_err(|e| anyhow::anyhow!("Failed to start llama.cpp completion: {}", e))?;
+            Ok(handle.into_string())
+        }).await.map_err(|e| anyhow::anyhow!("llama.cpp worker failed: {}", e))??;
+        Ok(output)
+    }
+}
+
 // ─── Query expansion ──────────────────────────────────────────────────────
 
 /// Global query expansion state (model, cache).
@@ -578,10 +733,7 @@ impl LocalGenerator {
     pub async fn ensure_model(&self) -> Result<()> {
         match self.config.backend {
             GenerationBackend::Onnx => ensure_llm_model(&self.config.model).await,
-            GenerationBackend::LlamaCpp => Err(anyhow::anyhow!(
-                "llama_cpp generation backend not implemented yet for model '{}'",
-                self.config.model
-            )),
+            GenerationBackend::LlamaCpp => ensure_llama_cpp_model(&self.config.model).await,
             GenerationBackend::Mlx => Err(anyhow::anyhow!(
                 "mlx generation backend not implemented yet for model '{}'",
                 self.config.model
@@ -592,10 +744,7 @@ impl LocalGenerator {
     pub async fn generate_once(&self, prompt: &str) -> Result<String> {
         match self.config.backend {
             GenerationBackend::Onnx => QueryExpander::run_inference(prompt, &self.config.model).await,
-            GenerationBackend::LlamaCpp => Err(anyhow::anyhow!(
-                "llama_cpp generation backend not implemented yet for model '{}'",
-                self.config.model
-            )),
+            GenerationBackend::LlamaCpp => generate_with_llama_cpp(&self.config.model, prompt).await,
             GenerationBackend::Mlx => Err(anyhow::anyhow!(
                 "mlx generation backend not implemented yet for model '{}'",
                 self.config.model
@@ -975,8 +1124,30 @@ impl QueryExpander {
         
         // NOW: Apply timeout only to inference (should be fast)
         let timeout_duration = Duration::from_millis(self.config.timeout_ms);
-        let result = timeout(timeout_duration, async {
-            Self::run_inference(&query_str, &model).await
+        let cfg = self.config.clone();
+        let result = timeout(timeout_duration, async move {
+            match cfg.backend {
+                GenerationBackend::Onnx => Self::run_inference(&query_str, &model).await,
+                GenerationBackend::LlamaCpp => {
+                    let raw = LocalGenerator::new(cfg.clone()).generate_once(&query_str).await?;
+                    let parsed = parse_with_fallback(&raw)?;
+                    if parsed.is_empty() {
+                        Ok(query_str)
+                    } else {
+                        let first_term = if let Some(comma_idx) = parsed.find(',') {
+                            parsed[..comma_idx].trim()
+                        } else {
+                            parsed.as_str()
+                        };
+                        if first_term.eq_ignore_ascii_case(&query_str) {
+                            Ok(parsed)
+                        } else {
+                            Ok(format!("{}, {}", query_str, parsed))
+                        }
+                    }
+                }
+                GenerationBackend::Mlx => Err(anyhow::anyhow!("mlx generation backend not implemented yet")),
+            }
         })
         .await;
         
@@ -1196,44 +1367,8 @@ impl QueryExpander {
             truncated
         };
         
-        // Remove excessive repetition and numeric hallucinations
-        let final_expansion = {
-            let parts: Vec<&str> = deduped.split(',').map(|s| s.trim()).collect();
-            let mut seen_base_terms = std::collections::HashSet::new();  // Track base terms (without numbers)
-            let mut unique_parts = Vec::new();
-            
-            for part in parts {
-                if part.is_empty() {
-                    continue;
-                }
-                
-                // Extract base term (everything before trailing numbers)
-                let base_term = part.trim_end_matches(|c: char| c.is_numeric());
-                
-                // Skip if this is a numeric variant of a term we've already seen
-                if base_term != part && seen_base_terms.contains(base_term) {
-                    tracing::debug!("Skipping numeric variant: '{}' (base: '{}')", part, base_term);
-                    continue;
-                }
-                
-                // Skip if we've already seen this exact term
-                if seen_base_terms.contains(part) {
-                    continue;
-                }
-                
-                // Add this term and mark its base term as seen
-                unique_parts.push(part);
-                seen_base_terms.insert(base_term);
-                if base_term != part {
-                    // Also mark the full term so exact duplicates are skipped
-                    seen_base_terms.insert(part);
-                }
-            }
-            
-            // Limit to reasonable number of terms (10 max)
-            unique_parts.truncate(10);
-            unique_parts.join(", ")
-        };
+        // Remove excessive repetition and malformed fragments.
+        let final_expansion = clean_expansion_terms(deduped);
         
         tracing::debug!("LLM generated expansion: {}", final_expansion);
         Ok(final_expansion)
@@ -1365,6 +1500,12 @@ mod grammar_tests {
         let output = "some text about docker and containers";
         let result = parse_with_fallback(output).unwrap();
         assert_eq!(result, "some text about docker and containers");
+    }
+
+    #[test]
+    fn test_clean_expansion_terms_removes_junk_and_dedupes_plural() {
+        let cleaned = clean_expansion_terms("Service, services, Service, J, cache-all, automation, systems");
+        assert_eq!(cleaned, "service, automation, systems");
     }
 
     #[test]

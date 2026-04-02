@@ -13,6 +13,7 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
     use voidm_core::reranker;
     #[cfg(feature = "ner")]
     use voidm_core::ner;
+    #[cfg(feature = "nli")]
     use voidm_nli as nli;
     #[cfg(feature = "query-expansion")]
     use voidm_core::query_expansion;
@@ -26,15 +27,19 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
     let embedding_model = &config.embeddings.model;
     
     // Get default query expansion model from config
+    #[cfg(feature = "query-expansion")]
     let qe_config = &config.search.query_expansion;
+    #[cfg(feature = "query-expansion")]
     let qe_model = qe_config
         .as_ref()
         .map(|qe| qe.model.clone())
         .unwrap_or_else(|| "tinyllama".to_string());
+    #[cfg(feature = "query-expansion")]
     let qe_backend = qe_config
         .as_ref()
         .map(|qe| qe.backend.clone())
         .unwrap_or_default();
+    #[cfg(feature = "query-expansion")]
     let qe_enabled = qe_config
         .as_ref()
         .map(|qe| qe.enabled)
@@ -56,7 +61,7 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
     };
     
     #[cfg(not(feature = "reranker"))]
-    let reranker_enabled = false;
+    let _reranker_enabled = false;
 
     let total = 5; // 1 embedding + NER + NLI + query expansion + reranker
     let mut initialized = 0;

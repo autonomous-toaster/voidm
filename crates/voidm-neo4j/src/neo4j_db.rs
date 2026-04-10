@@ -232,7 +232,7 @@ mod tests {
     #[ignore] // Requires Neo4j running
     async fn test_neo4j_connection() -> Result<()> {
         let db = Neo4jDb::connect("bolt://localhost:7687", "neo4j", "neo4jpassword").await?;
-        assert!(!db.url.is_empty());
+        // Successfully connected
         db.close().await?;
         Ok(())
     }

@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use voidm_db::models::{Memory, LinkResponse};
 use voidm_embeddings::chunking::{chunk_memory, ChunkingConfig};
+use voidm_core::vector_format::{f32_to_base64, base64_to_f32};
 
 pub mod neo4j_db;
 pub mod neo4j_schema;
@@ -460,7 +461,7 @@ impl voidm_db::Database for Neo4jDatabase {
         })
     }
 
-    fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<voidm_db::ResolveResult>> + Send + '_>> {
         let graph = self.graph.clone();
         let id = id.to_string();
         
@@ -474,17 +475,17 @@ impl voidm_db::Database for Neo4jDatabase {
             
             if let Ok(Some(row)) = result.next().await {
                 if let Ok(full_id) = row.get::<String>("m.id") {
-                    return Ok(full_id);
+                    return Ok(voidm_db::ResolveResult::Single(full_id));
                 }
             }
 
-            // Try prefix match
-            if id.len() < 4 {
-                anyhow::bail!("Memory ID prefix '{}' is too short (minimum 4 characters)", id);
+            // Prefix match requires min 8 chars
+            if id.len() < 8 {
+                anyhow::bail!("Memory ID prefix '{}' is too short (minimum 8 characters)", id);
             }
 
             let mut result = graph
-                .execute_on(&self.database, neo4rs::query("MATCH (m:Memory) WHERE m.id STARTS WITH $prefix RETURN m.id")
+                .execute_on(&self.database, neo4rs::query("MATCH (m:Memory) WHERE m.id STARTS WITH $prefix RETURN m.id ORDER BY m.id LIMIT 100")
                     .param("prefix", id.clone()))
                 .await
                 .context("Failed to query Neo4j")?;
@@ -498,12 +499,8 @@ impl voidm_db::Database for Neo4jDatabase {
 
             match matches.len() {
                 0 => anyhow::bail!("Memory '{}' not found", id),
-                1 => Ok(matches.into_iter().next().unwrap()),
-                n => anyhow::bail!(
-                    "Ambiguous memory ID '{}' matches {} memories. Use more characters:\n{}",
-                    id, n,
-                    matches.iter().map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
-                ),
+                1 => Ok(voidm_db::ResolveResult::Single(matches.into_iter().next().unwrap())),
+                _ => Ok(voidm_db::ResolveResult::Multiple(matches)),  // Return all for bulk delete
             }
         })
     }
@@ -1047,9 +1044,9 @@ impl voidm_db::Database for Neo4jDatabase {
 
             let mut similarities = Vec::new();
             while let Ok(Some(row)) = result.next().await {
-                if let (Ok(chunk_id), Ok(embedding_bytes), Ok(stored_dim)) = (
+                if let (Ok(chunk_id), Ok(embedding_base64), Ok(stored_dim)) = (
                     row.get::<String>("id"),
-                    row.get::<Vec<u8>>("embedding"),
+                    row.get::<String>("embedding"),
                     row.get::<i64>("dim"),
                 ) {
                     let stored_dim = stored_dim as usize;
@@ -1057,23 +1054,17 @@ impl voidm_db::Database for Neo4jDatabase {
                         continue;
                     }
 
-                    let mut chunk_embedding = Vec::with_capacity(dim);
-                    for i in 0..dim {
-                        let start = i * 4;
-                        let end = start + 4;
-                        if end <= embedding_bytes.len() {
-                            chunk_embedding.push(f32::from_le_bytes([
-                                embedding_bytes[start],
-                                embedding_bytes[start + 1],
-                                embedding_bytes[start + 2],
-                                embedding_bytes[start + 3],
-                            ]));
+                    // Decode base64-encoded embedding
+                    match base64_to_f32(&embedding_base64) {
+                        Ok(chunk_embedding) => {
+                            if chunk_embedding.len() == dim {
+                                if let Ok(similarity) = voidm_core::similarity::cosine_similarity(&embedding, &chunk_embedding) {
+                                    similarities.push((chunk_id, similarity));
+                                }
+                            }
                         }
-                    }
-
-                    if chunk_embedding.len() == dim {
-                        if let Ok(similarity) = voidm_core::similarity::cosine_similarity(&embedding, &chunk_embedding) {
-                            similarities.push((chunk_id, similarity));
+                        Err(e) => {
+                            tracing::warn!("Failed to decode embedding for chunk {}: {}", chunk_id, e);
                         }
                     }
                 }
@@ -1328,11 +1319,9 @@ impl voidm_db::Database for Neo4jDatabase {
         let dim = embedding.len();
 
         Box::pin(async move {
-            // Store embedding as a le_bytes property on MemoryChunk
-            let embedding_bytes: Vec<u8> = embedding
-                .iter()
-                .flat_map(|f| f.to_le_bytes().to_vec())
-                .collect();
+            // Store embedding as base64-encoded string for Neo4j compatibility
+            // neo4rs v0.7 cannot serialize Vec<u8> directly, so we encode as base64
+            let embedding_base64 = f32_to_base64(&embedding);
 
             let cypher = "MATCH (c:MemoryChunk {id: $id}) 
                           SET c.embedding = $embedding, c.embedding_dim = $dim
@@ -1342,7 +1331,7 @@ impl voidm_db::Database for Neo4jDatabase {
                 .execute_on(&database, 
                     neo4rs::query(cypher)
                         .param("id", chunk_id.clone())
-                        .param("embedding", embedding_bytes)
+                        .param("embedding", embedding_base64)
                         .param("dim", dim as i64)
                 )
                 .await
@@ -1375,29 +1364,24 @@ impl voidm_db::Database for Neo4jDatabase {
                 .context("Failed to fetch chunk embedding")?;
 
             if let Ok(Some(row)) = result.next().await {
-                if let (Ok(embedding_bytes), Ok(dim)) = (
-                    row.get::<Vec<u8>>("embedding"),
+                if let (Ok(embedding_base64), Ok(dim)) = (
+                    row.get::<String>("embedding"),
                     row.get::<i64>("dim"),
                 ) {
                     let dim = dim as usize;
-                    let mut embedding = Vec::with_capacity(dim);
-                    
-                    for i in 0..dim {
-                        let start = i * 4;
-                        let end = start + 4;
-                        if end <= embedding_bytes.len() {
-                            let bytes = [
-                                embedding_bytes[start],
-                                embedding_bytes[start + 1],
-                                embedding_bytes[start + 2],
-                                embedding_bytes[start + 3],
-                            ];
-                            embedding.push(f32::from_le_bytes(bytes));
+                    // Decode base64 string back to f32 array
+                    match base64_to_f32(&embedding_base64) {
+                        Ok(embedding) => {
+                            if embedding.len() == dim {
+                                return Ok(Some(embedding));
+                            } else {
+                                tracing::warn!("Neo4j: Embedding dimension mismatch for chunk {}: expected {}, got {}", 
+                                    chunk_id, dim, embedding.len());
+                            }
                         }
-                    }
-                    
-                    if embedding.len() == dim {
-                        return Ok(Some(embedding));
+                        Err(e) => {
+                            tracing::error!("Neo4j: Failed to decode embedding for chunk {}: {}", chunk_id, e);
+                        }
                     }
                 }
             }

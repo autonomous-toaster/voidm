@@ -533,20 +533,41 @@ impl Database for SqliteDatabase {
         })
     }
 
-    fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<voidm_db::ResolveResult>> + Send + '_>> {
         let pool = self.pool.clone();
         let id = id.to_string();
+        
         Box::pin(async move {
-            if id.len() < 4 {
-                anyhow::bail!("ID prefix too short");
-            }
-            let row = sqlx::query_scalar::<_, String>("SELECT id FROM memories WHERE id LIKE ? LIMIT 1")
-                .bind(format!("{}%", id))
+            // Try exact match first
+            if let Ok(Some(row)) = sqlx::query_scalar::<_, String>(
+                "SELECT id FROM memories WHERE id = ?"
+            )
+                .bind(&id)
                 .fetch_optional(&pool)
                 .await
+            {
+                return Ok(voidm_db::ResolveResult::Single(row));
+            }
+            
+            // Prefix match requires min 8 chars
+            if id.len() < 8 {
+                anyhow::bail!("Memory ID prefix '{}' is too short (minimum 8 characters)", id);
+            }
+            
+            // Fetch all matching prefixes
+            let matches = sqlx::query_scalar::<_, String>(
+                "SELECT id FROM memories WHERE id LIKE ? ORDER BY id"
+            )
+                .bind(format!("{}%", id))
+                .fetch_all(&pool)
+                .await
                 .context("Failed to resolve ID")?;
-
-            row.context("ID not found")
+            
+            match matches.len() {
+                0 => anyhow::bail!("Memory '{}' not found", id),
+                1 => Ok(voidm_db::ResolveResult::Single(matches.into_iter().next().unwrap())),
+                _ => Ok(voidm_db::ResolveResult::Multiple(matches)),  // Return all for bulk delete
+            }
         })
     }
 

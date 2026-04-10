@@ -60,11 +60,30 @@ pub async fn add_memory(
 }
 
 /// Resolve a memory ID (full or short prefix) using trait-based backend
+/// 
+/// Returns the full memory ID if:
+/// - Exact match found (any length)
+/// - Prefix matches exactly 1 memory
+/// 
+/// Errors if:
+/// - Prefix < 8 chars and no exact match
+/// - ID not found
+/// - Prefix matches 2+ memories (ambiguous)
 pub async fn resolve_memory_id(
     db: &Arc<dyn Database>,
     id: &str,
 ) -> Result<String> {
-    db.resolve_memory_id(id).await
+    match db.resolve_memory_id(id).await? {
+        voidm_db::ResolveResult::Single(full_id) => Ok(full_id),
+        voidm_db::ResolveResult::Multiple(ids) => {
+            anyhow::bail!(
+                "Ambiguous memory ID '{}' matches {} memories. Use more characters or full ID:\n{}",
+                id,
+                ids.len(),
+                ids.iter().take(10).map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
+            )
+        }
+    }
 }
 
 /// Check for embedding model mismatch using trait-based backend
@@ -76,6 +95,11 @@ pub async fn check_model_mismatch(
 }
 
 /// Link two memories using trait-based backend
+/// 
+/// # Behavior
+/// - Resolves both IDs to singles
+/// - Rejects if either ID is ambiguous
+/// - Creates link edge in backend
 pub async fn link_memories(
     db: &Arc<dyn Database>,
     from_id: &str,
@@ -83,7 +107,34 @@ pub async fn link_memories(
     to_id: &str,
     note: Option<&str>,
 ) -> Result<serde_json::Value> {
-    db.link_memories(from_id, rel, to_id, note).await
+    // Resolve IDs, rejecting if ambiguous
+    let from_resolved = db.resolve_memory_id(from_id).await?;
+    let from_single = match from_resolved {
+        voidm_db::ResolveResult::Single(id) => id,
+        voidm_db::ResolveResult::Multiple(ids) => {
+            anyhow::bail!(
+                "from_id '{}' is ambiguous and matches {} memories. Use full ID.\nMatches:\n{}",
+                from_id,
+                ids.len(),
+                ids.iter().take(5).map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
+            )
+        }
+    };
+
+    let to_resolved = db.resolve_memory_id(to_id).await?;
+    let to_single = match to_resolved {
+        voidm_db::ResolveResult::Single(id) => id,
+        voidm_db::ResolveResult::Multiple(ids) => {
+            anyhow::bail!(
+                "to_id '{}' is ambiguous and matches {} memories. Use full ID.\nMatches:\n{}",
+                to_id,
+                ids.len(),
+                ids.iter().take(5).map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
+            )
+        }
+    };
+
+    db.link_memories(&from_single, rel, &to_single, note).await
 }
 
 /// Unlink two memories using trait-based backend

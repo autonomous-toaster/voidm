@@ -18,8 +18,22 @@ pub mod models;
 pub mod graph_ops;
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::future::Future;
+
+/// Result of memory ID resolution (exact match or prefix match)
+/// 
+/// When resolving a memory ID, it can either match a single memory
+/// (exact match or unique prefix match) or multiple memories (prefix match).
+/// This enum allows callers to handle both cases appropriately.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResolveResult {
+    /// Exact match or single prefix match (safe to auto-use)
+    Single(String),
+    /// Multiple prefix matches (requires user choice/confirmation)
+    Multiple(Vec<String>),
+}
 
 /// Database abstraction trait for supporting multiple backends
 ///
@@ -63,7 +77,28 @@ pub trait Database: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 
     /// Resolve a memory ID (from short prefix or full UUID)
-    fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>>;
+    ///
+    /// # Behavior
+    /// - **Exact match first:** If `id` exactly matches a memory, return it regardless of length
+    /// - **Prefix match:** If not exact, try prefix match with minimum 8 characters
+    /// - **Single match:** If prefix matches exactly 1 memory, return `Single(id)`
+    /// - **Multiple matches:** If prefix matches 2+ memories, return `Multiple(ids)` for bulk operations
+    /// - **Error cases:**
+    ///   - Prefix < 8 chars and no exact match: "too short" error
+    ///   - No matches found: "not found" error
+    ///
+    /// # Examples
+    /// ```ignore
+    /// // Exact match (any length)
+    /// resolve_memory_id("mem_abc1234567890abcd") → Single("mem_abc1234567890abcd")
+    ///
+    /// // Prefix match (8+ chars)
+    /// resolve_memory_id("mem_test_prefix") → Single(...) or Multiple([...])  
+    ///
+    /// // Prefix too short
+    /// resolve_memory_id("mem_abc") → Error("too short")
+    /// ```
+    fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<ResolveResult>> + Send + '_>>;
 
     /// List all scopes used in memories
     fn list_scopes(&self) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + '_>>;

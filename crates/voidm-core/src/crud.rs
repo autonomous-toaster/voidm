@@ -22,11 +22,29 @@ pub fn convert_memory_type(mt: &crate::models::MemoryType) -> voidm_scoring::Mem
 /// This function accepts any type implementing the Database trait, allowing
 /// it to work with SQLite, PostgreSQL, Neo4j, or other backends.
 /// 
-/// - If `id` is already a full UUID that exists → return it as-is.
-/// - If `id` is a prefix → find all matches; error if 0 or >1.
-/// - Minimum prefix length: 4 characters.
+/// # Behavior
+/// - If `id` exactly matches a memory → return it as-is (any length)
+/// - If `id` is a prefix (min 8 chars) → find all matches
+///   - 0 matches: error
+///   - 1 match: return the single ID
+///   - 2+ matches: error (user must provide longer prefix or full ID)
+/// 
+/// # Errors
+/// - Prefix < 8 chars and no exact match
+/// - ID not found
+/// - Ambiguous prefix (multiple matches)
 pub async fn resolve_id<D: voidm_db::Database + ?Sized>(db: &D, id: &str) -> Result<String> {
-    db.resolve_memory_id(id).await
+    match db.resolve_memory_id(id).await? {
+        voidm_db::ResolveResult::Single(full_id) => Ok(full_id),
+        voidm_db::ResolveResult::Multiple(ids) => {
+            anyhow::bail!(
+                "Ambiguous memory ID '{}' matches {} memories. Use more characters:\n{}",
+                id,
+                ids.len(),
+                ids.iter().take(10).map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
+            )
+        }
+    }
 }
 
 /// Resolve a full or short (prefix) ID to a full memory ID (SQLite-specific).
@@ -88,6 +106,11 @@ pub async fn delete_memory<D: voidm_db::Database + ?Sized>(db: &D, id: &str) -> 
 
 /// Create a graph edge between two memories.
 /// Create a graph edge between two memories (backend-agnostic)
+/// 
+/// # Behavior
+/// - Resolves from_id and to_id using resolve_memory_id
+/// - Rejects if either ID is ambiguous (multiple matches)
+/// - Requires RELATES_TO edges to have a note
 pub async fn link_memories<D: voidm_db::Database + ?Sized>(
     db: &D,
     from_id: &str,
@@ -100,12 +123,35 @@ pub async fn link_memories<D: voidm_db::Database + ?Sized>(
         anyhow::bail!("RELATES_TO requires --note explaining why no stronger relationship applies.");
     }
 
-    // Resolve IDs (support short prefixes)
-    let from_id = db.resolve_memory_id(from_id).await?;
-    let to_id = db.resolve_memory_id(to_id).await?;
+    // Resolve IDs (support exact match or unique prefix)
+    let from_resolved = db.resolve_memory_id(from_id).await?;
+    let from_single = match from_resolved {
+        voidm_db::ResolveResult::Single(id) => id,
+        voidm_db::ResolveResult::Multiple(ids) => {
+            anyhow::bail!(
+                "from_id '{}' is ambiguous and matches {} memories. Use full ID or longer prefix.\nMatches:\n{}",
+                from_id,
+                ids.len(),
+                ids.iter().take(5).map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
+            )
+        }
+    };
+
+    let to_resolved = db.resolve_memory_id(to_id).await?;
+    let to_single = match to_resolved {
+        voidm_db::ResolveResult::Single(id) => id,
+        voidm_db::ResolveResult::Multiple(ids) => {
+            anyhow::bail!(
+                "to_id '{}' is ambiguous and matches {} memories. Use full ID or longer prefix.\nMatches:\n{}",
+                to_id,
+                ids.len(),
+                ids.iter().take(5).map(|m| format!("  {}", m)).collect::<Vec<_>>().join("\n")
+            )
+        }
+    };
 
     // Call trait method - returns JSON response with resolved IDs
-    let response_json = db.link_memories(&from_id, edge_type.as_str(), &to_id, note).await?;
+    let response_json = db.link_memories(&from_single, edge_type.as_str(), &to_single, note).await?;
     
     // Convert JSON back to LinkResponse
     let created = response_json.get("created").and_then(|v| v.as_bool()).unwrap_or(false);

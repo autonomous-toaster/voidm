@@ -84,7 +84,7 @@ impl Database for FakeDb {
     fn list_memories(&self, _limit: Option<usize>) -> Pin<Box<dyn Future<Output = Result<Vec<serde_json::Value>>> + Send + '_>> { Box::pin(async { Ok(vec![Self::memory_one(), Self::memory_two()]) }) }
     fn delete_memory(&self, _id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> { Box::pin(async { Ok(true) }) }
     fn update_memory(&self, _id: &str, _content: &str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> { Box::pin(async { Ok(()) }) }
-    fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> { let id = id.to_string(); Box::pin(async move { Ok(id) }) }
+    fn resolve_memory_id(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<voidm_db::ResolveResult>> + Send + '_>> { let id = id.to_string(); Box::pin(async move { Ok(voidm_db::ResolveResult::Single(id)) }) }
     fn list_scopes(&self) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + '_>> { Box::pin(async { Ok(vec![]) }) }
     fn link_memories(&self, _from_id: &str, _rel: &str, _to_id: &str, _note: Option<&str>) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> { Box::pin(async { Ok(json!({})) }) }
     fn unlink_memories(&self, _from_id: &str, _rel: &str, _to_id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> { Box::pin(async { Ok(true) }) }

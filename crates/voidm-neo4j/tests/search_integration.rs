@@ -3,6 +3,7 @@ use neo4rs::query;
 use std::env;
 use voidm_core::config::SearchConfig;
 use voidm_core::search::{search, SearchMode, SearchOptions};
+use voidm_core::vector_format::f32_to_base64;
 use voidm_db::Database;
 use voidm_neo4j::Neo4jDatabase;
 
@@ -63,9 +64,9 @@ async fn reset_search_test_data(db: &Neo4jDatabase) -> Result<()> {
                     (m2)-[:HAS_CHUNK]->(c3)
              RETURN m1.id as id"
         )
-        .param("emb1", vec![1f32.to_le_bytes(), 0f32.to_le_bytes()].concat())
-        .param("emb2", vec![0.9f32.to_le_bytes(), 0.1f32.to_le_bytes()].concat())
-        .param("emb3", vec![0f32.to_le_bytes(), 1f32.to_le_bytes()].concat())
+        .param("emb1", f32_to_base64(&[1.0f32, 0.0f32]))
+        .param("emb2", f32_to_base64(&[0.9f32, 0.1f32]))
+        .param("emb3", f32_to_base64(&[0.0f32, 1.0f32]))
         )
         .await
         .with_context(|| "failed to seed Neo4j search test data")?;

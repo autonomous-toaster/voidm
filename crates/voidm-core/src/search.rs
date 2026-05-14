@@ -628,7 +628,7 @@ async fn collect_context_chunks(
                 if chunk_memory_id != memory_id {
                     continue;
                 }
-                if let Some(text) = chunk.get("content").and_then(|v| v.as_str()) {
+                if let Some(text) = chunk.get("text").and_then(|v| v.as_str()) {
                     let trimmed: String = text.chars().take(max_chars_per_chunk).collect();
                     if total + trimmed.len() > total_budget { break; }
                     total += trimmed.len();

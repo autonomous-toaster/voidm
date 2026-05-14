@@ -939,32 +939,44 @@ impl voidm_db::Database for Neo4jDatabase {
     fn search_bm25(
         &self,
         query: &str,
-        _scope_filter: Option<&str>,
-        _type_filter: Option<&str>,
+        scope_filter: Option<&str>,
+        type_filter: Option<&str>,
         limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
         let graph = self.graph.clone();
+        let database = self.database.clone();
         let query = query.to_string();
+        let scope_filter = scope_filter.map(|s| s.to_string());
+        let type_filter = type_filter.map(|s| s.to_string());
 
         Box::pin(async move {
-            // Use Neo4j full-text search index
-            let cypher = "CALL db.index.fulltext.queryNodes('memories_content', $query) YIELD node, score 
-                         RETURN node.id as id, score 
-                         ORDER BY score DESC 
-                         LIMIT $limit".to_string();
+            let mut cypher = String::from(
+                "CALL db.index.fulltext.queryNodes('memories_content', $query) YIELD node, score\n                 WITH node, score"
+            );
             
-            let result = graph
-                .execute_on(&self.database, 
+            // Parameterized scope/type filters — safe from Cypher injection
+            cypher.push_str(
+                "\n WHERE ($scope_filter = '' OR EXISTS { MATCH (node)-[:HAS_SCOPE]->(s:Scope) WHERE s.name = $scope_filter })"
+            );
+            cypher.push_str(
+                "\n   AND ($type_filter = '' OR EXISTS { MATCH (node)-[:HAS_TYPE]->(t:MemoryType) WHERE t.name = $type_filter })"
+            );
+            cypher.push_str("\n RETURN node.id as id, score ORDER BY score DESC LIMIT $limit");
+            
+            let mut result = graph
+                .execute_on(
+                    &database,
                     neo4rs::query(&cypher)
                         .param("query", query)
-                        .param("limit", limit as i64)
+                        .param("scope_filter", scope_filter.unwrap_or_default())
+                        .param("type_filter", type_filter.unwrap_or_default())
+                        .param("limit", limit as i64),
                 )
                 .await
                 .context("Failed to execute BM25 search on Neo4j")?;
             
-            let mut result_handle = result;
             let mut results: Vec<(String, f32)> = Vec::new();
-            while let Ok(Some(row)) = result_handle.next().await {
+            while let Ok(Some(row)) = result.next().await {
                 if let (Ok(id), Ok(score)) = (row.get::<String>("id"), row.get::<f32>("score")) {
                     results.push((id, score));
                 }
@@ -976,41 +988,61 @@ impl voidm_db::Database for Neo4jDatabase {
 
     fn search_fuzzy(
         &self,
-        _query: &str,
+        query: &str,
         _scope_filter: Option<&str>,
         limit: usize,
-        _threshold: f32,
+        threshold: f32,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
         let graph = self.graph.clone();
+        let database = self.database.clone();
+        let query = query.to_string();
 
         Box::pin(async move {
-            // Fetch raw memories from Neo4j
-            let cypher = "MATCH (m:Memory) RETURN m.id as id, m.content as content ORDER BY m.created_at DESC LIMIT $limit";
+            // Fetch candidate memories — fuzzy matching is O(n*m), so cap at reasonable amount.
+            let cypher = "MATCH (m:Memory) WHERE m.content IS NOT NULL RETURN m.id as id, m.content as content LIMIT 2000";
             
-            let result = graph
-                .execute_on(&self.database, 
-                    neo4rs::query(cypher)
-                        .param("limit", limit as i64)
-                )
+            let mut result = graph
+                .execute_on(&database, neo4rs::query(cypher))
                 .await
                 .context("Failed to fetch memories for fuzzy search on Neo4j")?;
             
-            let mut result_handle = result;
-            let mut memories: Vec<(String, String)> = Vec::new();
+            let query_lower = query.to_lowercase();
+            let query_tokens: Vec<&str> = query_lower.split_whitespace().collect();
             
-            while let Ok(Some(row)) = result_handle.next().await {
+            let mut results: Vec<(String, f32)> = Vec::new();
+            
+            while let Ok(Some(row)) = result.next().await {
                 if let (Ok(id), Ok(content)) = (row.get::<String>("id"), row.get::<String>("content")) {
-                    memories.push((id, content));
+                    let content_lower = content.to_lowercase();
+                    
+                    // AND-semantics: every query token must have at least one fuzzy match.
+                    let mut all_match = true;
+                    let mut min_token_score = 1.0f32;
+                    for qt in &query_tokens {
+                        let mut best_for_qt = 0.0f32;
+                        for ct in content_lower.split_whitespace() {
+                            let sim = strsim::jaro_winkler(qt, ct) as f32;
+                            if sim > best_for_qt {
+                                best_for_qt = sim;
+                            }
+                        }
+                        if best_for_qt < threshold {
+                            all_match = false;
+                            break;
+                        }
+                        if best_for_qt < min_token_score {
+                            min_token_score = best_for_qt;
+                        }
+                    }
+                    
+                    if all_match {
+                        results.push((id, min_token_score));
+                    }
                 }
             }
             
-            // Apply fuzzy matching locally (placeholder - returns empty for now)
-            // TODO: Add strsim dependency and implement proper Jaro-Winkler matching
-            let results: Vec<(String, f32)> = Vec::new();
-            
-            // For now, fuzzy search returns empty (not yet implemented)
-            // Can be enabled when strsim is added to dependencies
-            
+            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            results.truncate(limit);
             Ok(results)
         })
     }
@@ -1031,22 +1063,20 @@ impl voidm_db::Database for Neo4jDatabase {
         Box::pin(async move {
             let query_lower = query.to_lowercase();
             let mut cypher = String::from("MATCH (m:Memory) WHERE m.title IS NOT NULL");
-            let mut filters = Vec::new();
 
-            if let Some(scope) = &scope_filter {
-                filters.push(format!("EXISTS {{ MATCH (m)-[:HAS_SCOPE]->(:Scope {{name: '{}' }}) }}", scope));
-            }
-            if let Some(mtype) = &type_filter {
-                filters.push(format!("EXISTS {{ MATCH (m)-[:HAS_TYPE]->(:MemoryType {{name: '{}'}}) }}", mtype));
-            }
-            if !filters.is_empty() {
-                cypher.push_str(" AND ");
-                cypher.push_str(&filters.join(" AND "));
-            }
-            cypher.push_str(" RETURN m.id as id, m.title as title LIMIT $limit");
+            // Parameterized scope/type filters — safe from Cypher injection
+            cypher.push_str("\\n AND ($scope_filter = '' OR EXISTS { MATCH (m)-[:HAS_SCOPE]->(s:Scope) WHERE s.name = $scope_filter })");
+            cypher.push_str("\\n AND ($type_filter = '' OR EXISTS { MATCH (m)-[:HAS_TYPE]->(t:MemoryType) WHERE t.name = $type_filter })");
+            cypher.push_str("\\n RETURN m.id as id, m.title as title LIMIT $limit");
 
             let mut result = graph
-                .execute_on(&database, neo4rs::query(&cypher).param("limit", (limit * 5) as i64))
+                .execute_on(
+                    &database,
+                    neo4rs::query(&cypher)
+                        .param("scope_filter", scope_filter.unwrap_or_default())
+                        .param("type_filter", type_filter.unwrap_or_default())
+                        .param("limit", (limit * 5) as i64),
+                )
                 .await
                 .context("Failed to execute title search on Neo4j")?;
 
@@ -1146,60 +1176,37 @@ impl voidm_db::Database for Neo4jDatabase {
         let database = self.database.clone();
         let scope_filter = scope_filter.map(|s| s.to_string());
         let type_filter = type_filter.map(|s| s.to_string());
-        let dim = embedding.len();
 
         Box::pin(async move {
-            let mut cypher = String::from("MATCH (m:Memory)-[:HAS_CHUNK]->(c:MemoryChunk) WHERE c.embedding IS NOT NULL AND c.embedding_dim = $dim");
-            let mut filters = Vec::new();
+            // Use Neo4j native vector index for approximate nearest neighbor search.
+            let mut cypher = String::from(
+                "CALL db.index.vector.queryNodes('chunk_embedding', $inner_limit, $embedding)\n                 YIELD node, score\n                 MATCH (m:Memory)-[:HAS_CHUNK]->(node)
+"
+            );
 
-            if let Some(scope) = &scope_filter {
-                filters.push(format!("EXISTS {{ MATCH (m)-[:HAS_SCOPE]->(:Scope {{name: '{}' }}) }}", scope));
-            }
-            if let Some(mtype) = &type_filter {
-                filters.push(format!("EXISTS {{ MATCH (m)-[:HAS_TYPE]->(:MemoryType {{name: '{}'}}) }}", mtype));
-            }
-            if !filters.is_empty() {
-                cypher.push_str(" AND ");
-                cypher.push_str(&filters.join(" AND "));
-            }
-            cypher.push_str(" RETURN c.id as id, c.embedding as embedding, c.embedding_dim as dim LIMIT 10000");
+            // Scope / type filters via parameterized EXISTS subqueries (safe — no injection)
+            cypher.push_str(
+                " WHERE ($scope_filter = '' OR EXISTS { MATCH (m)-[:HAS_SCOPE]->(s:Scope) WHERE s.name = $scope_filter })\n                   AND ($type_filter = '' OR EXISTS { MATCH (m)-[:HAS_TYPE]->(t:MemoryType) WHERE t.name = $type_filter })\n"
+            );
+            cypher.push_str(" RETURN node.id as id, score ORDER BY score DESC LIMIT $limit");
 
             let mut result = graph
-                .execute_on(&database, neo4rs::query(&cypher).param("dim", dim as i64))
+                .execute_on(&database, neo4rs::query(&cypher)
+                    .param("embedding", embedding)
+                    .param("inner_limit", (limit * 3) as i64) // fetch more for post-filtering safety
+                    .param("scope_filter", scope_filter.unwrap_or_default())
+                    .param("type_filter", type_filter.unwrap_or_default())
+                    .param("limit", limit as i64))
                 .await
-                .context("Failed to execute chunk vector search on Neo4j")?;
+                .context("Failed to execute vector ANN search on Neo4j")?;
 
-            let mut similarities = Vec::new();
+            let mut results = Vec::new();
             while let Ok(Some(row)) = result.next().await {
-                if let (Ok(chunk_id), Ok(embedding_base64), Ok(stored_dim)) = (
-                    row.get::<String>("id"),
-                    row.get::<String>("embedding"),
-                    row.get::<i64>("dim"),
-                ) {
-                    let stored_dim = stored_dim as usize;
-                    if stored_dim != dim {
-                        continue;
-                    }
-
-                    // Decode base64-encoded embedding
-                    match base64_to_f32(&embedding_base64) {
-                        Ok(chunk_embedding) => {
-                            if chunk_embedding.len() == dim {
-                                if let Ok(similarity) = voidm_core::similarity::cosine_similarity(&embedding, &chunk_embedding) {
-                                    similarities.push((chunk_id, similarity));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to decode embedding for chunk {}: {}", chunk_id, e);
-                        }
-                    }
+                if let (Ok(id), Ok(score)) = (row.get::<String>("id"), row.get::<f64>("score")) {
+                    results.push((id, score as f32));
                 }
             }
-
-            similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            similarities.truncate(limit);
-            Ok(similarities)
+            Ok(results)
         })
     }
 
@@ -1527,69 +1534,45 @@ impl voidm_db::Database for Neo4jDatabase {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send + '_>> {
         let graph = self.graph.clone();
         let database = self.database.clone();
-        let dim = query_embedding.len();
 
         Box::pin(async move {
-            // Neo4j: Fetch all chunks with embeddings and compute similarity
-            let cypher = "MATCH (c:MemoryChunk) 
-                          WHERE c.embedding IS NOT NULL AND c.embedding_dim = $dim
-                          RETURN c.id as id, c.embedding as embedding, c.embedding_dim as dim
-                          LIMIT 10000";
-            
+            // Use native vector index for chunk-level ANN, then group by memory.
+            let cypher = "CALL db.index.vector.queryNodes('chunk_embedding', $inner_limit, $embedding)
+                         YIELD node, score
+                         MATCH (m:Memory)-[:HAS_CHUNK]->(node)
+                         RETURN m.id as memory_id, score ORDER BY score DESC LIMIT $limit";
+
             let mut result = graph
-                .execute_on(&database, 
+                .execute_on(
+                    &database,
                     neo4rs::query(cypher)
-                        .param("dim", dim as i64)
+                        .param("embedding", query_embedding)
+                        .param("inner_limit", (limit * 3) as i64)
+                        .param("limit", limit as i64),
                 )
                 .await
-                .context("Failed to fetch embeddings for search")?;
+                .context("Failed to execute semantic search on Neo4j")?;
 
-            let mut similarities = Vec::new();
-            
+            let mut memory_scores: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
             while let Ok(Some(row)) = result.next().await {
-                if let (Ok(chunk_id), Ok(embedding_bytes), Ok(d)) = (
-                    row.get::<String>("id"),
-                    row.get::<Vec<u8>>("embedding"),
-                    row.get::<i64>("dim"),
-                ) {
-                    let d = d as usize;
-                    if d != dim {
-                        continue;
-                    }
-                    
-                    let mut embedding = Vec::with_capacity(dim);
-                    for i in 0..dim {
-                        let start = i * 4;
-                        let end = start + 4;
-                        if end <= embedding_bytes.len() {
-                            let bytes = [
-                                embedding_bytes[start],
-                                embedding_bytes[start + 1],
-                                embedding_bytes[start + 2],
-                                embedding_bytes[start + 3],
-                            ];
-                            embedding.push(f32::from_le_bytes(bytes));
-                        }
-                    }
-                    
-                    if embedding.len() == dim {
-                        if let Ok(similarity) = voidm_core::similarity::cosine_similarity(&query_embedding, &embedding) {
-                            if similarity >= min_similarity {
-                                similarities.push((chunk_id, similarity));
-                            }
-                        }
+                if let (Ok(memory_id), Ok(score)) = (row.get::<String>("memory_id"), row.get::<f64>("score")) {
+                    let score = score as f32;
+                    if score >= min_similarity {
+                        memory_scores
+                            .entry(memory_id)
+                            .and_modify(|s| *s = s.max(score))
+                            .or_insert(score);
                     }
                 }
             }
 
-            // Sort by similarity descending
-            similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            similarities.truncate(limit);
-
-            tracing::debug!("Neo4j: Found {} similar chunks", similarities.len());
-            Ok(similarities)
+            let mut final_results: Vec<(String, f32)> = memory_scores.into_iter().collect();
+            final_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            final_results.truncate(limit);
+            Ok(final_results)
         })
     }
+
 
     fn export_to_jsonl(
         &self,

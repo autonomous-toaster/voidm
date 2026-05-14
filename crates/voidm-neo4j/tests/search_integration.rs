@@ -3,7 +3,6 @@ use neo4rs::query;
 use std::env;
 use voidm_core::config::SearchConfig;
 use voidm_core::search::{search, SearchMode, SearchOptions};
-use voidm_core::vector_format::f32_to_base64;
 use voidm_db::Database;
 use voidm_neo4j::Neo4jDatabase;
 
@@ -52,9 +51,9 @@ async fn reset_search_test_data(db: &Neo4jDatabase) -> Result<()> {
                     (m2:Memory {id: 'mem2', title: 'Rust ownership', content: 'Secondary memory body', importance: 5, created_at: '2026-01-02T00:00:00Z', updated_at: '2026-01-02T00:00:00Z', tags: [], metadata: '{}'}),
                     (mt:MemoryType {name: 'semantic'}),
                     (sc:Scope {name: 'test_search_integration'}),
-                    (c1:MemoryChunk {id: 'mchk_1', text: 'Most relevant chunk for database tuning', embedding: $emb1, embedding_dim: 2}),
-                    (c2:MemoryChunk {id: 'mchk_2', text: 'Second supporting chunk for database tuning', embedding: $emb2, embedding_dim: 2}),
-                    (c3:MemoryChunk {id: 'mchk_3', text: 'Rust chunk', embedding: $emb3, embedding_dim: 2}),
+                    (c1:MemoryChunk {id: 'mchk_1', text: 'Most relevant chunk for database tuning', embedding: $emb1}),
+                    (c2:MemoryChunk {id: 'mchk_2', text: 'Second supporting chunk for database tuning', embedding: $emb2}),
+                    (c3:MemoryChunk {id: 'mchk_3', text: 'Rust chunk', embedding: $emb3}),
                     (m1)-[:HAS_TYPE]->(mt),
                     (m2)-[:HAS_TYPE]->(mt),
                     (m1)-[:HAS_SCOPE]->(sc),
@@ -64,9 +63,9 @@ async fn reset_search_test_data(db: &Neo4jDatabase) -> Result<()> {
                     (m2)-[:HAS_CHUNK]->(c3)
              RETURN m1.id as id"
         )
-        .param("emb1", f32_to_base64(&[1.0f32, 0.0f32]))
-        .param("emb2", f32_to_base64(&[0.9f32, 0.1f32]))
-        .param("emb3", f32_to_base64(&[0.0f32, 1.0f32]))
+        .param("emb1", vec![1.0f32, 0.0f32])
+        .param("emb2", vec![0.9f32, 0.1f32])
+        .param("emb3", vec![0.0f32, 1.0f32])
         )
         .await
         .with_context(|| "failed to seed Neo4j search test data")?;

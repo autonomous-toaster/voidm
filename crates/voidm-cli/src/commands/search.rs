@@ -18,6 +18,7 @@ use voidm_core::memory_policy::{
     RETRIEVAL_TOTAL_CHAR_BUDGET,
 };
 use voidm_db::Database;
+use voidm_core::models::Memory;
 use std::time::Instant;
 use std::sync::Arc;
 
@@ -118,9 +119,14 @@ pub async fn run(
     config: &Config,
     json_output: bool,
 ) -> Result<()> {
-    // Vector search mode (Phase B)
-    if args.mode == "vector" {
-        return run_vector_search(args, db, config, json_output).await;
+    // Pure-mode dispatch: when user asks for a specific signal, give them exactly that.
+    match args.mode.as_str() {
+        "vector" => return run_vector_search(args, db, config, json_output).await,
+        "bm25" => return run_bm25_search(args, db, config, json_output).await,
+        "fuzzy" => return run_fuzzy_search(args, db, config, json_output).await,
+        "semantic" => return run_semantic_search(args, db, config, json_output).await,
+        "keyword" => return run_bm25_search(args, db, config, json_output).await,
+        _ => {}
     }
 
     let opts = voidm_core::search::SearchOptions {
@@ -275,5 +281,175 @@ async fn run_vector_search(
         }
     }
 
+    Ok(())
+}
+
+/// Pure BM25 search — calls backend directly, no hybrid mixing.
+async fn run_bm25_search(
+    args: SearchArgs,
+    db: &Arc<dyn Database>,
+    _config: &Config,
+    json_output: bool,
+) -> Result<()> {
+    let hits = db.search_bm25(
+        &args.query,
+        args.scope.as_deref(),
+        args.r#type.as_deref(),
+        args.limit,
+    ).await?;
+
+    let mut results = Vec::new();
+    for (id, score) in hits.iter().take(args.limit) {
+        if let Ok(Some(memory_json)) = db.get_memory(id).await {
+            if let Ok(memory) = serde_json::from_value::<voidm_core::models::Memory>(memory_json) {
+                results.push((memory, *score));
+            }
+        }
+    }
+
+    if json_output {
+        let out: Vec<serde_json::Value> = results.iter().map(|(m, s)| serde_json::json!({
+            "id": m.id,
+            "title": m.title,
+            "memory_type": m.memory_type,
+            "score": s,
+            "content": m.content,
+            "tags": m.tags,
+            "scopes": m.scopes,
+        })).collect();
+        crate::output::print_json(&serde_json::json!({ "query": args.query, "mode": "bm25", "results": out }))?;
+    } else {
+        if results.is_empty() {
+            println!("No BM25 results.");
+            return Ok(());
+        }
+        println!("BM25 search results for: {}", args.query);
+        for (idx, (memory, score)) in results.iter().enumerate() {
+            println!("{}. [{}] {}  score={:.3}", idx + 1, memory.memory_type, memory.id, score);
+            if let Some(title) = memory.title.as_deref() {
+                println!("   title: {}", title);
+            }
+            println!("   content:");
+            for line in memory.content.lines().take(6) {
+                println!("     {}", line);
+            }
+            println!();
+        }
+    }
+    Ok(())
+}
+
+/// Pure fuzzy search — calls backend directly.
+async fn run_fuzzy_search(
+    args: SearchArgs,
+    db: &Arc<dyn Database>,
+    _config: &Config,
+    json_output: bool,
+) -> Result<()> {
+    let hits = db.search_fuzzy(
+        &args.query,
+        args.scope.as_deref(),
+        args.limit,
+        0.6,
+    ).await?;
+
+    let mut results = Vec::new();
+    for (id, score) in hits.iter().take(args.limit) {
+        if let Ok(Some(memory_json)) = db.get_memory(id).await {
+            if let Ok(memory) = serde_json::from_value::<voidm_core::models::Memory>(memory_json) {
+                results.push((memory, *score));
+            }
+        }
+    }
+
+    if json_output {
+        let out: Vec<serde_json::Value> = results.iter().map(|(m, s)| serde_json::json!({
+            "id": m.id,
+            "title": m.title,
+            "memory_type": m.memory_type,
+            "score": s,
+            "content": m.content,
+            "tags": m.tags,
+            "scopes": m.scopes,
+        })).collect();
+        crate::output::print_json(&serde_json::json!({ "query": args.query, "mode": "fuzzy", "results": out }))?;
+    } else {
+        if results.is_empty() {
+            println!("No fuzzy results.");
+            return Ok(());
+        }
+        println!("Fuzzy search results for: {}", args.query);
+        for (idx, (memory, score)) in results.iter().enumerate() {
+            println!("{}. [{}] {}  score={:.3}", idx + 1, memory.memory_type, memory.id, score);
+            if let Some(title) = memory.title.as_deref() {
+                println!("   title: {}", title);
+            }
+            println!("   content:");
+            for line in memory.content.lines().take(6) {
+                println!("     {}", line);
+            }
+            println!();
+        }
+    }
+    Ok(())
+}
+
+/// Pure semantic (memory-level vector) search.
+async fn run_semantic_search(
+    args: SearchArgs,
+    db: &Arc<dyn Database>,
+    config: &Config,
+    json_output: bool,
+) -> Result<()> {
+    let model_name = if args.model.is_empty() { &config.embeddings.model } else { &args.model };
+    let query_embedding = match voidm_core::embeddings::embed_text(model_name, &args.query) {
+        Ok(emb) => emb,
+        Err(e) => anyhow::bail!("Error generating embedding: {}", e),
+    };
+
+    let hits = db.search_by_embedding(
+        query_embedding,
+        args.limit,
+        0.5,
+    ).await?;
+
+    let mut results = Vec::new();
+    for (id, score) in hits.iter().take(args.limit) {
+        if let Ok(Some(memory_json)) = db.get_memory(id).await {
+            if let Ok(memory) = serde_json::from_value::<voidm_core::models::Memory>(memory_json) {
+                results.push((memory, *score));
+            }
+        }
+    }
+
+    if json_output {
+        let out: Vec<serde_json::Value> = results.iter().map(|(m, s)| serde_json::json!({
+            "id": m.id,
+            "title": m.title,
+            "memory_type": m.memory_type,
+            "score": s,
+            "content": m.content,
+            "tags": m.tags,
+            "scopes": m.scopes,
+        })).collect();
+        crate::output::print_json(&serde_json::json!({ "query": args.query, "mode": "semantic", "results": out }))?;
+    } else {
+        if results.is_empty() {
+            println!("No semantic results.");
+            return Ok(());
+        }
+        println!("Semantic search results for: {}", args.query);
+        for (idx, (memory, score)) in results.iter().enumerate() {
+            println!("{}. [{}] {}  score={:.3}", idx + 1, memory.memory_type, memory.id, score);
+            if let Some(title) = memory.title.as_deref() {
+                println!("   title: {}", title);
+            }
+            println!("   content:");
+            for line in memory.content.lines().take(6) {
+                println!("     {}", line);
+            }
+            println!();
+        }
+    }
     Ok(())
 }

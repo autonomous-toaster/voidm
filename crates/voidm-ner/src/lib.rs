@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! NER-based entity extraction for ontology enrichment.
 //!
 //! Uses `Xenova/bert-base-NER` (quantized ONNX, ~103MB) to extract named entities

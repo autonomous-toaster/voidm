@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};

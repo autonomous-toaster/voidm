@@ -24,3 +24,6 @@ default = []
 llama-cpp = ["dep:llama_cpp"]
 
 [dev-dependencies]
+
+[lints]
+workspace = true

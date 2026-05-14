@@ -19,3 +19,6 @@ voidm-embeddings = { path = "../voidm-embeddings" }
 voidm-models = { path = "../voidm-models" }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

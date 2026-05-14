@@ -6,6 +6,12 @@ members = [
 ]
 resolver = "2"
 
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+
 [workspace.dependencies]
 # Storage
 sqlx             = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "migrate", "uuid", "chrono"] }

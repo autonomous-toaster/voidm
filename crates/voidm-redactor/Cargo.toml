@@ -8,3 +8,6 @@ description = "Secrets redaction for voidm"
 lazy_static = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
+
+[lints]
+workspace = true

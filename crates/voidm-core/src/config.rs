@@ -56,7 +56,8 @@ fn default_backend() -> String {
 }
 
 fn default_sqlite_path() -> String {
-    let mut path = dirs::data_local_dir().expect("Cannot find data directory");
+    let mut path = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     path.push("voidm");
     path.push("memories.db");
     path.to_string_lossy().to_string()
@@ -332,18 +333,6 @@ fn default_intent_use_scope_as_fallback() -> bool {
     true
 }
 
-fn default_auto_extract_concepts() -> bool {
-    true
-}
-
-fn default_concept_min_score() -> f32 {
-    0.7
-}
-
-fn default_concept_auto_create() -> bool {
-    true
-}
-
 fn default_automerge_threshold() -> f32 {
     0.98
 }
@@ -393,15 +382,6 @@ pub struct InsertConfig {
     #[serde(default = "default_automerge_threshold")]
     pub automerge_threshold: f32,
     pub auto_link_limit: usize,
-    /// Enable automatic concept extraction and linking during memory add (default: true)
-    #[serde(default = "default_auto_extract_concepts")]
-    pub auto_extract_concepts: bool,
-    /// NER confidence threshold for concept extraction (0.0–1.0, default: 0.7)
-    #[serde(default = "default_concept_min_score")]
-    pub concept_min_score: f32,
-    /// Automatically create missing concepts during extraction (default: true)
-    #[serde(default = "default_concept_auto_create")]
-    pub concept_auto_create: bool,
     /// Episodic memory temporal awareness settings
     #[serde(default)]
     pub episodic: EpisodicConfig,
@@ -493,9 +473,6 @@ impl Default for InsertConfig {
             duplicate_threshold: 0.95,
             automerge_threshold: 0.98,
             auto_link_limit: 5,
-            auto_extract_concepts: true,
-            concept_min_score: 0.7,
-            concept_auto_create: true,
             episodic: EpisodicConfig::default(),
         }
     }
@@ -790,12 +767,12 @@ password = "neo4jneo4j"
         config.enrichment.auto_tagging.backend = "onnx".to_string();
         #[cfg(feature = "query-expansion")]
         {
-            config.search.query_expansion = Some(QueryExpansionConfig {
+            config.search.query_expansion = Some(voidm_query_expansion::QueryExpansionConfig {
                 enabled: true,
                 model: "tinyllama".to_string(),
-                backend: "mlx".to_string(),
+                backend: voidm_query_expansion::GenerationBackend::Mlx,
                 timeout_ms: 1000,
-                intent: IntentConfig::default(),
+                intent: voidm_query_expansion::IntentConfig::default(),
             });
         }
         assert!(config.validate_generation_backends().is_ok());

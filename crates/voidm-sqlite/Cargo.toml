@@ -23,3 +23,6 @@ voidm-core = { path = "../voidm-core" }
 # For quality scoring
 voidm-scoring = { path = "../voidm-scoring" }
 voidm-embeddings = { path = "../voidm-embeddings" }
+
+[lints]
+workspace = true

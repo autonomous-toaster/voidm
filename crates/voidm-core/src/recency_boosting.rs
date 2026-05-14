@@ -84,7 +84,7 @@ fn parse_timestamp(ts_str: &str) -> Result<u64, Box<dyn std::error::Error>> {
             chrono::NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H:%M:%S")
                 .map(|ndt| {
                     let dt = chrono::Utc.from_utc_datetime(&ndt);
-                    dt.with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())
+                    dt.with_timezone(&chrono::FixedOffset::east_opt(0).unwrap_or_else(|| unreachable!("east_opt(0) is always valid")))
                 })
         })?;
     

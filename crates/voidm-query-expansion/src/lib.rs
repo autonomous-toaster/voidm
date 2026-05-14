@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Query expansion using small generative LLMs (ONNX-based).
 //!
 //! This module expands user search queries with synonyms and related concepts

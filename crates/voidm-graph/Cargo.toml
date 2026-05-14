@@ -16,3 +16,6 @@ thiserror        = { workspace = true }
 tracing          = { workspace = true }
 chrono           = { workspace = true }
 voidm-db         = { path = "../voidm-db" }
+
+[lints]
+workspace = true

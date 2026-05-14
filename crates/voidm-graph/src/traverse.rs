@@ -141,82 +141,38 @@ pub async fn shortest_path(
     Ok(None) // No path found
 }
 
-/// Compute PageRank for all graph nodes. Returns (memory_id, score) sorted descending.
-/// Includes ontology concept nodes (prefixed "concept::<id>") in the same graph so
-/// well-connected concepts rank alongside well-connected memories.
+/// Compute PageRank for all graph memory nodes. Returns (memory_id, score) sorted descending.
 pub async fn pagerank(
     ops: &dyn GraphQueryOps,
     damping: f64,
     iterations: u32,
 ) -> Result<Vec<(String, f64)>> {
-    // ── Memory nodes + graph_edges ────────────────────────────────────────────
     let mem_edges = ops.get_all_memory_edges().await?;
     let mem_nodes = ops.get_all_memory_nodes().await?;
 
-    // ── Concept nodes + ontology_edges ────────────────────────────────────────
-    let concept_nodes = ops.get_all_concept_nodes().await?;
-    let ont_edges = ops.get_all_ontology_edges().await?;
-
-    // ── Build unified node index ───────────────────────────────────────────────
-    // Memory nodes use integer graph_nodes.id as key.
-    // Concept nodes use a string key "c::<concept_id>".
-    let mut labels: Vec<String> = Vec::new();  // index → display label
-    let mut mem_graph_id_to_idx: HashMap<i64, usize> = HashMap::new();
-    let mut concept_id_to_idx: HashMap<String, usize> = HashMap::new();
-
-    for (gid, mid) in &mem_nodes {
-        let idx = labels.len();
-        mem_graph_id_to_idx.insert(*gid, idx);
-        labels.push(mid.clone());
-    }
-    for cid in &concept_nodes {
-        let idx = labels.len();
-        concept_id_to_idx.insert(cid.clone(), idx);
-        labels.push(format!("concept::{}", cid));
-    }
-
-    let n = labels.len();
+    let n = mem_nodes.len();
     if n == 0 {
         return Ok(vec![]);
+    }
+
+    let mut labels: Vec<String> = Vec::with_capacity(n);
+    let mut id_to_idx: HashMap<i64, usize> = HashMap::with_capacity(n);
+
+    for (gid, mid) in &mem_nodes {
+        id_to_idx.insert(*gid, labels.len());
+        labels.push(mid.clone());
     }
 
     let mut out_neighbors: Vec<Vec<usize>> = vec![vec![]; n];
     let mut in_neighbors: Vec<Vec<usize>> = vec![vec![]; n];
 
-    // Memory ↔ memory edges
     for (src, tgt) in &mem_edges {
-        if let (Some(&si), Some(&ti)) = (mem_graph_id_to_idx.get(src), mem_graph_id_to_idx.get(tgt)) {
+        if let (Some(&si), Some(&ti)) = (id_to_idx.get(src), id_to_idx.get(tgt)) {
             out_neighbors[si].push(ti);
             in_neighbors[ti].push(si);
         }
     }
 
-    // Ontology edges (concept ↔ concept, concept ↔ memory)
-    for (from_id, to_id) in &ont_edges {
-        // from_id could be a concept id or a memory UUID
-        let from_idx = concept_id_to_idx.get(from_id.as_str())
-            .copied()
-            .or_else(|| {
-                // It's a memory UUID — find its graph_nodes.id
-                mem_nodes.iter()
-                    .find(|(_, mid)| mid == from_id)
-                    .and_then(|(gid, _)| mem_graph_id_to_idx.get(gid).copied())
-            });
-        let to_idx = concept_id_to_idx.get(to_id.as_str())
-            .copied()
-            .or_else(|| {
-                mem_nodes.iter()
-                    .find(|(_, mid)| mid == to_id)
-                    .and_then(|(gid, _)| mem_graph_id_to_idx.get(gid).copied())
-            });
-
-        if let (Some(si), Some(ti)) = (from_idx, to_idx) {
-            out_neighbors[si].push(ti);
-            in_neighbors[ti].push(si);
-        }
-    }
-
-    // ── Power iteration ───────────────────────────────────────────────────────
     let mut scores = vec![1.0f64 / n as f64; n];
     for _ in 0..iterations {
         let mut new_scores = vec![(1.0 - damping) / n as f64; n];

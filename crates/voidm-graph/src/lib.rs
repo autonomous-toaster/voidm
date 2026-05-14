@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 pub mod ops;
 pub mod traverse;
 pub mod cypher;

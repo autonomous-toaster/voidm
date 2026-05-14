@@ -233,26 +233,6 @@ impl GraphQueryOps for SqliteGraphQueryOps {
         })
     }
 
-    fn get_all_concept_nodes(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<String>>> + Send + '_>> {
-        let pool = self.pool.clone();
-        Box::pin(async move {
-            let result: Vec<(String,)> = sqlx::query_as(
-                "SELECT id FROM ontology_concepts"
-            ).fetch_all(&pool).await?;
-            Ok(result.into_iter().map(|(id,)| id).collect())
-        })
-    }
-
-    fn get_all_ontology_edges(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<(String, String)>>> + Send + '_>> {
-        let pool = self.pool.clone();
-        Box::pin(async move {
-            let result: Vec<(String, String)> = sqlx::query_as(
-                "SELECT from_id, to_id FROM ontology_edges"
-            ).fetch_all(&pool).await?;
-            Ok(result)
-        })
-    }
-
     fn get_graph_stats(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(i64, i64, HashMap<String, i64>)>> + Send + '_>> {
         let pool = self.pool.clone();
         Box::pin(async move {

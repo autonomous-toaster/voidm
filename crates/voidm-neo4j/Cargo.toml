@@ -13,6 +13,7 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 neo4rs = "0.7"
+strsim = { workspace = true }
 voidm-db = { path = "../voidm-db" }
 voidm-core = { path = "../voidm-core" }
 voidm-embeddings = { path = "../voidm-embeddings" }
@@ -26,3 +27,6 @@ tinyllama = ["voidm-core/tinyllama"]
 
 [dev-dependencies]
 tokio = { workspace = true }
+
+[lints]
+workspace = true

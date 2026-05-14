@@ -448,7 +448,6 @@ pub struct GraphStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphExportData {
     pub memories: Vec<GraphMemory>,
-    pub concepts: Vec<GraphConcept>,
     pub nodes: Vec<GenericGraphNode>,
     pub edges: Vec<GraphEdge>,
 }
@@ -458,12 +457,6 @@ pub struct GraphMemory {
     pub id: String,
     pub mem_type: String,
     pub preview: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphConcept {
-    pub id: String,
-    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

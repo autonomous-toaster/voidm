@@ -72,14 +72,6 @@ pub trait GraphQueryOps: Send + Sync {
     /// Returns: Vec<(node_id, memory_id)>
     fn get_all_memory_nodes(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<(i64, String)>>> + Send + '_>>;
 
-    /// Get all concept nodes
-    /// Returns: Vec<concept_id>
-    fn get_all_concept_nodes(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<String>>> + Send + '_>>;
-
-    /// Get all ontology edges
-    /// Returns: Vec<(from_id, to_id)>
-    fn get_all_ontology_edges(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<(String, String)>>> + Send + '_>>;
-
     /// Get graph statistics
     /// Returns: (node_count, edge_count, rel_type_counts)
     fn get_graph_stats(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(i64, i64, HashMap<String, i64>)>> + Send + '_>>;

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! NLI-based relation classifier for ontology enrichment.
 //!
 //! Uses `cross-encoder/nli-deberta-v3-small` (ONNX) to classify the relationship

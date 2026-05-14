@@ -16,8 +16,9 @@ tracing = { workspace = true }
 
 voidm-core = { path = "../voidm-core", default-features = false }
 voidm-db = { path = "../voidm-db" }
-voidm-sqlite = { path = "../voidm-sqlite" }
 
 [features]
-default = ["sqlite"]
-sqlite = []
+default = []
+
+[lints]
+workspace = true

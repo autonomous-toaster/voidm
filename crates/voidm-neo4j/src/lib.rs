@@ -5,15 +5,12 @@ use neo4rs::Graph;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use voidm_db::Database;
 use voidm_db::models::{Memory, LinkResponse};
 use voidm_embeddings::chunking::{chunk_memory, ChunkingConfig};
-use voidm_core::vector_format::{f32_to_base64, base64_to_f32};
+use voidm_core::vector_format::base64_to_f32;
 
-pub mod neo4j_db;
-pub mod neo4j_schema;
 
-pub use neo4j_db::Neo4jDb;
-pub use neo4j_schema::{MemoryChunkSchema, SchemaStats, CoherenceStats};
 
 /// Neo4j implementation of the Database trait.
 /// Uses the neo4rs async driver with Bolt protocol.
@@ -93,6 +90,46 @@ impl Neo4jDatabase {
             .await;
 
         Ok(())
+    }
+
+    /// Find memories similar to the given embedding, excluding a specific memory.
+    /// Returns (memory_id, best_chunk_score) sorted by score descending.
+    async fn find_similar_memories(
+        &self,
+        exclude_memory_id: &str,
+        embedding: Vec<f32>,
+        threshold: f32,
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>> {
+        let chunk_results = self
+            .search_chunk_ann(embedding, limit * 4, None, None)
+            .await
+            .unwrap_or_default();
+
+        let mut memory_scores: std::collections::HashMap<String, f32> =
+            std::collections::HashMap::with_capacity(chunk_results.len());
+
+        for (chunk_id, score) in chunk_results {
+            if let Ok(Some(chunk)) = self.get_chunk(&chunk_id).await {
+                if let Some(parent_id) = chunk.get("memory_id").and_then(|v| v.as_str()) {
+                    if parent_id != exclude_memory_id {
+                        memory_scores
+                            .entry(parent_id.to_string())
+                            .and_modify(|s| *s = s.max(score))
+                            .or_insert(score);
+                    }
+                }
+            }
+        }
+
+        let mut results: Vec<(String, f32)> = memory_scores.into_iter().collect();
+        results.retain(|(_, score)| *score >= threshold);
+        results.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit);
+        Ok(results)
     }
 }
 
@@ -274,7 +311,7 @@ impl voidm_db::Database for Neo4jDatabase {
                 smart_breaks: true,
             };
             let chunks = chunk_memory(&prepared.id, &prepared.content, &prepared.created_at, &chunk_config);
-            for chunk in chunks {
+            for chunk in &chunks {
                 db.upsert_chunk(
                     &chunk.id,
                     &prepared.id,
@@ -291,6 +328,96 @@ impl voidm_db::Database for Neo4jDatabase {
                 }
             }
 
+            // Auto-link and duplicate detection via vector similarity
+            let mut suggested_links = Vec::new();
+            let mut duplicate_warning = None;
+
+            if config.embeddings.enabled {
+                if let Some(first_chunk) = chunks.first() {
+                    if let Ok(embedding) = voidm_core::embeddings::embed_text(&config_model, &first_chunk.content) {
+                        let threshold = config
+                            .insert
+                            .auto_link_threshold
+                            .min(config.insert.duplicate_threshold);
+                        if let Ok(similar) = db
+                            .find_similar_memories(
+                                &prepared.id,
+                                embedding,
+                                threshold,
+                                config.insert.auto_link_limit,
+                            )
+                            .await
+                        {
+                            for (mem_id, score) in similar {
+                                let (target_type, target_content) =
+                                    if let Ok(Some(mem)) = db.get_memory(&mem_id).await {
+                                        (
+                                            mem.get("memory_type")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string(),
+                                            mem.get("content")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .chars()
+                                                .take(120)
+                                                .collect::<String>(),
+                                        )
+                                    } else {
+                                        (String::new(), String::new())
+                                    };
+
+                                if score >= config.insert.duplicate_threshold {
+                                    duplicate_warning =
+                                        Some(voidm_db::models::DuplicateWarning {
+                                            id: mem_id.clone(),
+                                            score,
+                                            content: target_content.clone(),
+                                            message: "Very similar content detected".to_string(),
+                                        });
+                                }
+                                if score >= config.insert.auto_link_threshold {
+                                    match db
+                                        .link_memories(
+                                            &prepared.id,
+                                            voidm_db::models::EdgeType::RelatesTo.as_str(),
+                                            &mem_id,
+                                            Some("auto-linked by vector similarity"),
+                                        )
+                                        .await
+                                    {
+                                        Ok(link_resp) => {
+                                            if let Ok(resp) = serde_json::from_value::<
+                                                voidm_db::models::LinkResponse,
+                                            >(link_resp)
+                                            {
+                                                if resp.created {
+                                                    suggested_links.push(
+                                                        voidm_db::models::SuggestedLink {
+                                                            id: mem_id,
+                                                            score,
+                                                            memory_type: target_type,
+                                                            content: target_content,
+                                                            hint: "vector similarity".to_string(),
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "Auto-link failed for {} -> {}: {}",
+                                                prepared.id, mem_id, e
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Build response with tags from prepared data
             let response = voidm_db::models::AddMemoryResponse {
                 id: prepared.id,
@@ -302,8 +429,8 @@ impl voidm_db::Database for Neo4jDatabase {
                 created_at: prepared.created_at,
                 quality_score: None,
                 metadata: prepared.metadata,
-                suggested_links: vec![],
-                duplicate_warning: None,
+                suggested_links,
+                duplicate_warning,
                 context: prepared.context,
                 title: prepared.title,
             };
@@ -1319,27 +1446,24 @@ impl voidm_db::Database for Neo4jDatabase {
         let dim = embedding.len();
 
         Box::pin(async move {
-            // Store embedding as base64-encoded string for Neo4j compatibility
-            // neo4rs v0.7 cannot serialize Vec<u8> directly, so we encode as base64
-            let embedding_base64 = f32_to_base64(&embedding);
-
-            let cypher = "MATCH (c:MemoryChunk {id: $id}) 
-                          SET c.embedding = $embedding, c.embedding_dim = $dim
-                          RETURN c.id as chunk_id";
+            let cypher = "MATCH (c:MemoryChunk {id: $id}) SET c.embedding = $embedding, c.embedding_dim = $dim RETURN c.id as chunk_id";
             
             let mut result = graph
                 .execute_on(&database, 
                     neo4rs::query(cypher)
                         .param("id", chunk_id.clone())
-                        .param("embedding", embedding_base64)
+                        .param("embedding", embedding)
                         .param("dim", dim as i64)
                 )
                 .await
                 .context("Failed to store chunk embedding")?;
-            let _ = result.next().await;
-
-            tracing::debug!("Neo4j: Stored {}D embedding for chunk {}", dim, chunk_id);
-            Ok((chunk_id, dim))
+            
+            let actual_chunk_id = match result.next().await {
+                Ok(Some(row)) => row.get::<String>("chunk_id").unwrap_or_else(|_| chunk_id.clone()),
+                _ => chunk_id.clone(),
+            };
+            
+            Ok((actual_chunk_id, dim))
         })
     }
 
@@ -1352,8 +1476,7 @@ impl voidm_db::Database for Neo4jDatabase {
         let chunk_id = chunk_id.to_string();
 
         Box::pin(async move {
-            let cypher = "MATCH (c:MemoryChunk {id: $id}) 
-                          RETURN c.embedding as embedding, c.embedding_dim as dim";
+            let cypher = "MATCH (c:MemoryChunk {id: $id}) RETURN c.embedding as embedding, c.embedding_dim as dim";
             
             let mut result = graph
                 .execute_on(&database, 
@@ -1364,23 +1487,29 @@ impl voidm_db::Database for Neo4jDatabase {
                 .context("Failed to fetch chunk embedding")?;
 
             if let Ok(Some(row)) = result.next().await {
-                if let (Ok(embedding_base64), Ok(dim)) = (
-                    row.get::<String>("embedding"),
-                    row.get::<i64>("dim"),
-                ) {
-                    let dim = dim as usize;
-                    // Decode base64 string back to f32 array
-                    match base64_to_f32(&embedding_base64) {
-                        Ok(embedding) => {
-                            if embedding.len() == dim {
-                                return Ok(Some(embedding));
-                            } else {
-                                tracing::warn!("Neo4j: Embedding dimension mismatch for chunk {}: expected {}, got {}", 
-                                    chunk_id, dim, embedding.len());
+                match row.get::<Vec<f64>>("embedding") {
+                    Ok(embedding) => {
+                        return Ok(Some(embedding.into_iter().map(|v| v as f32).collect()));
+                    }
+                    Err(_) => {
+                        if let (Ok(embedding_base64), Ok(dim)) = (
+                            row.get::<String>("embedding"),
+                            row.get::<i64>("dim"),
+                        ) {
+                            let dim = dim as usize;
+                            match base64_to_f32(&embedding_base64) {
+                                Ok(embedding) => {
+                                    if embedding.len() == dim {
+                                        return Ok(Some(embedding));
+                                    } else {
+                                        tracing::warn!("Neo4j: Embedding dimension mismatch for chunk {}: expected {}, got {}", 
+                                            chunk_id, dim, embedding.len());
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Neo4j: Failed to decode embedding for chunk {}: {}", chunk_id, e);
+                                }
                             }
-                        }
-                        Err(e) => {
-                            tracing::error!("Neo4j: Failed to decode embedding for chunk {}: {}", chunk_id, e);
                         }
                     }
                 }
@@ -1535,7 +1664,7 @@ impl voidm_db::Database for Neo4jDatabase {
             }
 
             let chunks = self.list_chunks().await.unwrap_or_default();
-            for chunk in chunks {
+            for chunk in &chunks {
                 if let (Some(id), Some(content)) = (
                     chunk.get("id").and_then(|v| v.as_str()),
                     chunk.get("text").and_then(|v| v.as_str()),
@@ -2373,72 +2502,283 @@ impl voidm_db::Database for Neo4jDatabase {
     }
 
     fn graph_ops(&self) -> std::sync::Arc<dyn voidm_db::graph_ops::GraphQueryOps> {
-        // Neo4j: Return a stub implementation for now
-        // TODO: Implement full GraphQueryOps for Neo4j using Cypher
-        std::sync::Arc::new(Neo4jGraphQueryOpsStub)
+        std::sync::Arc::new(Neo4jGraphQueryOps {
+            graph: self.graph.clone(),
+            database: self.database.clone(),
+        })
     }
-    
 }
 
-/// Stub implementation of GraphQueryOps for Neo4j
-/// TODO: Implement full Cypher-based graph operations
-pub struct Neo4jGraphQueryOpsStub;
+/// Neo4j implementation of GraphQueryOps using native Cypher and Neo4j internal node IDs.
+#[derive(Clone)]
+pub struct Neo4jGraphQueryOps {
+    graph: neo4rs::Graph,
+    database: String,
+}
 
-impl voidm_db::graph_ops::GraphQueryOps for Neo4jGraphQueryOpsStub {
-    fn upsert_node(&self, _memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<i64>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+impl voidm_db::graph_ops::GraphQueryOps for Neo4jGraphQueryOps {
+    fn upsert_node(&self, memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<i64>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let memory_id = memory_id.to_string();
+        Box::pin(async move {
+            let mut result = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH (m:Memory {id: $id}) RETURN id(m) as nid").param("id", memory_id),
+            ).await.context("upsert_node: failed to query Memory")?;
+            if let Ok(Some(row)) = result.next().await {
+                if let Ok(nid) = row.get::<i64>("nid") {
+                    return Ok(nid);
+                }
+            }
+            anyhow::bail!("Memory node not found for graph upsert")
+        })
     }
 
-    fn delete_node(&self, _memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    fn delete_node(&self, memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let memory_id = memory_id.to_string();
+        Box::pin(async move {
+            let _ = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH (m:Memory {id: $id}) DETACH DELETE m").param("id", memory_id),
+            ).await;
+            Ok(())
+        })
     }
 
-    fn get_node_id(&self, _memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Option<i64>>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    fn get_node_id(&self, memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Option<i64>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let memory_id = memory_id.to_string();
+        Box::pin(async move {
+            let mut result = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH (m:Memory {id: $id}) RETURN id(m) as nid").param("id", memory_id),
+            ).await.context("get_node_id: failed to query Memory")?;
+            if let Ok(Some(row)) = result.next().await {
+                if let Ok(nid) = row.get::<i64>("nid") {
+                    return Ok(Some(nid));
+                }
+            }
+            Ok(None)
+        })
     }
 
-    fn upsert_edge(&self, _from_memory_id: &str, _to_memory_id: &str, _rel_type: &str, _note: Option<&str>) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<i64>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    fn upsert_edge(&self, from_memory_id: &str, to_memory_id: &str, rel_type: &str, note: Option<&str>) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<i64>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let from = from_memory_id.to_string();
+        let to = to_memory_id.to_string();
+        let rel = rel_type.to_string();
+        let note = note.map(|s| s.to_string());
+        Box::pin(async move {
+            let cypher = format!(
+                "MATCH (a:Memory {{id: $from}}), (b:Memory {{id: $to}}) MERGE (a)-[r:{}]->(b) ON CREATE SET r.note = $note RETURN id(r) as rid",
+                rel
+            );
+            let mut result = graph.execute_on(
+                &database,
+                neo4rs::query(&cypher)
+                    .param("from", from)
+                    .param("to", to)
+                    .param("note", note.unwrap_or_default()),
+            ).await.context("upsert_edge: failed to create relationship")?;
+            if let Ok(Some(row)) = result.next().await {
+                if let Ok(rid) = row.get::<i64>("rid") {
+                    return Ok(rid);
+                }
+            }
+            anyhow::bail!("Failed to upsert edge")
+        })
     }
 
-    fn delete_edge(&self, _from_memory_id: &str, _rel_type: &str, _to_memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    fn delete_edge(&self, from_memory_id: &str, rel_type: &str, to_memory_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let from = from_memory_id.to_string();
+        let to = to_memory_id.to_string();
+        let rel = rel_type.to_string();
+        Box::pin(async move {
+            let cypher = format!(
+                "MATCH (a:Memory {{id: $from}})-[r:{}]->(b:Memory {{id: $to}}) DELETE r RETURN count(r) as cnt",
+                rel
+            );
+            let mut result = graph.execute_on(
+                &database,
+                neo4rs::query(&cypher).param("from", from).param("to", to),
+            ).await.context("delete_edge: failed to delete relationship")?;
+            if let Ok(Some(row)) = result.next().await {
+                if let Ok(cnt) = row.get::<i64>("cnt") {
+                    return Ok(cnt > 0);
+                }
+            }
+            Ok(false)
+        })
     }
 
-    fn get_outgoing_edges(&self, _node_id: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String, Option<String>)>>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    fn get_outgoing_edges(&self, node_id: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String, Option<String>)>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let mut result = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH (m)-[r]->(n) WHERE id(m) = $nid RETURN n.id as target_id, type(r) as rel_type, r.note as note").param("nid", node_id),
+            ).await.context("get_outgoing_edges: failed")?;
+            let mut edges = Vec::new();
+            while let Ok(Some(row)) = result.next().await {
+                let target_id: String = row.get("target_id").unwrap_or_default();
+                let rel_type: String = row.get("rel_type").unwrap_or_default();
+                let note: Option<String> = row.get("note").ok().flatten();
+                if !target_id.is_empty() {
+                    edges.push((target_id, rel_type, note));
+                }
+            }
+            Ok(edges)
+        })
     }
 
-    fn get_incoming_edges(&self, _node_id: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String, Option<String>)>>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    fn get_incoming_edges(&self, node_id: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String, Option<String>)>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let mut result = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH (n)-[r]->(m) WHERE id(m) = $nid RETURN n.id as source_id, type(r) as rel_type, r.note as note").param("nid", node_id),
+            ).await.context("get_incoming_edges: failed")?;
+            let mut edges = Vec::new();
+            while let Ok(Some(row)) = result.next().await {
+                let source_id: String = row.get("source_id").unwrap_or_default();
+                let rel_type: String = row.get("rel_type").unwrap_or_default();
+                let note: Option<String> = row.get("note").ok().flatten();
+                if !source_id.is_empty() {
+                    edges.push((source_id, rel_type, note));
+                }
+            }
+            Ok(edges)
+        })
     }
 
-    fn get_all_edges(&self, _node_id: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String)>>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    fn get_all_edges(&self, node_id: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String)>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let mut result = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH (m)-[r]-(n) WHERE id(m) = $nid RETURN n.id as neighbor_id, type(r) as rel_type").param("nid", node_id),
+            ).await.context("get_all_edges: failed")?;
+            let mut edges = Vec::new();
+            while let Ok(Some(row)) = result.next().await {
+                let neighbor_id: String = row.get("neighbor_id").unwrap_or_default();
+                let rel_type: String = row.get("rel_type").unwrap_or_default();
+                if !neighbor_id.is_empty() {
+                    edges.push((neighbor_id, rel_type));
+                }
+            }
+            Ok(edges)
+        })
     }
 
     fn get_all_memory_edges(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(i64, i64)>>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let mut result = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH (a:Memory)-[r]->(b:Memory) RETURN id(a) as src, id(b) as tgt, type(r) as rel_type"),
+            ).await.context("get_all_memory_edges: failed")?;
+            let mut edges = Vec::new();
+            while let Ok(Some(row)) = result.next().await {
+                let src: i64 = row.get("src").unwrap_or(0);
+                let tgt: i64 = row.get("tgt").unwrap_or(0);
+                edges.push((src, tgt));
+            }
+            Ok(edges)
+        })
     }
 
     fn get_all_memory_nodes(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(i64, String)>>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
-    }
-
-    fn get_all_concept_nodes(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<String>>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
-    }
-
-    fn get_all_ontology_edges(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<(String, String)>>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let mut result = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH (m:Memory) RETURN id(m) as nid, m.id as memory_id"),
+            ).await.context("get_all_memory_nodes: failed")?;
+            let mut nodes = Vec::new();
+            while let Ok(Some(row)) = result.next().await {
+                let nid: i64 = row.get("nid").unwrap_or(0);
+                let memory_id: String = row.get("memory_id").unwrap_or_default();
+                if !memory_id.is_empty() {
+                    nodes.push((nid, memory_id));
+                }
+            }
+            Ok(nodes)
+        })
     }
 
     fn get_graph_stats(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<(i64, i64, std::collections::HashMap<String, i64>)>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        Box::pin(async move {
+            let mut node_result = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH (m:Memory) RETURN count(m) as cnt"),
+            ).await.context("get_graph_stats: node count failed")?;
+            let node_count = if let Ok(Some(row)) = node_result.next().await {
+                row.get::<i64>("cnt").unwrap_or(0)
+            } else { 0 };
+
+            let mut edge_result = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH ()-[r]->() RETURN count(r) as cnt"),
+            ).await.context("get_graph_stats: edge count failed")?;
+            let edge_count = if let Ok(Some(row)) = edge_result.next().await {
+                row.get::<i64>("cnt").unwrap_or(0)
+            } else { 0 };
+
+            let mut rel_result = graph.execute_on(
+                &database,
+                neo4rs::query("MATCH ()-[r]->() RETURN type(r) as rel, count(r) as cnt"),
+            ).await.context("get_graph_stats: rel types failed")?;
+            let mut rel_counts = std::collections::HashMap::new();
+            while let Ok(Some(row)) = rel_result.next().await {
+                if let (Ok(rel), Ok(cnt)) = (row.get::<String>("rel"), row.get::<i64>("cnt")) {
+                    rel_counts.insert(rel, cnt);
+                }
+            }
+            Ok((node_count, edge_count, rel_counts))
+        })
     }
 
-    fn execute_cypher(&self, _sql: &str, _params: &[serde_json::Value]) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<std::collections::HashMap<String, serde_json::Value>>>> + Send + '_>> {
-        Box::pin(async { Err(anyhow::anyhow!("GraphQueryOps not yet implemented for Neo4j")) })
+    fn execute_cypher(&self, cypher: &str, _params: &[serde_json::Value]) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Vec<std::collections::HashMap<String, serde_json::Value>>>> + Send + '_>> {
+        let graph = self.graph.clone();
+        let database = self.database.clone();
+        let cypher = cypher.to_string();
+        Box::pin(async move {
+            let mut result = graph.execute_on(
+                &database,
+                neo4rs::query(&cypher),
+            ).await.context("execute_cypher: failed")?;
+            let mut rows = Vec::new();
+            while let Ok(Some(row)) = result.next().await {
+                let mut map = std::collections::HashMap::new();
+                // Collect row fields by deserializing to a map
+                match row.to::<std::collections::HashMap<String, serde_json::Value>>() {
+                    Ok(row_map) => {
+                        for (key, val) in row_map {
+                            map.insert(key, val);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to deserialize row to map: {}", e);
+                    }
+                }
+                rows.push(map);
+            }
+            Ok(rows)
+        })
     }
 }
 

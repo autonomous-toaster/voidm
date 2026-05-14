@@ -23,7 +23,6 @@ use voidm_core::{
     search::{SearchMode, SearchOptions, search},
 };
 use voidm_db::Database;
-use voidm_sqlite::SqliteDatabase;
 
 #[derive(Clone)]
 pub struct McpServerConfig {
@@ -193,7 +192,6 @@ impl VoidmMcpServer {
             intent: params.intent,
         };
 
-        let db = SqliteDatabase::new(self.pool.clone());
         let resp = search(
             self.db.as_ref(),
             &opts,

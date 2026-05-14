@@ -60,8 +60,6 @@ impl GraphQueryOps for FakeGraphOps {
     fn get_all_edges(&self, _node_id: i64) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String)>>> + Send + '_>> { Box::pin(async { Ok(vec![]) }) }
     fn get_all_memory_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<(i64, i64)>>> + Send + '_>> { Box::pin(async { Ok(vec![]) }) }
     fn get_all_memory_nodes(&self) -> Pin<Box<dyn Future<Output = Result<Vec<(i64, String)>>> + Send + '_>> { Box::pin(async { Ok(vec![]) }) }
-    fn get_all_concept_nodes(&self) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + '_>> { Box::pin(async { Ok(vec![]) }) }
-    fn get_all_ontology_edges(&self) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String)>>> + Send + '_>> { Box::pin(async { Ok(vec![]) }) }
     fn get_graph_stats(&self) -> Pin<Box<dyn Future<Output = Result<(i64, i64, HashMap<String, i64>)>> + Send + '_>> { Box::pin(async { Ok((0, 0, HashMap::new())) }) }
     fn execute_cypher(&self, _sql: &str, _params: &[Value]) -> Pin<Box<dyn Future<Output = Result<Vec<HashMap<String, Value>>>> + Send + '_>> { Box::pin(async { Ok(vec![]) }) }
 }
@@ -101,7 +99,7 @@ impl Database for FakeDb {
     fn get_neighbors(&self, _id: &str, _depth: usize) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> { Box::pin(async { Ok(json!([])) }) }
     fn get_statistics(&self) -> Pin<Box<dyn Future<Output = Result<DatabaseStats>> + Send + '_>> { Box::pin(async { Ok(DatabaseStats { total_memories: 0, memories_by_type: vec![], scopes_count: 0, top_tags: vec![], embedding_coverage: EmbeddingStats { total_embeddings: 0, total_memories: 0, coverage_percentage: 0.0 }, graph: GraphStats { node_count: 0, edge_count: 0, edges_by_type: vec![] }, db_size_bytes: 0 }) }) }
     fn get_graph_stats(&self) -> Pin<Box<dyn Future<Output = Result<GraphStats>> + Send + '_>> { Box::pin(async { Ok(GraphStats { node_count: 0, edge_count: 0, edges_by_type: vec![] }) }) }
-    fn get_graph_export_data(&self) -> Pin<Box<dyn Future<Output = Result<GraphExportData>> + Send + '_>> { Box::pin(async { Ok(GraphExportData { memories: vec![], concepts: vec![], nodes: vec![], edges: vec![] }) }) }
+    fn get_graph_export_data(&self) -> Pin<Box<dyn Future<Output = Result<GraphExportData>> + Send + '_>> { Box::pin(async { Ok(GraphExportData { memories: vec![], nodes: vec![], edges: vec![] }) }) }
     fn check_model_mismatch(&self, _configured_model: &str) -> Pin<Box<dyn Future<Output = Result<Option<(String, String)>>> + Send + '_>> { Box::pin(async { Ok(None) }) }
     fn delete_chunks_for_memory(&self, _memory_id: &str) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + '_>> { Box::pin(async { Ok(0) }) }
     fn fetch_chunks(&self, _limit: usize) -> Pin<Box<dyn Future<Output = Result<Vec<(String, String, String)>>> + Send + '_>> {

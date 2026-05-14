@@ -1,11 +1,9 @@
 //! Graph-aware retrieval for search results.
 //!
-//! This module finds related memories based on:
-//! - Shared tags (tag overlap scoring)
-//! - Shared concepts (ontology relationships)
+//! This module finds related memories based on shared tags.
 //!
-//! Allows search to include memories that are conceptually related
-//! to directly matched results, improving recall while maintaining precision.
+//! Allows search to include memories that are related
+//! to directly matched results via tag overlap, improving recall.
 
 use anyhow::Result;
 use crate::models::Memory;
@@ -52,65 +50,24 @@ impl Default for TagRetrievalConfig {
         }
     }
 }
-/// Configuration for concept-based retrieval.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConceptRetrievalConfig {
-    /// Enable concept-based related retrieval (default: true).
-    #[serde(default = "default_concept_enabled")]
-    pub enabled: bool,
-    /// Max hops for concept graph traversal (optional, overrides global max_concept_hops).
-    /// If None, uses GraphRetrievalConfig.max_concept_hops (default: 2).
-    #[serde(default)]
-    pub max_hops: Option<u8>,
-    /// Score decay for concept-related results (default: 0.7).
-    #[serde(default = "default_concept_decay")]
-    pub decay_factor: f32,
-    /// Max concept-related memories per direct result (default: 3).
-    #[serde(default = "default_concept_limit")]
-    pub limit: usize,
-}
-
-fn default_concept_enabled() -> bool { true }
-fn default_concept_decay() -> f32 { 0.7 }
-fn default_concept_limit() -> usize { 3 }
-
-impl Default for ConceptRetrievalConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            max_hops: None,
-            decay_factor: 0.7,
-            limit: 3,
-        }
-    }
-}
 /// Graph retrieval configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphRetrievalConfig {
     /// Enable graph-aware retrieval (default: true).
     #[serde(default = "default_graph_enabled")]
     pub enabled: bool,
-    /// Global default max hops for concept graph traversal (default: 2).
-    #[serde(default = "default_max_concept_hops")]
-    pub max_concept_hops: u8,
     /// Tag-based retrieval configuration.
     #[serde(default)]
     pub tags: TagRetrievalConfig,
-    /// Concept-based retrieval configuration.
-    #[serde(default)]
-    pub concepts: ConceptRetrievalConfig,
 }
 
 fn default_graph_enabled() -> bool { true }
-fn default_max_concept_hops() -> u8 { 2 }
 
 impl Default for GraphRetrievalConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            max_concept_hops: 2,
             tags: TagRetrievalConfig::default(),
-            concepts: ConceptRetrievalConfig::default(),
         }
     }
 }
@@ -299,28 +256,10 @@ async fn find_memories_by_tag_overlap(
     Ok(results)
 }
 
-/// Find memories related via shared concepts.
-///
-/// Traverses ontology to find memories linked to related concept nodes.
-/// Returns memories with scores based on concept distance.
-pub async fn find_related_by_concepts(
-    _db: &dyn voidm_db::Database,
-    _direct_results: &[SearchResult],
-    _config: &ConceptRetrievalConfig,
-    _max_concept_hops: u8,
-) -> Result<Vec<SearchResult>> {
-    // TODO: Implement concept-based retrieval using Database trait methods
-    // This requires adding ontology traversal methods to the Database trait
-    Ok(Vec::new())
-}
-
-/// Merge graph-aware results with original search results.
-///
-/// Deduplicates by ID and applies score decay for related results.
+///// Merge tag-related results into original search results.
 pub fn merge_graph_results(
     original: Vec<SearchResult>,
     tag_related: Vec<SearchResult>,
-    concept_related: Vec<SearchResult>,
 ) -> Vec<SearchResult> {
     let mut merged = original;
     let mut seen_ids: HashSet<String> = merged.iter().map(|r| r.id.clone()).collect();
@@ -333,20 +272,12 @@ pub fn merge_graph_results(
         }
     }
 
-    // Add concept-related results
-    for result in concept_related {
-        if !seen_ids.contains(&result.id) {
-            seen_ids.insert(result.id.clone());
-            merged.push(result);
-        }
-    }
-
     merged
 }
 
-/// Expand search results with graph-aware retrieval (tag & concept matching).
+///// Expand search results with graph-aware retrieval (tag matching).
 /// This function is called during the search pipeline to add related memories
-/// based on tag overlap and concept relationships.
+/// based on tag overlap.
 /// 
 /// Errors are logged but don't stop the search pipeline (graceful degradation).
 pub async fn expand_graph_results(
@@ -386,34 +317,12 @@ pub async fn expand_graph_results(
         }
     }
 
-    // Get concept-based related results
-    if config.concepts.enabled {
-        let concept_start = Instant::now();
-        let max_hops = config.concepts.max_hops.unwrap_or(config.max_concept_hops);
-        
-        if let Ok(concept_related) = find_related_by_concepts(db, results, &config.concepts, max_hops).await {
-            debug!(elapsed_ms = concept_start.elapsed().as_millis() as u64,
-                   result_count = concept_related.len(),
-                   max_hops = max_hops,
-                   "concept-based retrieval completed");
-            
-            for mut result in concept_related {
-                if !seen_ids.contains(&result.id) {
-                    result.source = "graph_concepts".to_string();
-                    seen_ids.insert(result.id.clone());
-                    graph_results.push(result);
-                }
-            }
-        }
-    }
-
     // Sort graph results by score and append to results
     graph_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     
     info!(total_ms = start.elapsed().as_millis() as u64,
           graph_result_count = graph_results.len(),
           tag_enabled = config.tags.enabled,
-          concept_enabled = config.concepts.enabled,
           "graph-aware retrieval completed");
     
     results.extend(graph_results);
@@ -501,34 +410,10 @@ mod tests {
     }
 
     #[test]
-    fn test_concept_retrieval_config_defaults() {
-        let config = ConceptRetrievalConfig::default();
-        assert!(config.enabled);
-        assert_eq!(config.max_hops, None);  // Should default to GraphRetrievalConfig value
-        assert_eq!(config.decay_factor, 0.7);
-        assert_eq!(config.limit, 3);
-    }
-
-    #[test]
-    fn test_concept_retrieval_config_max_hops_override() {
-        let mut config = ConceptRetrievalConfig::default();
-        config.max_hops = Some(3);
-        assert_eq!(config.max_hops, Some(3));
-    }
-
-    #[test]
     fn test_graph_retrieval_config_defaults() {
         let config = GraphRetrievalConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.max_concept_hops, 2);  // Default should be 2
         assert!(config.tags.enabled);
-        assert!(config.concepts.enabled);
-    }
-
-    #[test]
-    fn test_graph_retrieval_config_max_hops() {
-        let config = GraphRetrievalConfig::default();
-        assert_eq!(config.max_concept_hops, 2);
     }
 
     #[test]
@@ -539,15 +424,12 @@ mod tests {
 
         let tag_related = vec![
             create_search_result("2", vec!["kubernetes".to_string()]),
-        ];
-
-        let concept_related = vec![
             create_search_result("1", vec!["docker".to_string()]),  // Duplicate
         ];
 
-        let merged = merge_graph_results(original, tag_related, concept_related);
+        let merged = merge_graph_results(original, tag_related);
         
-        // Should have 2 results (1 original + 1 tag_related, concept duplicate filtered)
+        // Should have 2 results (1 original + 1 tag_related, duplicate filtered)
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].id, "1");
         assert_eq!(merged[1].id, "2");
@@ -564,17 +446,12 @@ mod tests {
             create_search_result("3", vec!["c".to_string()]),
         ];
 
-        let concept_related = vec![
-            create_search_result("4", vec!["d".to_string()]),
-        ];
-
-        let merged = merge_graph_results(original, tag_related, concept_related);
+        let merged = merge_graph_results(original, tag_related);
         
-        assert_eq!(merged.len(), 4);
+        assert_eq!(merged.len(), 3);
         assert_eq!(merged[0].id, "1");
         assert_eq!(merged[1].id, "2");
         assert_eq!(merged[2].id, "3");
-        assert_eq!(merged[3].id, "4");
     }
 
     #[test]
@@ -604,19 +481,6 @@ mod tests {
     }
 
     #[test]
-    fn test_concept_disabled_returns_empty() {
-        // When concept retrieval is disabled, should return empty results
-        let config = ConceptRetrievalConfig {
-            enabled: false,
-            max_hops: None,
-            decay_factor: 0.7,
-            limit: 3,
-        };
-        
-        assert!(!config.enabled);
-    }
-
-    #[test]
     fn test_tag_disabled_returns_empty() {
         // When tag retrieval is disabled, should return empty results
         let config = TagRetrievalConfig {
@@ -635,9 +499,7 @@ mod tests {
         // When graph retrieval is disabled, should return empty results
         let config = GraphRetrievalConfig {
             enabled: false,
-            max_concept_hops: 2,
             tags: TagRetrievalConfig::default(),
-            concepts: ConceptRetrievalConfig::default(),
         };
         
         assert!(!config.enabled);

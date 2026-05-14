@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::{Context, Result};
 use once_cell::sync::OnceCell;
 use std::sync::Mutex;

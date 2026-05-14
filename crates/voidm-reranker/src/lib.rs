@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Cross-encoder reranker for search result refinement.
 //!
 //! Supports: ms-marco-TinyBERT (11MB, 6-12ms/result) and bge-reranker-base (278MB, 20-30ms/result).
@@ -676,7 +677,7 @@ mod tests {
             total_scores += delta;
 
             let query_short = if case.query.len() > 50 {
-                format!("{}...", truncate_for_display(&case.query, 7))
+                format!("{}...", &case.query.chars().take(7).collect::<String>())
             } else {
                 case.query.to_string()
             };
@@ -743,7 +744,7 @@ mod tests {
             total_scores += delta;
 
             let query_short = if case.query.len() > 50 {
-                format!("{}...", truncate_for_display(&case.query, 7))
+                format!("{}...", &case.query.chars().take(7).collect::<String>())
             } else {
                 case.query.to_string()
             };
@@ -802,7 +803,7 @@ mod tests {
             let ms_res = &ms_results[rank];
             let bge_res = &bge_results[rank];
             let doc_short = if documents[ms_res.index].len() > 20 {
-                format!("{}...", truncate_for_display(&documents[ms_res.index], 17))
+                format!("{}...", &documents[ms_res.index].chars().take(17).collect::<String>())
             } else {
                 documents[ms_res.index].to_string()
             };

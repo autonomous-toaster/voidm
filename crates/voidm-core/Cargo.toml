@@ -94,3 +94,6 @@ full = ["smart"]
 
 # Convenience group for "all ML features"
 all = ["query-expansion", "nli", "ner", "reranker", "tinyllama"]
+
+[lints]
+workspace = true

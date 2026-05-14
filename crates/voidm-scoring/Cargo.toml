@@ -21,3 +21,6 @@ ner = ["voidm-ner"]
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
+
+[lints]
+workspace = true

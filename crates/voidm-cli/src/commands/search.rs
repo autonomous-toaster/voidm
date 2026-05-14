@@ -107,10 +107,6 @@ pub struct SearchArgs {
     #[arg(long)]
     pub query_expand: Option<bool>,
 
-    /// Concepts to expand query with
-    #[arg(long, value_delimiter = ',')]
-    pub expand_concepts: Option<Vec<String>>,
-
     /// Emit as JSON triples
     #[arg(long, default_value_t = false)]
     pub as_triples: bool,

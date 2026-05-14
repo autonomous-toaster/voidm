@@ -8,7 +8,6 @@ pub mod unlink;
 pub mod graph;
 pub mod scopes;
 pub mod export;
-pub mod migrate;
 pub mod config;
 pub mod models;
 pub mod instructions;

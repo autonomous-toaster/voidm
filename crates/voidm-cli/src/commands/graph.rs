@@ -286,14 +286,6 @@ async fn export_dot(db: &Arc<dyn Database>, _args: ExportArgs) -> Result<()> {
                  id_short, label, color);
     }
 
-    // Add concept nodes
-    for concept in &data.concepts {
-        let label = concept.name.replace("\"", "\\\"");
-        let id_short = if concept.id.len() >= 8 { &concept.id[..8] } else { &concept.id };
-        println!("  \"c:{}\" [label=\"{} (concept)\", fillcolor=\"lavender\", style=\"rounded,filled\"];", 
-                 id_short, label);
-    }
-
     // Add edges
     for edge in &data.edges {
         let from_node = if edge.from_id.starts_with("m:") { 
@@ -323,7 +315,6 @@ async fn export_json(db: &Arc<dyn Database>, _args: ExportArgs) -> Result<()> {
     let result = json!({
         "result": {
             "memories": data.memories.iter().map(|m| json!({"id": m.id, "type": m.mem_type})).collect::<Vec<_>>(),
-            "concepts": data.concepts.iter().map(|c| json!({"id": c.id, "name": c.name})).collect::<Vec<_>>(),
             "edges": data.edges.iter().map(|e| json!({"from": e.from_id, "to": e.to_id, "type": e.rel_type})).collect::<Vec<_>>()
         }
     });

@@ -565,7 +565,11 @@ impl Database for SqliteDatabase {
             
             match matches.len() {
                 0 => anyhow::bail!("Memory '{}' not found", id),
-                1 => Ok(voidm_db::ResolveResult::Single(matches.into_iter().next().unwrap())),
+                1 => {
+                    let first = matches.into_iter().next()
+                        .with_context(|| format!("Memory '{}' resolved to exactly one match", id))?;
+                    Ok(voidm_db::ResolveResult::Single(first))
+                }
                 _ => Ok(voidm_db::ResolveResult::Multiple(matches)),  // Return all for bulk delete
             }
         })
@@ -1128,13 +1132,6 @@ impl Database for SqliteDatabase {
             .fetch_all(&pool)
             .await?;
 
-            // Get all concepts
-            let concepts: Vec<(String, String)> = sqlx::query_as(
-                "SELECT id, name FROM ontology_concepts LIMIT 500"
-            )
-            .fetch_all(&pool)
-            .await?;
-
             let generic_nodes: Vec<(String, String, String)> = sqlx::query_as(
                 "SELECT id, type, properties FROM nodes LIMIT 2000"
             )
@@ -1150,9 +1147,6 @@ impl Database for SqliteDatabase {
             Ok(voidm_db::models::GraphExportData {
                 memories: memories.into_iter()
                     .map(|(id, mem_type, preview)| voidm_db::models::GraphMemory { id, mem_type, preview })
-                    .collect(),
-                concepts: concepts.into_iter()
-                    .map(|(id, name)| voidm_db::models::GraphConcept { id, name })
                     .collect(),
                 nodes: generic_nodes.into_iter()
                     .map(|(id, node_type, properties)| voidm_db::models::GenericGraphNode {

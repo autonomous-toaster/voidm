@@ -56,6 +56,10 @@ pub struct SearchArgs {
     #[arg(long)]
     pub min_quality: Option<f32>,
 
+    /// Search intent for guided expansion and scoring boost: debug, optimize, implement, understand, architecture, troubleshoot
+    #[arg(long)]
+    pub intent: Option<String>,
+
     /// For vector mode: minimum similarity threshold (0.0-1.0)
     #[arg(long, default_value = "0.5")]
     pub min_similarity: f32,
@@ -144,7 +148,7 @@ pub async fn run(
         neighbor_min_score: args.neighbor_min_score,
         neighbor_limit: args.neighbor_limit,
         edge_types: args.edge_types.clone(),
-        intent: None,
+        intent: args.intent.clone(),
     };
 
     let response = voidm_core::search::search(

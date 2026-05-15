@@ -41,6 +41,10 @@ pub struct AddArgs {
     #[arg(long)]
     pub title: Option<String>,
 
+    /// Workflow provenance: user, session, feedback, audit, system
+    #[arg(long)]
+    pub provenance: Option<String>,
+
     /// Link to existing memory: <id>:<EDGE_TYPE> or <id>:<EDGE_TYPE>:<note>
     /// RELATES_TO requires a note: <id>:RELATES_TO:<reason>
     #[arg(long = "link")]
@@ -83,6 +87,9 @@ pub async fn run(args: AddArgs, db: &Arc<dyn Database>, config: &Config, json: b
     }
     if let Some(source) = args.source {
         metadata.insert("source_reliability".to_string(), serde_json::json!(source));
+    }
+    if let Some(provenance) = args.provenance {
+        metadata.insert("provenance".to_string(), serde_json::json!(provenance));
     }
 
     // Validate context if provided

@@ -548,7 +548,7 @@ impl voidm_db::Database for Neo4jDatabase {
         Box::pin(async move {
             let mut result = graph
                 .execute_on(&self.database, 
-                    neo4rs::query("MATCH (m:Memory {id: $id}) DELETE m RETURN count(m) as deleted")
+                    neo4rs::query("MATCH (m:Memory {id: $id}) DETACH DELETE m RETURN count(m) as deleted")
                         .param("id", id),
                 )
                 .await

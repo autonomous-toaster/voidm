@@ -45,6 +45,8 @@ pub enum Commands {
     Link(commands::link::LinkArgs),
     /// Remove a graph edge
     Unlink(commands::unlink::UnlinkArgs),
+    /// Repair data quality issues (orphaned chunks, missing embeddings)
+    Repair(commands::repair::RepairArgs),
     /// Initialize voidm: download and cache all models
     Init(commands::init::InitArgs),
     /// Graph operations
@@ -208,5 +210,6 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Init(_) => unreachable!(),
         Commands::CheckUpdate(_) => unreachable!(),
         Commands::Stats(args) => commands::stats::run(args, &db, &config, cli.json).await,
+        Commands::Repair(args) => commands::repair::run(args, &db, cli.json).await,
     }
 }

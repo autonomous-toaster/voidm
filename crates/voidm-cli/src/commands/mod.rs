@@ -1,3 +1,4 @@
+pub mod repair;
 pub mod add;
 pub mod get;
 pub mod search;

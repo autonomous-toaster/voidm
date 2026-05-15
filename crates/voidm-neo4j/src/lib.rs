@@ -684,7 +684,7 @@ impl voidm_db::Database for Neo4jDatabase {
                 neo4rs::query(
                     "MATCH (from:Memory {id: $from_id}), (to:Memory {id: $to_id})
                      OPTIONAL MATCH (from)-[existing:RELATES {type: $rel_type}]->(to)
-                     WHERE NOT exists(existing.note)
+                     WHERE existing.note IS NULL
                      WITH from, to, existing
                      FOREACH (_ IN CASE WHEN existing IS NULL THEN [1] ELSE [] END |
                        CREATE (from)-[:RELATES {type: $rel_type}]->(to)
